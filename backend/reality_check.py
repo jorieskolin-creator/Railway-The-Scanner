@@ -1617,7 +1617,10 @@ If issues are found: {{"false_claims": [{{"section": "section heading", "claim":
             if result.get("summary_accurate") is True and result.get("false_claims"):
                 return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": model_name, "time_ms": elapsed}
             false_claims = _parse_false_claims(result)
-            print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] {model_name}: {len(false_claims)} false claim(s) ({elapsed}ms)")
+            print(
+                f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] {model_name}: "
+                f"{len(false_claims)} review finding(s) ({elapsed}ms)"
+            )
             stage1_false_claims = false_claims
             stage1_model_name = model_name
             stage1_time_ms = elapsed
@@ -2419,6 +2422,86 @@ def _repair_explicit_packet_omissions(
     return repaired
 
 
+def _semantic_packet_omission_records(
+    failures: list,
+    *,
+    full_records: list,
+    compact_records: list,
+    limit_per_claim: int = 4,
+) -> tuple[list[dict], list[dict]]:
+    """Recover strongly matching current-run records when a verifier omitted IDs.
+
+    This does not approve the claim. It only rebuilds a bounded packet for a
+    focused no-web recheck, which remains the authority for support and scope.
+    """
+    compact_keys = {
+        str(record.get(key) or "").strip()
+        for record in (compact_records or []) if isinstance(record, dict)
+        for key in ("fact_id", "evidence_id", "source_id", "premise_id", "signal_id")
+        if str(record.get(key) or "").strip()
+    }
+    recovered_records: list[dict] = []
+    recovered_failures: list[dict] = []
+    seen = set()
+    for failure in failures or []:
+        if not isinstance(failure, dict):
+            continue
+        claim = re.sub(r"\s+", " ", str(failure.get("claim") or "")).strip()
+        reasoning = re.sub(r"\s+", " ", str(failure.get("reasoning") or "")).strip()
+        if not claim:
+            continue
+        candidates, _coverage = _claim_first_fact_check_records(
+            full_records or [],
+            f"{claim} {reasoning}",
+            max(2, int(limit_per_claim or 4)),
+        )
+        claim_terms = _fact_check_terms(claim)
+        accepted = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_id = str(
+                candidate.get("fact_id") or candidate.get("evidence_id")
+                or candidate.get("source_id") or candidate.get("premise_id")
+                or candidate.get("signal_id") or ""
+            ).strip()
+            if candidate_id and candidate_id in compact_keys:
+                continue
+            if candidate.get("generation_eligible") is False:
+                continue
+            if candidate.get("content_verified") is False or candidate.get("entity_match_status") == "wrong_entity":
+                continue
+            searchable = " ".join(str(candidate.get(key) or "") for key in (
+                "claim", "finding", "assessment", "evidence_snippet", "source_quote",
+                "exact_passage", "snippet", "description", "summary", "safe_wording",
+                "metric", "value", "periods",
+            ))
+            candidate_terms = _fact_check_terms(searchable)
+            overlap = len(claim_terms & candidate_terms)
+            union = len(claim_terms | candidate_terms) or 1
+            # Require a strong semantic bridge. Broad topical overlap is not
+            # enough to repair an evidence handoff.
+            if overlap < 4 or (overlap / union) < 0.20:
+                continue
+            key = candidate_id or json.dumps(candidate, ensure_ascii=False, sort_keys=True)[:400]
+            if key in seen:
+                continue
+            seen.add(key)
+            accepted.append(candidate)
+            recovered_records.append(candidate)
+        if accepted:
+            recovered_failures.append({
+                **failure,
+                "recovered_source_ids": [
+                    str(item.get("fact_id") or item.get("evidence_id") or item.get("source_id") or "")
+                    for item in accepted
+                    if str(item.get("fact_id") or item.get("evidence_id") or item.get("source_id") or "")
+                ],
+                "recovery_method": "semantic_current_run_match",
+            })
+    return recovered_records, recovered_failures
+
+
 def _split_fact_check_sections(report_text: str) -> list[dict]:
     matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", str(report_text or "")))
     if not matches:
@@ -2796,20 +2879,84 @@ def ai_fact_check_detailed_report(
         compact_financial_records = list(
             (compact_payload.get("financial_payload") or {}).get("financial_fact_manifest") or []
         )
+        full_packet_records = (
+            list(evidence_links or [])
+            + list(foresight_links or [])
+            + list(evidence_manifest or [])
+            + list(claim_graph or [])
+            + full_financial_records
+        )
+        compact_packet_records = (
+            compact_evidence + compact_foresight + compact_manifest
+            + compact_claim_graph + compact_financial_records
+        )
         packet_repairs = _repair_explicit_packet_omissions(
             result,
-            full_records=(
-                list(evidence_links or [])
-                + list(foresight_links or [])
-                + list(evidence_manifest or [])
-                + list(claim_graph or [])
-                + full_financial_records
-            ),
-            compact_records=(
-                compact_evidence + compact_foresight + compact_manifest
-                + compact_claim_graph + compact_financial_records
-            ),
+            full_records=full_packet_records,
+            compact_records=compact_packet_records,
         )
+        semantic_records, semantic_failures = _semantic_packet_omission_records(
+            result.get("evidence_handoff_failures") or [],
+            full_records=full_packet_records,
+            compact_records=compact_packet_records,
+        )
+        semantic_recheck = None
+        semantic_capacity = max(
+            0,
+            int(deadline - time.time()) - future_primary_floor,
+        )
+        if semantic_records and semantic_failures and semantic_capacity >= 18:
+            semantic_claim_text = "\n".join(
+                f"- {item.get('claim')}" for item in semantic_failures if item.get("claim")
+            )
+            semantic_allocation = min(30, semantic_capacity)
+            print(
+                "   🔁 [Detailed Report Fact-Check] rebuilding semantic handoff packet "
+                f"for {len(semantic_failures)} claim(s) ({semantic_allocation}s)"
+            )
+            semantic_recheck = ai_fact_check_summary(
+                summary_text=semantic_claim_text,
+                evidence_links=semantic_records,
+                company_name=company_name,
+                scan_payload=compact_payload,
+                document_label=f"Detailed Report semantic handoff recheck: {', '.join(headings)}",
+                foresight_links=[],
+                evidence_manifest=semantic_records,
+                claim_graph=[],
+                time_budget_seconds=semantic_allocation,
+                verification_only=True,
+                provider_chain=(GPT_VERIFIER_MODEL,),
+                provider_timeout_seconds=max(12, semantic_allocation - 2),
+            )
+            if not semantic_recheck.get("fact_check_skipped"):
+                repaired_claim_ids = {
+                    str(item.get("claim_id") or "") for item in semantic_failures
+                }
+                result["evidence_handoff_failures"] = [
+                    item for item in (result.get("evidence_handoff_failures") or [])
+                    if str(item.get("claim_id") or "") not in repaired_claim_ids
+                ]
+                for key in (
+                    "false_claims", "false_claims_detailed", "wording_adjustments",
+                    "wording_adjustments_detailed", "audit_notes", "audit_notes_detailed",
+                    "premise_reference_failures", "evidence_handoff_failures",
+                ):
+                    result.setdefault(key, []).extend(semantic_recheck.get(key) or [])
+                for item in semantic_failures:
+                    repair = {
+                        "claim_id": item.get("claim_id", ""),
+                        "claim": item.get("claim", ""),
+                        "recovered_source_ids": item.get("recovered_source_ids", []),
+                        "status": "packet_omission_repaired",
+                        "recovery_method": "semantic_recheck",
+                    }
+                    packet_repairs.append(repair)
+                    result.setdefault("packet_omission_repaired", []).append(repair)
+                    result.setdefault("audit_notes_detailed", []).append({
+                        "type": "audit_note",
+                        "issue_type": "packet_omission_repaired",
+                        **repair,
+                    })
         model = str(result.get("fact_check_model") or "")
         if model and model != "all_models_failed":
             models.append(model)
@@ -2840,6 +2987,10 @@ def ai_fact_check_detailed_report(
             "elapsed_ms": sum(item["elapsed_ms"] for item in attempts),
             "attempts": attempts,
             "packet_omission_repaired": packet_repairs,
+            "semantic_recheck_status": (
+                semantic_recheck.get("verification_status")
+                if isinstance(semantic_recheck, dict) else "not_needed"
+            ),
         })
         for key in aggregate:
             aggregate[key].extend(result.get(key) or [])
@@ -2861,10 +3012,13 @@ def ai_fact_check_detailed_report(
     unavailable_sections = list(dict.fromkeys(unavailable_sections))
     blocking_count = len(aggregate["false_claims"])
     calibration_count = len(aggregate["wording_adjustments"])
+    handoff_count = len(aggregate["evidence_handoff_failures"])
     if unavailable_sections:
         status = "partially_unavailable" if len(unavailable_sections) < len(sections) else "unavailable"
     elif blocking_count:
         status = "changes_required"
+    elif handoff_count:
+        status = "handoff_recheck_required"
     elif calibration_count:
         status = "wording_calibration_required"
     elif aggregate["audit_notes"]:

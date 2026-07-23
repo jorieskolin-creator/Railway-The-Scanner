@@ -7845,7 +7845,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             return max(0, int(_dr_deadline - time.time()))
 
         def _extend_dr_recovery_deadline(max_recovery_seconds: int = 90) -> int:
-            """Borrow unused global time only when governed report recovery is triggered."""
+            """Guarantee a fresh local window while preserving the save floor."""
             nonlocal _dr_deadline
             globally_available = max(
                 0,
@@ -7855,9 +7855,15 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             if recovery_seconds <= 0:
                 return 0
             prior_deadline = _dr_deadline
-            extension_baseline = max(prior_deadline, time.time())
-            _dr_deadline = max(_dr_deadline, time.time() + recovery_seconds)
-            added_seconds = max(0, int(_dr_deadline - extension_baseline))
+            # A recovery operation needs its complete window from this point in
+            # time. Extending only when the old deadline had already expired
+            # allowed earlier work to consume the nominal recheck allocation.
+            now = time.time()
+            _dr_deadline = min(
+                now + globally_available,
+                max(_dr_deadline, now + recovery_seconds),
+            )
+            added_seconds = max(0, int(_dr_deadline - max(prior_deadline, now)))
             timing = final_stage_timing.setdefault("detailed_report", {})
             timing["conditional_recovery_seconds"] = int(
                 timing.get("conditional_recovery_seconds") or 0
@@ -8392,18 +8398,18 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         recheck_load = detailed_report_fact_check_budget(
                             dr_text,
                             only_section_names=recheck_sections,
-                            minimum_seconds=60 if not recheck_sections else 45,
-                            maximum_seconds=120 if not recheck_sections else 90,
+                            minimum_seconds=75 if not recheck_sections else 60,
+                            maximum_seconds=190 if not recheck_sections else 160,
                         )
                         available_recheck_time = max(0, int(_scan_remaining()) - 20)
                         target_recheck_budget = min(
                             recheck_load["recommended_seconds"],
                             available_recheck_time,
                         )
-                        if target_recheck_budget > _dr_stage_remaining():
-                            # Ensure the complete requested recheck window,
-                            # rather than treating the helper as additive.
-                            _extend_dr_recovery_deadline(target_recheck_budget)
+                        # Give the final verifier a fresh complete window. The
+                        # helper borrows only globally unused time and always
+                        # preserves the save floor.
+                        _extend_dr_recovery_deadline(target_recheck_budget)
                         recheck_budget = min(
                             target_recheck_budget,
                             max(0, int(_dr_stage_remaining())),
@@ -8459,7 +8465,6 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                             and not final_check.get("verification_partial")
                             and coverage_repaired
                             and not final_blocking
-                            and not final_calibrations
                         ):
                             final_verified = True
                             final_unresolved = []
@@ -8611,12 +8616,16 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                 resolution_actions_applied = bool(
                                     resolution_replacements or resolution_removals
                                 )
-                                final_verified = bool(
+                                resolution_decision_complete = (
                                     resolution_check.get("verified")
+                                    or resolution_check.get("verification_status")
+                                    in {"wording_calibration_required", "verified_with_audit_notes"}
+                                )
+                                final_verified = bool(
+                                    resolution_decision_complete
                                     and not resolution_check.get("fact_check_skipped")
                                     and not resolution_check.get("verification_partial")
                                     and not resolution_blocking
-                                    and not resolution_calibrations
                                     and coverage_repaired
                                 )
                                 final_recheck_status = (
@@ -8643,9 +8652,8 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         final_recheck_status = "skipped_budget"
 
                 # Corrections made by the final verifier can create new prose
-                # seams. Scan the complete assembled report once more without
-                # another generative pass; unresolved language defects keep the
-                # artifact in internal-draft status rather than overstating QA.
+                # seams. Language quality is recorded independently and never
+                # reverses a completed factual verification decision.
                 _extend_dr_recovery_deadline(50)
                 post_language_budget = min(
                     30,
@@ -8657,9 +8665,6 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     time_budget_seconds=post_language_budget,
                     label="Detailed Report",
                 )
-                if post_resolution_language.get("unresolved_defects"):
-                    final_verified = False
-                    final_recheck_status = "language_qa_unresolved"
                 if post_resolution_language.get("flagged_paragraph_count"):
                     detailed_language_quality = post_resolution_language
                     verification_history.append({
@@ -8667,6 +8672,21 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         **post_resolution_language,
                     })
 
+                incomplete_fact_coverage = bool(
+                    final_check.get("fact_check_skipped")
+                    or final_check.get("verification_partial")
+                    or final_check.get("unavailable_sections")
+                    or final_check.get("evidence_handoff_failures")
+                )
+                semantic_items = list(dict.fromkeys(
+                    str(item) for item in (
+                        list(final_check.get("wording_adjustments", []) or [])
+                        + list(initial_dr_check.get("wording_adjustments", []) or [])
+                    ) if str(item or "")
+                ))
+                unresolved_material_claims = [
+                    _claim_text(item) for item in _dedupe_claims(final_unresolved) if _claim_text(item)
+                ]
                 full_data["detailed_report_verification"] = {
                     "verified": final_verified,
                     "verification_status": (
@@ -8710,9 +8730,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     "deterministic_replacements": total_replacements,
                     "deterministic_removals": total_removals,
                     "blocking_claim_count": len(initial_dr_check.get("false_claims_detailed", []) or []),
-                    "unresolved_blocking_claims": [
-                        _claim_text(item) for item in _dedupe_claims(final_unresolved) if _claim_text(item)
-                    ],
+                    "unresolved_blocking_claims": unresolved_material_claims,
                     "initial_verification_status": initial_dr_check.get("verification_status", "unavailable"),
                     "repair_cycles": verification_history,
                     "changed_claim_ids": list(dict.fromkeys(value for value in changed_claim_ids if value)),
@@ -8724,16 +8742,34 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         "coverage_repaired": coverage_repaired,
                     },
                     "language_quality": detailed_language_quality,
-                    "publication_reasons": {
-                        "material_claims": [
-                            _claim_text(item) for item in _dedupe_claims(final_unresolved)
-                            if _claim_text(item)
-                        ],
-                        "incomplete_verification": bool(
-                            final_check.get("fact_check_skipped")
-                            or final_check.get("verification_partial")
-                            or final_check.get("unavailable_sections")
+                    "factual_verification": {
+                        "status": (
+                            "material_claims_unresolved"
+                            if unresolved_material_claims
+                            else "coverage_incomplete"
+                            if incomplete_fact_coverage
+                            else "verified"
+                            if final_verified
+                            else "decision_pending"
                         ),
+                        "complete": bool(final_verified and not incomplete_fact_coverage),
+                        "known_false_claim_remaining": bool(unresolved_material_claims),
+                        "unavailable_sections": list(final_check.get("unavailable_sections", []) or []),
+                        "handoff_failure_count": len(final_check.get("evidence_handoff_failures", []) or []),
+                    },
+                    "semantic_calibration": {
+                        "status": (
+                            "applied" if wording_calibrations_applied
+                            else "recommended" if semantic_items
+                            else "not_needed"
+                        ),
+                        "item_count": len(semantic_items),
+                        "items": semantic_items,
+                    },
+                    "publication_reasons": {
+                        "material_claims": unresolved_material_claims,
+                        "incomplete_verification": incomplete_fact_coverage,
+                        "semantic_calibration": semantic_items,
                         "language_hygiene": post_resolution_language.get("unresolved_defects", []),
                     },
                 }
@@ -8787,8 +8823,15 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 full_data["detailed_report_model"] = dr_model
                 full_data["detailed_report_status"] = "internal_draft_verification_pending"
                 full_data["detailed_report_quality"] = dr_quality
+                unavailable_sections = list(dr_verification.get("unavailable_sections") or [])
+                section_detail = (
+                    f" Unverified sections: {', '.join(unavailable_sections)}."
+                    if unavailable_sections else ""
+                )
                 full_data["detailed_report_publication_boundary"] = (
-                    "Internal analysis only. Semantic verification is incomplete for one or more report sections."
+                    "Internal analysis only. Factual verification coverage is incomplete; "
+                    "this does not mean a known false claim remains."
+                    + section_detail
                 )
                 full_data.pop("detailed_report_skip_reason", None)
 
@@ -8809,6 +8852,8 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     dr_verification,
                     recovery_meta,
                 )
+                if full_data["detailed_report_status"] != "internal_draft_verification_pending":
+                    full_data.pop("detailed_report_publication_boundary", None)
                 full_data["detailed_report_quality"] = dr_quality
                 full_data.setdefault("report_quality", {})["detailed_report"] = {
                     "status": full_data["detailed_report_status"],
@@ -8854,10 +8899,30 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             full_data.setdefault("quality_notes", []).append(detailed_note)
         elif full_data.get("detailed_report_status") == "internal_draft_verification_pending":
             full_data.setdefault("quality_notes", []).append(
-                "Detailed Report is retained as an internal draft because semantic verification is incomplete for one or more sections. Completed section verdicts and governed corrections were preserved; unverified sections remain pending."
+                "Detailed Report is retained as an internal draft because factual verification coverage is incomplete for one or more sections. No known unresolved material claim remains, but those sections were not fully checked. Semantic calibration and language hygiene are tracked separately."
             )
             if scan_quality == "complete":
                 scan_quality = "unverified"
+        elif full_data.get("detailed_report_status") in {
+            "published_with_semantic_calibration", "published_with_language_warnings"
+        }:
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report was published because no unresolved material factual claim remains. Any remaining issue is limited to semantic calibration or language hygiene and is recorded separately."
+            )
+
+        detailed_verification_meta = full_data.get("detailed_report_verification") or {}
+        semantic_meta = detailed_verification_meta.get("semantic_calibration") or {}
+        language_meta = detailed_verification_meta.get("language_quality") or {}
+        if semantic_meta.get("item_count") and semantic_meta.get("status") in {"applied", "recommended"}:
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report semantic review found interpretation wording that required calibration. "
+                "This is separate from factual verification and is not, by itself, evidence of a false claim."
+            )
+        if language_meta.get("unresolved_defects"):
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report has remaining language-hygiene notes. These concern fluency or grammar, "
+                "not factual support, and did not block publication."
+            )
 
         _record_final_stage(
             "detailed_report",

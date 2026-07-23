@@ -314,7 +314,7 @@ def test_unresolved_material_claims_are_withheld():
     assert status == "withheld_material_claims"
 
 
-def test_language_hygiene_only_keeps_report_as_internal_language_draft():
+def test_language_hygiene_only_does_not_block_publication():
     status = detailed_report.detailed_report_publication_status(
         {"complete": True},
         {
@@ -332,7 +332,25 @@ def test_language_hygiene_only_keeps_report_as_internal_language_draft():
         },
     )
 
-    assert status == "internal_draft_language_review_pending"
+    assert status == "published_with_language_warnings"
+
+
+def test_semantic_calibration_only_does_not_block_publication():
+    status = detailed_report.detailed_report_publication_status(
+        {"complete": True},
+        {
+            "verified": False,
+            "unresolved_blocking_claims": [],
+            "publication_reasons": {
+                "material_claims": [],
+                "incomplete_verification": False,
+                "semantic_calibration": ["Narrow an overstrong interpretation."],
+                "language_hygiene": [],
+            },
+        },
+    )
+
+    assert status == "published_with_semantic_calibration"
 
 
 def test_claim_action_manifest_preserves_prohibited_current_run_proposition():

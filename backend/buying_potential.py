@@ -1529,9 +1529,9 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
     if blocked_play_count or gate_blocked_count or do_not_say_count:
         reasons.append("Guardrails contain blocked or do-not-say material that must not be used customer-facing.")
     if gate_unavailable:
-        reasons.append("Independent semantic gate review was unavailable; deterministic evidence controls remain authoritative.")
+        reasons.append("Independent evidence-and-claim Gate Review was unavailable; deterministic evidence controls remain authoritative.")
     elif gate_changes_required:
-        reasons.append("Independent semantic gate review required bounded wording or gate corrections, which were applied.")
+        reasons.append("Independent Gate Review required bounded claim-safety or semantic wording corrections, which were applied.")
     if deterministic_fallback:
         reasons.append("One or more generated sections used deterministic fallback.")
     if sufficiency_status != "complete":
@@ -7062,11 +7062,11 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         quality_notes = evidence_confidence.setdefault("report_quality_notes", [])
         if gate_review.get("status") == "unavailable":
             quality_notes.append(
-                "Independent semantic Gate Review was unavailable; deterministic evidence controls were applied and reliability was capped at Question-Led Draft."
+                "Independent evidence-and-claim Gate Review was unavailable; deterministic evidence controls were applied and reliability was capped at Question-Led Draft."
             )
         elif gate_review.get("status") == "changes_required":
             quality_notes.append(
-                f"Independent semantic Gate Review applied {len(applied_field_actions)} field action(s), "
+                f"Independent Gate Review applied {len(applied_field_actions)} claim-safety or semantic field action(s), "
                 f"propagated {propagated_field_actions} repeated occurrence(s), and applied {len(downgrades)} gate downgrade(s)."
             )
         if rejected_field_actions:
@@ -7978,6 +7978,31 @@ def generate_buying_potential_report(
     report["companyUrl"] = company_data.get("companyUrl")
     report = _polish_generated_text_tree(report, report.get("companyName"))
     report = _run_final_language_qa(report, gate_review)
+    quality_controls = _dict(report.get("quality_controls"))
+    gate_meta = _dict(report.get("gate_review"))
+    decisions = [_dict(item) for item in _list(gate_meta.get("claim_decisions"))]
+    quality_controls["verification_dimensions"] = {
+        "evidence_and_claim_safety": {
+            "status": gate_meta.get("status") or "unavailable",
+            "blocked_claim_count": len(_list(gate_meta.get("blocked_claims"))),
+            "field_action_count": len(_list(gate_meta.get("applied_field_actions"))),
+            "complete": gate_meta.get("status") in {"approved", "changes_required"},
+        },
+        "semantic_calibration": {
+            "status": (
+                "applied" if gate_meta.get("status") == "changes_required"
+                else "not_needed" if gate_meta.get("status") == "approved"
+                else "unavailable"
+            ),
+            "decision_count": len(decisions),
+            "publication_blocking": False,
+        },
+        "language_quality": {
+            **_dict(report.get("language_quality")),
+            "publication_blocking": False,
+        },
+    }
+    report["quality_controls"] = quality_controls
     if stage_callback:
         stage_callback("render_html", 82, "Rendering Buying Insight HTML")
     html_report = render_buying_potential_html(report)

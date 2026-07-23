@@ -718,3 +718,29 @@ def test_compact_packet_omission_is_repaired_from_current_run_manifest():
     assert repaired[0]["recovered_source_ids"] == [fact_id]
     assert result["evidence_handoff_failures"] == []
     assert result["audit_notes_detailed"][0]["issue_type"] == "packet_omission_repaired"
+
+
+def test_semantic_handoff_recovery_builds_recheck_packet_without_approving_claim():
+    failure = {
+        "claim_id": "DR-CLAIM-02",
+        "claim": "The company has expanded production capacity through a manufacturing cooperation agreement.",
+        "reasoning": "The compact packet did not include the cooperation source.",
+    }
+    full_records = [{
+        "evidence_id": "EVD-B02F3CECF9F3",
+        "generation_eligible": True,
+        "content_verified": True,
+        "entity_match_status": "matched",
+        "claim": "Sisu Auto and Valmet Automotive signed a manufacturing cooperation agreement to expand production capacity.",
+        "source_quote": "The agreement covers manufacturing cooperation and additional production capacity for Sisu vehicles.",
+    }]
+
+    records, failures = reality_check._semantic_packet_omission_records(
+        [failure],
+        full_records=full_records,
+        compact_records=[],
+    )
+
+    assert records[0]["evidence_id"] == "EVD-B02F3CECF9F3"
+    assert failures[0]["recovery_method"] == "semantic_current_run_match"
+    assert failures[0]["claim_id"] == "DR-CLAIM-02"

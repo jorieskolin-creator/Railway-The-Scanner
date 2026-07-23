@@ -57,14 +57,15 @@ def detailed_report_publication_status(
     if (verification or {}).get("unresolved_blocking_claims"):
         return "withheld_material_claims"
     if not (verification or {}).get("verified"):
-        language_quality = (verification or {}).get("language_quality") or {}
         publication_reasons = (verification or {}).get("publication_reasons") or {}
-        if (
-            language_quality.get("unresolved_defects")
-            and not publication_reasons.get("material_claims")
-            and not publication_reasons.get("incomplete_verification")
-        ):
-            return "internal_draft_language_review_pending"
+        # Verification coverage is a trust boundary. Semantic calibration and
+        # language hygiene are separate quality dimensions and must not make a
+        # factually verified, structurally complete report disappear.
+        if not publication_reasons.get("incomplete_verification"):
+            if publication_reasons.get("semantic_calibration"):
+                return "published_with_semantic_calibration"
+            if publication_reasons.get("language_hygiene"):
+                return "published_with_language_warnings"
         return "internal_draft_verification_pending"
     recovery_mode = str(recovery.get("repair_mode") or "none")
     recovery_status = str(recovery.get("recovery_status") or "not_needed")
@@ -207,7 +208,10 @@ def _language_defects(text: str) -> list[str]:
         defects.append("repeated_parenthetical")
 
     words = re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9'’/-]*", value.lower())
-    for size in range(8, 3, -1):
+    # Repeated strategic vocabulary is normal in an analytical paragraph. Only
+    # flag longer, nearby clauses; short four-word n-grams produced too many
+    # false positives (for example repeated use of "product lifecycle").
+    for size in range(10, 6, -1):
         phrases = {}
         for index in range(0, max(0, len(words) - size + 1)):
             phrase = tuple(words[index:index + size])

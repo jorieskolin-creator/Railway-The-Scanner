@@ -1036,8 +1036,12 @@ const isForesightContext = (link) => {
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var detailedReportStatus = exportData.detailed_report_status || '';
         var detailedReportBoundaryHTML = detailedReportStatus === 'internal_draft_verification_pending'
-            ? '<div class="callout amber"><h3>Internal draft</h3><p>This report is retained for internal analysis, but final semantic verification is pending. Do not use its claims externally until verification completes.</p></div>'
-            : '';
+            ? '<div class="callout amber"><h3>Internal draft</h3><p>Factual verification coverage is incomplete for one or more sections. This does not mean a known false claim remains, but the unchecked sections should not be used externally until verification completes.</p></div>'
+            : detailedReportStatus === 'published_with_semantic_calibration'
+                ? '<div class="callout cyan"><h3>Published with semantic calibration</h3><p>No unresolved material factual claim remains. Interpretation wording was narrowed or qualified separately from fact-checking.</p></div>'
+                : detailedReportStatus === 'published_with_language_warnings'
+                    ? '<div class="callout amber"><h3>Published with language notes</h3><p>Factual verification did not identify an unresolved material claim. Minor fluency or grammar notes remain and did not block publication.</p></div>'
+                    : '';
         var detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
             ? detailedReportBoundaryHTML + renderReportBlocks(exportData.detailed_report)
             : (detailedReportStatus && detailedReportStatus !== 'generated'
@@ -1399,8 +1403,12 @@ const isForesightContext = (link) => {
         const buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(exportData.buying_insight_report);
         const detailedReportStatus = exportData.detailed_report_status || '';
         const detailedReportBoundaryHTML = detailedReportStatus === 'internal_draft_verification_pending'
-            ? '<div class="callout amber"><h3>Internal draft</h3><p>This report is retained for internal analysis, but final semantic verification is pending. Do not use its claims externally until verification completes.</p></div>'
-            : '';
+            ? '<div class="callout amber"><h3>Internal draft</h3><p>Factual verification coverage is incomplete for one or more sections. This does not mean a known false claim remains, but the unchecked sections should not be used externally until verification completes.</p></div>'
+            : detailedReportStatus === 'published_with_semantic_calibration'
+                ? '<div class="callout cyan"><h3>Published with semantic calibration</h3><p>No unresolved material factual claim remains. Interpretation wording was narrowed or qualified separately from fact-checking.</p></div>'
+                : detailedReportStatus === 'published_with_language_warnings'
+                    ? '<div class="callout amber"><h3>Published with language notes</h3><p>Factual verification did not identify an unresolved material claim. Minor fluency or grammar notes remain and did not block publication.</p></div>'
+                    : '';
         const detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
             ? detailedReportBoundaryHTML + renderReportBlocks(exportData.detailed_report)
             : (detailedReportStatus && detailedReportStatus !== 'generated'
@@ -2674,7 +2682,21 @@ const isForesightContext = (link) => {
                         {detailedReportStatus === 'internal_draft_verification_pending' && (
                             <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4 mb-5">
                                 <p className="text-amber-100 text-sm leading-relaxed">
-                                    Internal draft: final semantic verification is pending. Use for internal analysis only.
+                                    Internal draft: factual verification coverage is incomplete for one or more sections. No known material false claim remains, but use externally only after coverage is complete.
+                                </p>
+                            </div>
+                        )}
+                        {detailedReportStatus === 'published_with_semantic_calibration' && (
+                            <div className="bg-cyan-500/10 border border-cyan-400/20 rounded-lg p-4 mb-5">
+                                <p className="text-cyan-100 text-sm leading-relaxed">
+                                    Published with semantic calibration: no unresolved material factual claim remains. Interpretation wording was narrowed or qualified separately from fact-checking.
+                                </p>
+                            </div>
+                        )}
+                        {detailedReportStatus === 'published_with_language_warnings' && (
+                            <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4 mb-5">
+                                <p className="text-amber-100 text-sm leading-relaxed">
+                                    Published with language notes: factual verification did not identify an unresolved material claim. Minor fluency or grammar notes remain.
                                 </p>
                             </div>
                         )}
