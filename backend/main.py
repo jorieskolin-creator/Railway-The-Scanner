@@ -1437,6 +1437,17 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             item.get("evidence_snippet") or item.get("source_quote") or item.get("snippet") or ""
         ).strip()
         source_record = evidence_by_url.get(source_url) or {}
+        registry_context = data.get("registry_context") or {}
+        legal_entity = str(
+            item.get("legal_entity")
+            or item.get("entity_name")
+            or source_record.get("legal_entity")
+            or source_record.get("entity_name")
+            or registry_context.get("legal_name")
+            or registry_context.get("current_legal_name")
+            or data.get("companyName")
+            or ""
+        ).strip()
         financial_findings.append({
             "dimension": item.get("dimension") or item.get("category"),
             "finding": item.get("finding") or item.get("summary") or item.get("claim"),
@@ -1463,9 +1474,11 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
                 "value": item.get("value") or item.get("amount"),
                 "source_title": item.get("source_title") or item.get("title"),
                 "source_url": source_url,
+                "canonical_url": source_url.rstrip("/"),
                 "evidence_id": source_record.get("evidence_id") or source_record.get("source_id"),
                 "report_ref": source_record.get("report_ref"),
                 "entity_scope": item.get("entity_scope") or source_record.get("entity_scope") or "unknown",
+                "legal_entity": legal_entity,
                 "analysis_verified": item.get("analysis_verified"),
                 "generation_eligible": item.get("generation_eligible"),
                 "promotion_status": source_record.get("promotion_status"),
@@ -8023,6 +8036,10 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 initial_dr_check = dr_check
                 original_dr_text = dr_text
                 verification_history = []
+                verifier_batch_history = [{
+                    "stage": "initial",
+                    "results": initial_dr_check.get("batch_results", []),
+                }]
                 total_replacements = 0
                 total_removals = 0
                 wording_calibrations_applied = 0
@@ -8421,6 +8438,10 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                 only_section_names=recheck_sections,
                             )
                         final_recheck_status = final_check.get("verification_status", "unavailable")
+                        verifier_batch_history.append({
+                            "stage": "final_recheck",
+                            "results": final_check.get("batch_results", []),
+                        })
                         final_blocking = _ensure_detailed_claim_ids(
                             _dedupe_claims(final_check.get("false_claims_detailed") or [])
                         )
@@ -8545,12 +8566,50 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                     time_budget_seconds=resolution_budget,
                                     only_section_names=resolution_sections,
                                 )
+                                verifier_batch_history.append({
+                                    "stage": "resolution_recheck",
+                                    "results": resolution_check.get("batch_results", []),
+                                })
                                 final_check = resolution_check
                                 resolution_blocking = _dedupe_claims(
                                     resolution_check.get("false_claims_detailed") or []
                                 )
                                 resolution_calibrations = _dedupe_claims(
                                     resolution_check.get("wording_adjustments_detailed") or []
+                                )
+                                resolution_issues = _ensure_detailed_claim_ids(
+                                    resolution_blocking + resolution_calibrations
+                                )
+                                resolution_replacements = 0
+                                resolution_removals = 0
+                                for issue in resolution_issues:
+                                    claim = _claim_text(issue)
+                                    correction = str(issue.get("correction") or "").strip()
+                                    if not claim or not correction:
+                                        continue
+                                    repaired = _replace_flagged_claim(dr_text, claim, correction)
+                                    if repaired != dr_text:
+                                        dr_text = repaired
+                                        resolution_replacements += 1
+                                        changed_claim_ids.append(issue.get("claim_id"))
+                                resolution_remaining = flagged_report_claims_remaining(
+                                    dr_text,
+                                    resolution_blocking,
+                                )
+                                if resolution_remaining:
+                                    dr_text, resolution_removals = remove_flagged_report_sentences(
+                                        dr_text,
+                                        resolution_remaining,
+                                    )
+                                resolution_remaining = flagged_report_claims_remaining(
+                                    dr_text,
+                                    resolution_blocking,
+                                )
+                                total_replacements += resolution_replacements
+                                total_removals += resolution_removals
+                                dr_text = polish_detailed_report_text(dr_text)
+                                resolution_actions_applied = bool(
+                                    resolution_replacements or resolution_removals
                                 )
                                 final_verified = bool(
                                     resolution_check.get("verified")
@@ -8563,11 +8622,21 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                 final_recheck_status = (
                                     "verified_after_final_resolution"
                                     if final_verified
+                                    else "corrected_pending_recheck"
+                                    if resolution_actions_applied and not resolution_remaining
                                     else "unavailable"
                                     if resolution_check.get("fact_check_skipped")
                                     else "unresolved_blocking_claims"
                                 )
-                                final_unresolved = resolution_blocking
+                                final_unresolved = resolution_remaining
+                                verification_history.append({
+                                    "stage": "resolution_actions",
+                                    "model": resolution_check.get("fact_check_model", ""),
+                                    "status": final_recheck_status,
+                                    "deterministic_replacements": resolution_replacements,
+                                    "deterministic_removals": resolution_removals,
+                                    "remaining_after_actions": resolution_remaining,
+                                })
                     else:
                         final_verified = False
                         final_unresolved = []
@@ -8577,9 +8646,15 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 # seams. Scan the complete assembled report once more without
                 # another generative pass; unresolved language defects keep the
                 # artifact in internal-draft status rather than overstating QA.
+                _extend_dr_recovery_deadline(50)
+                post_language_budget = min(
+                    30,
+                    max(0, int(_dr_stage_remaining())),
+                    max(0, int(_scan_remaining()) - 20),
+                )
                 dr_text, post_resolution_language = final_public_language_review(
                     dr_text,
-                    time_budget_seconds=0,
+                    time_budget_seconds=post_language_budget,
                     label="Detailed Report",
                 )
                 if post_resolution_language.get("unresolved_defects"):
@@ -8608,10 +8683,25 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     )),
                     "batch_results": initial_dr_check.get("batch_results", []),
                     "final_batch_results": final_check.get("batch_results", []),
+                    "verifier_batch_history": verifier_batch_history,
                     "false_claims": initial_dr_check.get("false_claims", []),
                     "wording_adjustments": initial_dr_check.get("wording_adjustments", []),
                     "wording_calibrations_applied": wording_calibrations_applied,
                     "evidence_handoff_failures": initial_dr_check.get("evidence_handoff_failures", []),
+                    "packet_omission_repaired": list(dict.fromkeys(
+                        str(item.get("claim_id") or item.get("claim") or "")
+                        for check in (initial_dr_check, final_check)
+                        for item in (check.get("packet_omission_repaired") or [])
+                        if isinstance(item, dict) and (item.get("claim_id") or item.get("claim"))
+                    )),
+                    "financial_fact_ids": list(dict.fromkeys(
+                        str(value)
+                        for check in (initial_dr_check, final_check)
+                        for value in (check.get("financial_fact_ids") or [])
+                        if str(value or "")
+                    )),
+                    "support_groups": list(initial_dr_check.get("support_groups") or [])
+                    + list(final_check.get("support_groups") or []),
                     "model": initial_dr_check.get("fact_check_model", ""),
                     "final_recheck_model": final_check.get("fact_check_model", ""),
                     "final_recheck_status": final_recheck_status,
@@ -8634,6 +8724,18 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         "coverage_repaired": coverage_repaired,
                     },
                     "language_quality": detailed_language_quality,
+                    "publication_reasons": {
+                        "material_claims": [
+                            _claim_text(item) for item in _dedupe_claims(final_unresolved)
+                            if _claim_text(item)
+                        ],
+                        "incomplete_verification": bool(
+                            final_check.get("fact_check_skipped")
+                            or final_check.get("verification_partial")
+                            or final_check.get("unavailable_sections")
+                        ),
+                        "language_hygiene": post_resolution_language.get("unresolved_defects", []),
+                    },
                 }
                 full_data["detailed_report_recovery"] = {
                     **recovery_impact,

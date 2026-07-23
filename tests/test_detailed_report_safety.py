@@ -314,6 +314,27 @@ def test_unresolved_material_claims_are_withheld():
     assert status == "withheld_material_claims"
 
 
+def test_language_hygiene_only_keeps_report_as_internal_language_draft():
+    status = detailed_report.detailed_report_publication_status(
+        {"complete": True},
+        {
+            "verified": False,
+            "unresolved_blocking_claims": [],
+            "language_quality": {
+                "status": "unresolved_budget",
+                "unresolved_defects": [{"item_id": "P001", "defects": ["repeated_phrase"]}],
+            },
+            "publication_reasons": {
+                "material_claims": [],
+                "incomplete_verification": False,
+                "language_hygiene": [{"item_id": "P001"}],
+            },
+        },
+    )
+
+    assert status == "internal_draft_language_review_pending"
+
+
 def test_claim_action_manifest_preserves_prohibited_current_run_proposition():
     report = """## Key Findings
 

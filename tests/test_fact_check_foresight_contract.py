@@ -28,6 +28,105 @@ def test_fact_check_record_projection_caps_excerpts_and_drops_large_internal_fie
     assert "normalized_content" not in projected
 
 
+def _profinder_financial_payload(*, margin_period="2025", margin_entity="Oy Sisu Auto Ab"):
+    url = "https://b2b.profinder.fi/haku/oy-sisu-auto-ab/17495599"
+    return {
+        "financial_payload": {
+            "financial_fact_manifest": [
+                {
+                    "fact_id": "FINFACT-REVENUE",
+                    "assessment": "FY2025 revenue was €91.6M, up 82.4% year on year.",
+                    "evidence_snippet": "Liikevaihto 91,6 milj. €, muutos 82,4 %.",
+                    "periods": ["2025"],
+                    "metric": "Revenue",
+                    "value": "€91.6M",
+                    "source_url": url,
+                    "legal_entity": "Oy Sisu Auto Ab",
+                },
+                {
+                    "fact_id": "FINFACT-MARGIN",
+                    "assessment": f"FY{margin_period} operating margin was 13.2%.",
+                    "evidence_snippet": "Liikevoitto 13,2 %.",
+                    "periods": [margin_period],
+                    "metric": "Operating margin",
+                    "value": "13.2%",
+                    "source_url": url,
+                    "legal_entity": margin_entity,
+                },
+            ]
+        }
+    }
+
+
+def test_financial_support_groups_split_metrics_by_source_entity_and_period():
+    claim = (
+        "For fiscal year 2025, Oy Sisu Auto Ab reported revenue of €91.6 million, "
+        "growth of 82.4%, and an operating margin of 13.2%."
+    )
+
+    support = reality_check._structured_financial_claim_support(
+        claim,
+        _profinder_financial_payload(),
+    )
+
+    assert support["supported"] is True
+    assert support["financial_fact_ids"] == ["FINFACT-REVENUE", "FINFACT-MARGIN"]
+    assert support["support_group"]["reporting_periods"] == ["2025"]
+
+
+def test_financial_support_rejects_cross_period_and_cross_entity_combinations():
+    claim = (
+        "For fiscal year 2025, Oy Sisu Auto Ab reported revenue of €91.6 million, "
+        "growth of 82.4%, and an operating margin of 13.2%."
+    )
+
+    assert reality_check._structured_financial_claim_support(
+        claim,
+        _profinder_financial_payload(margin_period="2024"),
+    )["supported"] is False
+    assert reality_check._structured_financial_claim_support(
+        claim,
+        _profinder_financial_payload(margin_entity="Sisu Group Oy"),
+    )["supported"] is False
+
+
+def test_financial_projection_preserves_governed_fact_fields():
+    record = _profinder_financial_payload()["financial_payload"]["financial_fact_manifest"][0]
+    projected = reality_check._project_fact_check_record(record)
+
+    assert projected["fact_id"] == "FINFACT-REVENUE"
+    assert projected["assessment"].startswith("FY2025 revenue")
+    assert projected["evidence_snippet"].startswith("Liikevaihto")
+    assert projected["periods"] == ["2025"]
+    assert projected["metric"] == "Revenue"
+    assert projected["value"] == "€91.6M"
+    assert projected["source_url"].endswith("17495599")
+    assert projected["legal_entity"] == "Oy Sisu Auto Ab"
+
+
+def test_claim_first_packet_reserves_distinct_support_for_distinct_claims():
+    records = [
+        {
+            "evidence_id": "EVD-CONSULTING",
+            "exact_passage": "Vehicle technology consulting, design and project management are key services.",
+        },
+        {
+            "evidence_id": "EVD-CAPACITY",
+            "exact_passage": "The manufacturing cooperation is intended to increase production capacity.",
+        },
+    ]
+    text = (
+        "Vehicle technology consulting is part of the stated service portfolio. "
+        "A manufacturing cooperation is intended to increase production capacity."
+    )
+
+    selected, coverage = reality_check._claim_first_fact_check_records(records, text, 4)
+
+    assert {item["evidence_id"] for item in selected} == {"EVD-CONSULTING", "EVD-CAPACITY"}
+    assert coverage["candidate_claim_count"] == 2
+    assert coverage["claims_with_reserved_support"] == 2
+
+
 def test_compact_fact_check_records_prioritize_explicit_report_reference():
     records = [
         {"evidence_id": "EVD-GENERIC", "report_ref": 1, "source_quote": "generic context"},
@@ -589,3 +688,33 @@ def test_dense_detailed_report_sections_are_not_forced_into_three_section_batche
 
     assert len(batches) >= 2
     assert all(len(batch) <= 2 for batch in batches)
+
+
+def test_compact_packet_omission_is_repaired_from_current_run_manifest():
+    fact_id = "FINFACT-123e4567-e89b-12d3-a456-426614174000"
+    result = {
+        "evidence_handoff_failures": [{
+            "claim_id": "DR-CLAIM-01",
+            "claim": "The company reported EUR 91.6 million revenue in 2025.",
+            "missing_evidence_ids": fact_id,
+        }],
+    }
+    full_records = [{
+        "fact_id": fact_id,
+        "source_url": "https://b2b.profinder.fi/haku/oy-sisu-auto-ab/17495599",
+        "legal_entity": "Oy Sisu Auto Ab",
+        "period": "2025",
+        "metric": "Revenue",
+        "value": "EUR 91.6 million",
+    }]
+
+    repaired = reality_check._repair_explicit_packet_omissions(
+        result,
+        full_records=full_records,
+        compact_records=[],
+    )
+
+    assert repaired[0]["status"] == "packet_omission_repaired"
+    assert repaired[0]["recovered_source_ids"] == [fact_id]
+    assert result["evidence_handoff_failures"] == []
+    assert result["audit_notes_detailed"][0]["issue_type"] == "packet_omission_repaired"

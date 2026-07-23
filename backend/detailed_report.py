@@ -57,6 +57,14 @@ def detailed_report_publication_status(
     if (verification or {}).get("unresolved_blocking_claims"):
         return "withheld_material_claims"
     if not (verification or {}).get("verified"):
+        language_quality = (verification or {}).get("language_quality") or {}
+        publication_reasons = (verification or {}).get("publication_reasons") or {}
+        if (
+            language_quality.get("unresolved_defects")
+            and not publication_reasons.get("material_claims")
+            and not publication_reasons.get("incomplete_verification")
+        ):
+            return "internal_draft_language_review_pending"
         return "internal_draft_verification_pending"
     recovery_mode = str(recovery.get("repair_mode") or "none")
     recovery_status = str(recovery.get("recovery_status") or "not_needed")

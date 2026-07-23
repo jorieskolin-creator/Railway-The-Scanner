@@ -152,47 +152,156 @@ def _is_internal_scanner_observation(text: str) -> bool:
     return bool(text and _INTERNAL_SCAN_OBSERVATION_RE.search(text))
 
 
-def _is_supported_structured_financial_payload_claim(text: str, scan_payload: dict | None) -> bool:
-    """Return true when one governed financial record supports the complete claim.
+def _canonical_fact_url(value: str) -> str:
+    """Return a stable URL key without weakening source identity."""
+    normalized = str(value or "").strip().lower()
+    normalized = re.sub(r"^http://", "https://", normalized)
+    return normalized.rstrip("/")
 
-    Requiring one period-specific record prevents values from different years
-    or entity scopes from being combined into a claim that no source supports.
-    """
+
+def _financial_value_tokens(value: str) -> list[str]:
+    tokens = re.findall(
+        r'(?:€\s*)?\d+(?:[.,]\d+)?\s*(?:m|million|%|bn|billion)?',
+        str(value or "").lower(),
+    )
+    output = []
+    for token in tokens:
+        normalized = re.sub(r'\s+', '', token.replace(",", "."))
+        normalized = re.sub(r"(?:million|milj\.?)(?:euros?)?", "m", normalized)
+        normalized = re.sub(r"billion", "bn", normalized)
+        normalized = normalized.replace("€", "")
+        bare_number = re.sub(r'[^0-9.]', '', normalized)
+        # Reporting years belong to the governed period key, not to the value
+        # pool that may be combined across records.
+        if re.fullmatch(r"20\d{2}", bare_number):
+            continue
+        if len(normalized) >= 2:
+            output.append(normalized)
+    return list(dict.fromkeys(output))
+
+
+def _normalize_financial_support_text(value: str) -> str:
+    normalized = str(value or "").lower().replace(",", ".")
+    normalized = re.sub(r"(?:million|milj\.?)(?:\s*euros?)?", "m", normalized)
+    normalized = re.sub(r"billion", "bn", normalized)
+    normalized = normalized.replace("€", "")
+    return re.sub(r"\s+", "", normalized)
+
+
+def _financial_group_key(record: dict) -> tuple[str, str, tuple[str, ...]]:
+    source_url = _canonical_fact_url(
+        record.get("source_url") or record.get("canonical_url") or record.get("url")
+    )
+    entity = str(
+        record.get("legal_entity")
+        or record.get("entity_name")
+        or record.get("entity_scope")
+        or "unknown"
+    ).strip().lower()
+    periods = record.get("periods") or []
+    if isinstance(periods, str):
+        periods = re.findall(r"\b(?:FY\s*)?20\d{2}\b", periods, flags=re.IGNORECASE)
+    if not isinstance(periods, list):
+        periods = []
+    period_values = {
+        re.sub(r"^FY", "", re.sub(r"\s+", "", str(value or "").upper()))
+        for value in periods
+        if str(value or "").strip()
+    }
+    if not period_values:
+        record_text = " ".join(str(record.get(key) or "") for key in (
+            "assessment", "finding", "evidence_snippet", "metric", "value",
+        ))
+        period_values = {
+            re.sub(r"^FY", "", re.sub(r"\s+", "", value.upper()))
+            for value in re.findall(r"\b(?:FY\s*)?20\d{2}\b", record_text, flags=re.IGNORECASE)
+        }
+    return source_url, entity, tuple(sorted(period_values))
+
+
+def _structured_financial_claim_support(text: str, scan_payload: dict | None) -> dict:
+    """Resolve exact values against one canonical source/entity/period group."""
+    empty = {"supported": False, "financial_fact_ids": [], "support_group": {}}
     if not text or not isinstance(scan_payload, dict):
-        return False
+        return empty
     if not re.search(r'\b(?:revenue|sales|ebit|ebitda|profit|margin|cash flow|equity|financial|fy20\d{2}|€|\b\d+(?:\.\d+)?%|\bm\b|\bmillion)\b', text, re.IGNORECASE):
-        return False
+        return empty
     financial = scan_payload.get("financial_payload") or {}
-    records = list(financial.get("financial_fact_manifest") or [])
+    records = [
+        item for item in (financial.get("financial_fact_manifest") or [])
+        if isinstance(item, dict)
+    ]
     if not records:
-        records = list(financial.get("financial_findings") or [])
-    records = [item for item in records if isinstance(item, dict)]
-    if not records:
-        legacy_values = {
+        legacy_text = json.dumps({
             str(key): value for key, value in financial.items()
             if isinstance(value, (str, int, float, bool))
-        }
-        if legacy_values:
-            records = [{"finding": json.dumps(legacy_values, ensure_ascii=False)}]
-    if not records:
-        return False
-    claim_text = text.lower()
-    values = re.findall(r'(?:€\s*)?\d+(?:[.,]\d+)?\s*(?:m|million|%|bn|billion)?', claim_text)
-    values = [re.sub(r'\s+', '', v.replace(",", ".")) for v in values if len(v.strip()) >= 2]
-    words = [w for w in re.findall(r'[a-zåäöA-ZÅÄÖ]{4,}', claim_text) if w not in {"reported", "shows", "company", "annual", "financial"}]
-    for record in records:
-        record_text = " ".join(str(record.get(key) or "") for key in (
-            "dimension", "assessment", "finding", "metric", "value",
-            "evidence_snippet", "periods", "entity_scope",
-        )).lower()
-        normalized_record = re.sub(r'\s+', '', record_text.replace(",", "."))
-        if values:
-            if all(value in normalized_record for value in values[:6]):
-                return True
+        }, ensure_ascii=False)
+        values = _financial_value_tokens(text)
+        if values and all(value in _normalize_financial_support_text(legacy_text) for value in values):
+            return {
+                "supported": True,
+                "financial_fact_ids": [],
+                "support_group": {"legacy_structured_payload": True},
+            }
+        return empty
+    values = _financial_value_tokens(text)
+    claim_periods = {
+        re.sub(r"^FY", "", re.sub(r"\s+", "", value.upper()))
+        for value in re.findall(r"\b(?:FY\s*)?20\d{2}\b", text, flags=re.IGNORECASE)
+    }
+    groups: dict[tuple[str, str, tuple[str, ...]], list[dict]] = {}
+    for record_index, record in enumerate(records):
+        key = _financial_group_key(record)
+        if key[1] == "unknown" or not key[2]:
             continue
-        if len(words) >= 4 and sum(1 for word in words[:10] if word in record_text) >= 4:
-            return True
-    return False
+        if not key[0]:
+            # Legacy governed manifests may lack URL lineage. Keep such a
+            # record independently usable, but never combine it with another
+            # record merely because both omit a URL.
+            key = (f"record:{record.get('fact_id') or record_index}", key[1], key[2])
+        groups.setdefault(key, []).append(record)
+
+    claim_words = [
+        word for word in re.findall(r'[a-zåäöA-ZÅÄÖ]{4,}', text.lower())
+        if word not in {"reported", "shows", "company", "annual", "financial"}
+    ]
+    for (source_url, entity, periods), group_records in groups.items():
+        if claim_periods and not claim_periods.issubset(set(periods)):
+            continue
+        group_text = " ".join(
+            " ".join(str(record.get(key) or "") for key in (
+                "dimension", "assessment", "finding", "metric", "value",
+                "evidence_snippet", "periods", "entity_scope", "legal_entity",
+            ))
+            for record in group_records
+        ).lower()
+        normalized_group = _normalize_financial_support_text(group_text)
+        values_supported = bool(values) and all(value in normalized_group for value in values[:8])
+        words_supported = (
+            not values
+            and len(claim_words) >= 4
+            and sum(1 for word in claim_words[:12] if word in group_text) >= 4
+        )
+        if values_supported or words_supported:
+            return {
+                "supported": True,
+                "financial_fact_ids": [
+                    str(record.get("fact_id") or "")
+                    for record in group_records
+                    if str(record.get("fact_id") or "")
+                ],
+                "support_group": {
+                    "canonical_source_url": source_url,
+                    "legal_entity": entity,
+                    "reporting_periods": list(periods),
+                },
+            }
+    return empty
+
+
+def _is_supported_structured_financial_payload_claim(text: str, scan_payload: dict | None) -> bool:
+    """Return true when one governed source/entity/period group supports the claim."""
+    return bool(_structured_financial_claim_support(text, scan_payload).get("supported"))
 
 
 _AUDIT_NOTE_LABELS = {
@@ -1444,6 +1553,10 @@ If issues are found: {{"false_claims": [{{"section": "section heading", "claim":
                     "field_paths": _fact_check_field_paths(
                         claim_text, summary_text, pitch_text, analysis_sections
                     ),
+                    "current_text_claim_present": (
+                        re.sub(r"\s+", " ", claim_text).strip().lower().rstrip(".?!")
+                        in re.sub(r"\s+", " ", summary_text).strip().lower().rstrip(".?!")
+                    ),
                 })
         deduped = {}
         order = []
@@ -1772,10 +1885,12 @@ def ai_fact_check_summary(
                 print(f"      [Fact-Check] Premise reference mismatch; preserving as an audit warning: {claim_text[:80]}...")
                 continue
 
-            # The governed, period-specific financial manifest is a valid
-            # evidence handoff even when the verifier did not echo a public
-            # source index. Resolve it before classifying handoff failure.
-            if not source_indices and _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
+            # The governed financial manifest is authoritative for exact
+            # values. Resolve it even when the verifier selected an incomplete
+            # EVD excerpt: a generic source projection must not override a
+            # matching FINFACT source/entity/period group.
+            financial_support = _structured_financial_claim_support(claim_text, scan_payload)
+            if financial_support.get("supported"):
                 audit_notes.append(_format_audit_note("structured_payload_supported", claim_text, reasoning))
                 audit_notes_detailed.append({
                     "type": "audit_note",
@@ -1791,6 +1906,9 @@ def ai_fact_check_summary(
                     "source_indices": source_indices,
                     "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
                     "field_paths": (fc.get("field_paths") or []) if isinstance(fc, dict) else [],
+                    "financial_fact_ids": financial_support.get("financial_fact_ids", []),
+                    "support_group": financial_support.get("support_group", {}),
+                    "packet_omission_repaired": True,
                 })
                 print(f"      [Fact-Check] Governed financial fact supports claim: {claim_text[:70]}...")
                 continue
@@ -1957,6 +2075,9 @@ def ai_fact_check_summary(
                         "source_indices": source_indices,
                         "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
                         "field_paths": field_paths,
+                        "current_text_claim_present": bool(
+                            fc.get("current_text_claim_present", True)
+                        ) if isinstance(fc, dict) else True,
                     })
                 audit_notes.append(_format_audit_note(issue_type, claim_text, reasoning))
                 audit_notes_detailed.append({
@@ -1973,6 +2094,9 @@ def ai_fact_check_summary(
                     "source_indices": source_indices,
                     "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
                     "field_paths": field_paths,
+                    "current_text_claim_present": bool(
+                        fc.get("current_text_claim_present", True)
+                    ) if isinstance(fc, dict) else True,
                 })
                 print(f"      [Fact-Check] Non-blocking {issue_type}: {claim_text[:80]}...")
                 if reasoning:
@@ -1997,6 +2121,9 @@ def ai_fact_check_summary(
                 "source_indices": source_indices,
                 "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
                 "field_paths": (fc.get("field_paths") or []) if isinstance(fc, dict) else [],
+                "current_text_claim_present": bool(
+                    fc.get("current_text_claim_present", True)
+                ) if isinstance(fc, dict) else True,
             })
             src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
             error_info = f" [{error_type}]" if error_type != "Unknown" else ""
@@ -2073,10 +2200,12 @@ def _project_fact_check_record(item: dict) -> dict:
         return {}
     projected = {}
     scalar_keys = (
-        "evidence_id", "source_id", "premise_id", "signal_id", "report_ref",
+        "evidence_id", "source_id", "premise_id", "signal_id", "fact_id", "report_ref",
         "evidence_kind", "title", "source_title", "url", "canonical_url",
+        "source_url", "legal_entity", "entity_name", "entity_scope",
         "claim", "finding", "theme", "dimension", "category", "description",
-        "summary", "safe_wording", "semantic_hint", "semantic_snippet",
+        "summary", "assessment", "metric", "value", "safe_wording",
+        "semantic_hint", "semantic_snippet", "evidence_snippet",
         "source_quote", "exact_passage", "snippet", "fetched_excerpt",
         "claim_type", "source_tier", "claim_tier", "support_level",
         "analysis_support_mode", "source_context_status", "promotion_status",
@@ -2091,7 +2220,8 @@ def _project_fact_check_record(item: dict) -> dict:
         "snippet": 1200, "fetched_excerpt": 1200,
         "semantic_hint": 400, "semantic_snippet": 600,
         "claim": 900, "finding": 900, "description": 900,
-        "summary": 900, "safe_wording": 900,
+        "summary": 900, "assessment": 1800, "evidence_snippet": 1200,
+        "safe_wording": 900,
     }
     for key in scalar_keys:
         value = item.get(key)
@@ -2103,7 +2233,7 @@ def _project_fact_check_record(item: dict) -> dict:
             projected[key] = value
         elif key == "report_ref":
             projected[key] = value
-    for key in ("source_ids", "evidence_ids", "allowed_claim_types"):
+    for key in ("source_ids", "evidence_ids", "allowed_claim_types", "periods"):
         values = item.get(key)
         if isinstance(values, list):
             projected[key] = [str(value)[:100] for value in values[:12]]
@@ -2113,7 +2243,7 @@ def _project_fact_check_record(item: dict) -> dict:
 def _compact_fact_check_records(records: list, section_text: str, limit: int) -> list:
     """Select stable, relevant source/premise records for one report batch."""
     section_terms = _fact_check_terms(section_text)
-    explicit_ids = set(re.findall(r"\b(?:EVD|FOR|ABS|FIN|SRC|CED|LEDGER)-[A-Z0-9]+\b", section_text))
+    explicit_ids = set(re.findall(r"\b(?:EVD|FOR|ABS|FINFACT|FIN|SRC|CED|LEDGER)-[A-Z0-9]+\b", section_text))
     explicit_refs = {
         int(value) for value in re.findall(r"\[(\d{1,3})\]", section_text)
     }
@@ -2122,15 +2252,17 @@ def _compact_fact_check_records(records: list, section_text: str, limit: int) ->
         if not isinstance(item, dict):
             continue
         searchable = " ".join(str(item.get(key) or "") for key in (
-            "evidence_id", "source_id", "title", "source_title", "claim", "finding",
-            "snippet", "source_quote", "semantic_snippet", "theme", "dimension",
-            "description", "summary", "safe_wording",
+            "evidence_id", "source_id", "fact_id", "title", "source_title",
+            "claim", "finding", "assessment", "metric", "value", "periods",
+            "source_url", "snippet", "evidence_snippet", "source_quote", "exact_passage",
+            "semantic_snippet", "theme", "dimension", "description", "summary",
+            "safe_wording",
         ))
         item_terms = _fact_check_terms(searchable)
         overlap = len(section_terms & item_terms)
         item_ids = {
             str(item.get(key) or "").strip()
-            for key in ("evidence_id", "source_id", "signal_id", "premise_id")
+            for key in ("evidence_id", "source_id", "signal_id", "premise_id", "fact_id")
             if str(item.get(key) or "").strip()
         }
         report_ref = item.get("report_ref")
@@ -2150,6 +2282,141 @@ def _compact_fact_check_records(records: list, section_text: str, limit: int) ->
             if id(item) not in selected_ids
         )
     return [_project_fact_check_record(item) for item in positive[:limit]]
+
+
+def _fact_check_claim_units(section_text: str) -> list[str]:
+    prose = re.sub(r"(?m)^##\s+.+$", " ", str(section_text or ""))
+    units = re.split(r"(?<=[.!?])\s+|\n+", prose)
+    return [
+        re.sub(r"\s+", " ", unit).strip()
+        for unit in units
+        if len(re.findall(r"\b[\w€%.-]+\b", unit)) >= 6
+    ]
+
+
+def _claim_first_fact_check_records(records: list, section_text: str, limit: int) -> tuple[list, dict]:
+    """Reserve direct support per claim before adding broad section context."""
+    selected = []
+    seen = set()
+    covered = 0
+
+    def record_key(item: dict) -> str:
+        return str(
+            item.get("fact_id") or item.get("evidence_id") or item.get("source_id")
+            or item.get("premise_id") or item.get("signal_id") or item.get("report_ref")
+            or json.dumps(item, ensure_ascii=False, sort_keys=True)[:300]
+        ).strip()
+
+    claims = _fact_check_claim_units(section_text)
+    for claim in claims:
+        candidate = _compact_fact_check_records(records, claim, 1)
+        if not candidate:
+            continue
+        item = candidate[0]
+        # A fallback with no lexical or explicit relation does not count as
+        # claim coverage merely because it was the first source in the list.
+        searchable = " ".join(str(item.get(key) or "") for key in (
+            "claim", "finding", "assessment", "metric", "value", "periods",
+            "evidence_snippet", "source_quote", "exact_passage", "snippet",
+            "description", "summary", "safe_wording", "source_url", "url",
+        ))
+        explicit = bool(set(re.findall(
+            r"\b(?:EVD|FOR|ABS|FINFACT|FIN|SRC|CED|LEDGER)-[A-Z0-9]+\b", claim
+        )) & {
+            str(item.get(key) or "")
+            for key in ("fact_id", "evidence_id", "source_id", "premise_id", "signal_id")
+        })
+        overlap = len(_fact_check_terms(claim) & _fact_check_terms(searchable))
+        if not explicit and overlap < 2:
+            continue
+        covered += 1
+        key = record_key(item)
+        if key and key not in seen and len(selected) < limit:
+            selected.append(item)
+            seen.add(key)
+
+    for item in _compact_fact_check_records(records, section_text, limit):
+        key = record_key(item)
+        if key and key not in seen and len(selected) < limit:
+            selected.append(item)
+            seen.add(key)
+    return selected, {
+        "candidate_claim_count": len(claims),
+        "claims_with_reserved_support": covered,
+        "claims_without_reserved_support": max(0, len(claims) - covered),
+    }
+
+
+def _compact_financial_fact_manifest(records: list, section_text: str, limit: int = 12) -> list:
+    """Keep all records in selected source/entity/period groups together."""
+    selected, _coverage = _claim_first_fact_check_records(records, section_text, limit)
+    selected_group_keys = {
+        _financial_group_key(item) for item in selected if isinstance(item, dict)
+    }
+    output = []
+    seen = set()
+    for item in list(selected) + [
+        _project_fact_check_record(record)
+        for record in (records or [])
+        if isinstance(record, dict) and _financial_group_key(record) in selected_group_keys
+    ]:
+        key = str(item.get("fact_id") or item.get("evidence_id") or json.dumps(item, sort_keys=True))
+        if key in seen or len(output) >= limit:
+            continue
+        seen.add(key)
+        output.append(item)
+    return output
+
+
+def _repair_explicit_packet_omissions(
+    result: dict,
+    *,
+    full_records: list,
+    compact_records: list,
+) -> list[dict]:
+    """Resolve source handoff warnings caused only by compact packet selection."""
+    full_by_id = {}
+    for record in full_records or []:
+        if not isinstance(record, dict):
+            continue
+        for key in ("fact_id", "evidence_id", "source_id", "premise_id", "signal_id"):
+            value = str(record.get(key) or "").strip()
+            if value:
+                full_by_id[value] = record
+    compact_ids = {
+        str(record.get(key) or "").strip()
+        for record in (compact_records or []) if isinstance(record, dict)
+        for key in ("fact_id", "evidence_id", "source_id", "premise_id", "signal_id")
+        if str(record.get(key) or "").strip()
+    }
+    repaired = []
+    remaining = []
+    for failure in result.get("evidence_handoff_failures") or []:
+        raw_ids = str(failure.get("missing_evidence_ids") or "") if isinstance(failure, dict) else ""
+        missing_ids = re.findall(
+            r"\b(?:EVD|FOR|ABS|FINFACT|FIN|SRC|CED|LEDGER)-[A-Z0-9][A-Z0-9-]*\b",
+            raw_ids,
+            flags=re.IGNORECASE,
+        )
+        recovered_ids = [value for value in missing_ids if value in full_by_id and value not in compact_ids]
+        if missing_ids and len(recovered_ids) == len(missing_ids):
+            repaired.append({
+                "claim_id": failure.get("claim_id", ""),
+                "claim": failure.get("claim", ""),
+                "recovered_source_ids": recovered_ids,
+                "status": "packet_omission_repaired",
+            })
+        else:
+            remaining.append(failure)
+    if repaired:
+        result["evidence_handoff_failures"] = remaining
+        result.setdefault("packet_omission_repaired", []).extend(repaired)
+        result.setdefault("audit_notes_detailed", []).extend({
+            "type": "audit_note",
+            "issue_type": "packet_omission_repaired",
+            **item,
+        } for item in repaired)
+    return repaired
 
 
 def _split_fact_check_sections(report_text: str) -> list[dict]:
@@ -2294,18 +2561,18 @@ def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) ->
         )
         if key in payload
     }
-    compact["generation_premise_manifest"] = _compact_fact_check_records(
+    compact["generation_premise_manifest"] = _claim_first_fact_check_records(
         payload.get("generation_premise_manifest") or [], section_text, 8
-    )
-    compact["evidence_absence_signals"] = _compact_fact_check_records(
+    )[0]
+    compact["evidence_absence_signals"] = _claim_first_fact_check_records(
         payload.get("evidence_absence_signals") or [], section_text, 8
-    )
-    compact["evidence_based_risks"] = _compact_fact_check_records(
+    )[0]
+    compact["evidence_based_risks"] = _claim_first_fact_check_records(
         payload.get("evidence_based_risks") or [], section_text, 6
-    )
-    compact["sample_reality_findings"] = _compact_fact_check_records(
+    )[0]
+    compact["sample_reality_findings"] = _claim_first_fact_check_records(
         payload.get("sample_reality_findings") or [], section_text, 12
-    )
+    )[0]
     financial = dict(payload.get("financial_payload") or {})
     compact["financial_payload"] = {
         "financial_index": financial.get("financial_index"),
@@ -2314,20 +2581,20 @@ def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) ->
             str(key): value for key, value in (financial.get("financial_sub_scores") or {}).items()
             if isinstance(value, (str, int, float, bool))
         },
-        "financial_findings": _compact_fact_check_records(
+        "financial_findings": _claim_first_fact_check_records(
             financial.get("financial_findings") or [], section_text, 8
-        ),
-        "financial_fact_manifest": _compact_fact_check_records(
-            financial.get("financial_fact_manifest") or [], section_text, 10
+        )[0],
+        "financial_fact_manifest": _compact_financial_fact_manifest(
+            financial.get("financial_fact_manifest") or [], section_text, 12
         ),
     }
     raw_foresight = dict(payload.get("foresight_context") or {})
     foresight = {
         "source_counts": raw_foresight.get("source_counts") or {},
         "verification_rule": str(raw_foresight.get("verification_rule") or "")[:500],
-        "forces": _compact_fact_check_records(
+        "forces": _claim_first_fact_check_records(
             raw_foresight.get("forces") or [], section_text, 6
-        ),
+        )[0],
     }
     compact["foresight_context"] = foresight
     return compact
@@ -2372,6 +2639,7 @@ def ai_fact_check_detailed_report(
         "audit_notes_detailed": [],
         "evidence_handoff_failures": [],
         "premise_reference_failures": [],
+        "packet_omission_repaired": [],
     }
     batch_results = []
     unavailable_sections = []
@@ -2391,8 +2659,12 @@ def ai_fact_check_detailed_report(
             })
             continue
         batch_text = "\n\n".join(item["text"] for item in batch)
-        compact_evidence = _compact_fact_check_records(evidence_links or [], batch_text, 14)
-        compact_foresight = _compact_fact_check_records(foresight_links or [], batch_text, 6)
+        compact_evidence, evidence_coverage = _claim_first_fact_check_records(
+            evidence_links or [], batch_text, 18
+        )
+        compact_foresight, foresight_coverage = _claim_first_fact_check_records(
+            foresight_links or [], batch_text, 8
+        )
         selected_source_ids = {
             str(item.get("evidence_id") or item.get("source_id") or "").strip()
             for item in compact_evidence + compact_foresight
@@ -2416,7 +2688,10 @@ def ai_fact_check_detailed_report(
             str(item.get("evidence_id") or item.get("source_id") or item.get("report_ref") or "").strip()
             for item in compact_manifest
         }
-        for item in _compact_fact_check_records(evidence_manifest or [], batch_text, 12):
+        claim_manifest, manifest_coverage = _claim_first_fact_check_records(
+            evidence_manifest or [], batch_text, 16
+        )
+        for item in claim_manifest:
             item_key = str(
                 item.get("evidence_id") or item.get("source_id") or item.get("report_ref") or ""
             ).strip()
@@ -2425,7 +2700,9 @@ def ai_fact_check_detailed_report(
                 manifest_seen.add(item_key)
             if len(compact_manifest) >= 20:
                 break
-        compact_claim_graph = _compact_fact_check_records(claim_graph or [], batch_text, 14)
+        compact_claim_graph, claim_graph_coverage = _claim_first_fact_check_records(
+            claim_graph or [], batch_text, 16
+        )
         compact_payload = _compact_fact_check_payload(scan_payload, batch_text)
         packet_records = compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
         estimated_chars = len(batch_text) + sum(
@@ -2437,10 +2714,10 @@ def ai_fact_check_detailed_report(
         if estimated_input_tokens > 24000:
             # Keep explicit/citation-selected records, but trim broad context
             # before allowing packet size to distort scheduling or timeouts.
-            compact_evidence = compact_evidence[:10]
-            compact_foresight = compact_foresight[:4]
-            compact_manifest = compact_manifest[:12]
-            compact_claim_graph = compact_claim_graph[:8]
+            compact_evidence = compact_evidence[:14]
+            compact_foresight = compact_foresight[:5]
+            compact_manifest = compact_manifest[:14]
+            compact_claim_graph = compact_claim_graph[:10]
             packet_records = compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
             estimated_chars = len(batch_text) + sum(
                 len(json.dumps(item, ensure_ascii=False)) for item in packet_records
@@ -2513,6 +2790,26 @@ def ai_fact_check_detailed_report(
                     "   ⚠️ [Detailed Report Fact-Check] "
                     f"failed batch has no viable Sonnet slot; available={fallback_capacity}s"
                 )
+        full_financial_records = list(
+            ((scan_payload or {}).get("financial_payload") or {}).get("financial_fact_manifest") or []
+        )
+        compact_financial_records = list(
+            (compact_payload.get("financial_payload") or {}).get("financial_fact_manifest") or []
+        )
+        packet_repairs = _repair_explicit_packet_omissions(
+            result,
+            full_records=(
+                list(evidence_links or [])
+                + list(foresight_links or [])
+                + list(evidence_manifest or [])
+                + list(claim_graph or [])
+                + full_financial_records
+            ),
+            compact_records=(
+                compact_evidence + compact_foresight + compact_manifest
+                + compact_claim_graph + compact_financial_records
+            ),
+        )
         model = str(result.get("fact_check_model") or "")
         if model and model != "all_models_failed":
             models.append(model)
@@ -2521,15 +2818,28 @@ def ai_fact_check_detailed_report(
             unavailable_sections.extend(headings)
         batch_results.append({
             "sections": headings,
-            "status": result.get("verification_status", "unavailable"),
+            "status": (
+                "packet_rebuilt"
+                if packet_repairs and result.get("verification_status") in {
+                    "verified", "verified_with_audit_notes"
+                }
+                else result.get("verification_status", "unavailable")
+            ),
             "model": model or "all_models_failed",
             "blocking_claim_count": len(result.get("false_claims") or []),
             "wording_adjustment_count": len(result.get("wording_adjustments") or []),
             **load,
             "evidence_record_count": len(compact_evidence) + len(compact_foresight),
+            "packet_coverage": {
+                "evidence": evidence_coverage,
+                "foresight": foresight_coverage,
+                "manifest": manifest_coverage,
+                "claim_graph": claim_graph_coverage,
+            },
             "allocated_seconds": sum(item["allocated_seconds"] for item in attempts),
             "elapsed_ms": sum(item["elapsed_ms"] for item in attempts),
             "attempts": attempts,
+            "packet_omission_repaired": packet_repairs,
         })
         for key in aggregate:
             aggregate[key].extend(result.get(key) or [])
@@ -2570,6 +2880,26 @@ def ai_fact_check_detailed_report(
         "batch_results": batch_results,
         "fact_check_model": "+".join(dict.fromkeys(models)) or "all_models_failed",
         "fact_check_time_ms": int((time.time() - started) * 1000),
+        "financial_fact_ids": list(dict.fromkeys(
+            fact_id
+            for item in aggregate.get("audit_notes_detailed", [])
+            if isinstance(item, dict)
+            for fact_id in (item.get("financial_fact_ids") or [])
+            if str(fact_id or "")
+        )),
+        "support_groups": [
+            item.get("support_group")
+            for item in aggregate.get("audit_notes_detailed", [])
+            if isinstance(item, dict) and item.get("support_group")
+        ],
+        "packet_coverage": [
+            {
+                "sections": list(item.get("sections") or []),
+                **dict(item.get("packet_coverage") or {}),
+            }
+            for item in batch_results
+            if isinstance(item, dict) and item.get("packet_coverage")
+        ],
     })
     return aggregate
 
