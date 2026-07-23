@@ -68,6 +68,8 @@ def detailed_report_publication_status(
     )
     if recovery_mode == "full_regeneration" and recovery_status == "succeeded":
         return "regenerated_verified"
+    if recovery_mode == "safe_condensation" and recovery_status == "succeeded":
+        return "verified_condensed_after_removals"
     if recovery_mode == "targeted_paragraph_repair" and recovery_status == "succeeded":
         return "verified_after_targeted_rewrite"
     if (quality or {}).get("condensed") and had_actions:
@@ -283,6 +285,73 @@ def detailed_report_repair_impact(
     }
 
 
+def build_detailed_report_claim_action_manifest(
+    report_text: str,
+    claim_issues: list[dict],
+) -> list[dict]:
+    """Freeze current-run claim boundaries for repair and regeneration."""
+    _preamble, sections = _split_report_sections(report_text)
+    manifest = []
+    for raw in claim_issues or []:
+        if not isinstance(raw, dict):
+            continue
+        claim = re.sub(r"\s+", " ", str(raw.get("claim") or "")).strip()
+        if not claim:
+            continue
+        claim_id = str(raw.get("claim_id") or "").strip() or "DR-" + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            claim.lower(),
+        ).hex[:12].upper()
+        section_name = str(raw.get("section") or "").strip()
+        if not section_name:
+            claim_terms = _claim_terms(claim)
+            best = (0.0, "")
+            for section in sections:
+                content_terms = _claim_terms(str(section.get("content") or ""))
+                overlap = len(claim_terms & content_terms) / max(1, len(claim_terms))
+                if overlap > best[0]:
+                    best = (overlap, str(section.get("heading") or ""))
+            if best[0] >= 0.35:
+                section_name = best[1]
+        raw_issue_type = str(
+            raw.get("issue_type") or raw.get("error_type") or "blocking_false_claim"
+        ).strip()
+        issue_key = raw_issue_type.lower().replace("-", "_").replace(" ", "_")
+        if "handoff" in issue_key:
+            governed_issue_type = "handoff_failure"
+        elif "causal" in issue_key or "attribution" in issue_key:
+            governed_issue_type = "unsupported_causal_attribution"
+        elif any(token in issue_key for token in ("scope", "entity", "misattribution")):
+            governed_issue_type = "wrong_scope"
+        elif (
+            "calibration" in issue_key
+            or "overstrong" in issue_key
+            or str(raw.get("support_level") or "").lower() in {"partial", "context_only"}
+        ):
+            governed_issue_type = "overstrong_interpretation"
+        else:
+            governed_issue_type = "false_fact"
+        manifest.append({
+            "claim_id": claim_id,
+            "section": section_name,
+            "original_proposition": claim,
+            "issue_type": governed_issue_type,
+            "original_issue_type": raw_issue_type,
+            "claim_class": raw.get("claim_class") or "",
+            "support_level": raw.get("support_level") or "unsupported",
+            "reason": raw.get("reasoning") or raw.get("reason") or "",
+            "approved_narrowing": raw.get("correction") or "",
+            "prohibited_fingerprint": sorted(_claim_terms(claim))[:24],
+            "source_ids": list(dict.fromkeys(
+                str(value or "").strip()
+                for value in (raw.get("source_ids") or [])
+                if str(value or "").strip()
+            )),
+            "current_run_only": True,
+        })
+    return manifest
+
+
 def _section_context(sections: list[dict], index: int) -> dict:
     previous = sections[index - 1] if index > 0 else {}
     following = sections[index + 1] if index + 1 < len(sections) else {}
@@ -299,6 +368,7 @@ def repair_detailed_report_sections(
     *,
     affected_sections: list[str],
     claim_issues: list[dict],
+    claim_action_manifest: list[dict] | None = None,
     time_budget_seconds: int = 40,
 ) -> tuple[str, str]:
     """Use Sonnet to repair only prose damaged by governed claim actions."""
@@ -311,19 +381,9 @@ def repair_detailed_report_sections(
     if not selected:
         return polish_detailed_report_text(repaired_text), "deterministic-language-qa"
 
-    boundaries = []
-    for item in claim_issues or []:
-        if not isinstance(item, dict):
-            continue
-        boundaries.append({
-            "claim_id": item.get("claim_id") or "DR-" + uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                re.sub(r"\s+", " ", str(item.get("claim") or "")).strip().lower(),
-            ).hex[:12].upper(),
-            "unsafe_wording": item.get("claim") or "",
-            "allowed_narrowing": item.get("correction") or "",
-            "reason": item.get("reasoning") or item.get("reason") or "",
-        })
+    boundaries = list(claim_action_manifest or [])
+    if not boundaries:
+        boundaries = build_detailed_report_claim_action_manifest(repaired_text, claim_issues)
     prompt = f"""You are repairing fluency in selected sections of an evidence-governed Detailed Report.
 
 Edit only the supplied current section prose. Preserve each heading and return exactly one section for every supplied heading. Restore paragraph transitions, sentence completeness and analytical flow after unsupported wording was narrowed or removed. Do not add facts, values, entities, services, timing, causal assertions or recommendations that are not already present in the current section or an allowed narrowing. Never reintroduce unsafe wording. The neighboring excerpts are continuity context only. Do not rewrite unaffected sections.
@@ -333,7 +393,8 @@ TARGET: Keep the full report substantive. If a section became slightly short, ad
 SECTIONS TO REPAIR:
 {json.dumps(selected, ensure_ascii=False)}
 
-GOVERNED CLAIM BOUNDARIES:
+GOVERNED CLAIM BOUNDARIES. The original propositions and semantic equivalents are prohibited;
+use approved_narrowing when it is available:
 {json.dumps(boundaries, ensure_ascii=False)}
 """
     raw = call_anthropic_text(
@@ -410,6 +471,39 @@ def remove_flagged_report_sentences(text: str, claims: list) -> tuple[str, int]:
         if kept:
             output_paragraphs.append(" ".join(kept))
     return "\n\n".join(output_paragraphs).strip(), removed
+
+
+def remove_flagged_report_paragraphs(text: str, claims: list) -> tuple[str, int]:
+    """Remove complete prose paragraphs when sentence-level matching cannot clear a claim."""
+    claim_terms = []
+    for item in claims or []:
+        value = item.get("claim") if isinstance(item, dict) else item
+        terms = _claim_terms(str(value or ""))
+        if terms:
+            claim_terms.append(terms)
+    if not text or not claim_terms:
+        return text or "", 0
+
+    removed = 0
+    kept = []
+    for paragraph in re.split(r"\n\s*\n", str(text or "")):
+        stripped = paragraph.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            kept.append(stripped)
+            continue
+        paragraph_terms = _claim_terms(stripped)
+        matches = any(
+            len(terms) >= 5
+            and len(terms & paragraph_terms) / max(1, len(terms)) >= 0.55
+            for terms in claim_terms
+        )
+        if matches:
+            removed += 1
+        else:
+            kept.append(stripped)
+    return polish_detailed_report_text("\n\n".join(kept)), removed
 
 
 def flagged_report_claims_remaining(text: str, claims: list) -> list[str]:
@@ -821,16 +915,24 @@ def regenerate_detailed_report_after_claim_actions(
     prior_summaries: dict | None = None,
     compact: bool = False,
     time_budget_seconds: int = 90,
+    claim_action_manifest: list[dict] | None = None,
 ) -> tuple[str, str, dict]:
     """Rebuild a materially damaged report, with Sonnet as bounded fallback."""
     started = time.time()
     budget = max(30, int(time_budget_seconds or 90))
     gpt_budget = max(20, min(75, budget - 20))
+    governed_recovery_draft = governed_draft
+    if claim_action_manifest:
+        governed_recovery_draft += (
+            "\n\nCURRENT-RUN CLAIM ACTION MANIFEST. Do not repeat these original propositions "
+            "or semantic equivalents; use only approved narrower wording:\n"
+            + json.dumps(claim_action_manifest, ensure_ascii=False)
+        )
     text, model, quality = complete_detailed_report_draft(
         full_data,
         company_name,
         foresight_data,
-        governed_draft,
+        governed_recovery_draft,
         prior_summaries=prior_summaries,
         compact=compact,
         time_budget_seconds=gpt_budget,
@@ -843,7 +945,7 @@ def regenerate_detailed_report_after_claim_actions(
     if remaining < 15:
         return "", model, quality
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
-    prompt = _build_completion_prompt(payload, company_name, governed_draft, compact=compact)
+    prompt = _build_completion_prompt(payload, company_name, governed_recovery_draft, compact=compact)
     prompt += (
         "\n\nMATERIAL-DAMAGE RECOVERY: Rebuild the complete report because governed claim "
         "corrections removed too much of the prior argument. Use the structured payload as the "

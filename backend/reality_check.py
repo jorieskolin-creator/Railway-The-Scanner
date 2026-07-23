@@ -2039,9 +2039,56 @@ def _fact_check_terms(value: str) -> set[str]:
     }
 
 
+def _project_fact_check_record(item: dict) -> dict:
+    """Project a source/premise into the bounded verifier wire shape."""
+    if not isinstance(item, dict):
+        return {}
+    projected = {}
+    scalar_keys = (
+        "evidence_id", "source_id", "premise_id", "signal_id", "report_ref",
+        "evidence_kind", "title", "source_title", "url", "canonical_url",
+        "claim", "finding", "theme", "dimension", "category", "description",
+        "summary", "safe_wording", "semantic_hint", "semantic_snippet",
+        "source_quote", "exact_passage", "snippet", "fetched_excerpt",
+        "claim_type", "source_tier", "claim_tier", "support_level",
+        "analysis_support_mode", "source_context_status", "promotion_status",
+        "source_use_status", "jury_status", "entity_match_status",
+        "claim_support_status", "time_horizon", "company_relevance",
+        "generation_eligible", "analysis_verified", "company_specific",
+        "verified", "url_verified", "content_verified", "source_readable",
+        "foresight_context_eligible", "found", "sentiment", "source_type",
+    )
+    excerpt_keys = {
+        "source_quote": 1200, "exact_passage": 1200,
+        "snippet": 1200, "fetched_excerpt": 1200,
+        "semantic_hint": 400, "semantic_snippet": 600,
+        "claim": 900, "finding": 900, "description": 900,
+        "summary": 900, "safe_wording": 900,
+    }
+    for key in scalar_keys:
+        value = item.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, str):
+            projected[key] = value[:excerpt_keys.get(key, 500)]
+        elif isinstance(value, (bool, int, float)):
+            projected[key] = value
+        elif key == "report_ref":
+            projected[key] = value
+    for key in ("source_ids", "evidence_ids", "allowed_claim_types"):
+        values = item.get(key)
+        if isinstance(values, list):
+            projected[key] = [str(value)[:100] for value in values[:12]]
+    return projected
+
+
 def _compact_fact_check_records(records: list, section_text: str, limit: int) -> list:
     """Select stable, relevant source/premise records for one report batch."""
     section_terms = _fact_check_terms(section_text)
+    explicit_ids = set(re.findall(r"\b(?:EVD|FOR|ABS|FIN|SRC|CED|LEDGER)-[A-Z0-9]+\b", section_text))
+    explicit_refs = {
+        int(value) for value in re.findall(r"\[(\d{1,3})\]", section_text)
+    }
     ranked = []
     for index, item in enumerate(records or []):
         if not isinstance(item, dict):
@@ -2053,21 +2100,28 @@ def _compact_fact_check_records(records: list, section_text: str, limit: int) ->
         ))
         item_terms = _fact_check_terms(searchable)
         overlap = len(section_terms & item_terms)
-        explicit_id = any(
-            str(item.get(key) or "") and str(item.get(key)) in section_text
+        item_ids = {
+            str(item.get(key) or "").strip()
             for key in ("evidence_id", "source_id", "signal_id", "premise_id")
+            if str(item.get(key) or "").strip()
+        }
+        report_ref = item.get("report_ref")
+        explicit_id = bool(item_ids & explicit_ids) or (
+            isinstance(report_ref, int) and report_ref in explicit_refs
+        ) or (
+            str(report_ref or "").isdigit() and int(report_ref) in explicit_refs
         )
         score = overlap + (20 if explicit_id else 0)
-        ranked.append((score, -index, item))
-    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
-    positive = [item for score, _index, item in ranked if score > 0]
+        ranked.append((explicit_id, score, -index, item))
+    ranked.sort(key=lambda row: (row[0], row[1], row[2]), reverse=True)
+    positive = [item for explicit, score, _index, item in ranked if explicit or score > 0]
     if len(positive) < min(4, limit):
         selected_ids = {id(item) for item in positive}
         positive.extend(
-            item for _score, _index, item in ranked
+            item for _explicit, _score, _index, item in ranked
             if id(item) not in selected_ids
         )
-    return positive[:limit]
+    return [_project_fact_check_record(item) for item in positive[:limit]]
 
 
 def _split_fact_check_sections(report_text: str) -> list[dict]:
@@ -2185,11 +2239,28 @@ def detailed_report_fact_check_budget(
 
 def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) -> dict:
     payload = dict(scan_payload or {})
+
+    def bounded(value, depth: int = 0):
+        if depth >= 3:
+            return str(value)[:500]
+        if isinstance(value, str):
+            return value[:1200]
+        if isinstance(value, (bool, int, float)) or value is None:
+            return value
+        if isinstance(value, list):
+            return [bounded(item, depth + 1) for item in value[:12]]
+        if isinstance(value, dict):
+            return {
+                str(key)[:100]: bounded(item, depth + 1)
+                for key, item in list(value.items())[:30]
+            }
+        return str(value)[:500]
+
     compact = {
-        key: payload.get(key)
+        key: bounded(payload.get(key))
         for key in (
             "companyName", "intent_score", "reality_score", "reality_gap", "confidence_score",
-            "archetype", "evidence_counts", "dimension_evidence_counts", "financial_payload",
+            "archetype", "evidence_counts", "dimension_evidence_counts",
             "evidence_absence_contract", "evidence_graph_version", "temporal_contract",
             "prohibited_reasoning",
         )
@@ -2207,10 +2278,26 @@ def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) ->
     compact["sample_reality_findings"] = _compact_fact_check_records(
         payload.get("sample_reality_findings") or [], section_text, 12
     )
-    foresight = dict(payload.get("foresight_context") or {})
-    foresight["forces"] = _compact_fact_check_records(
-        foresight.get("forces") or [], section_text, 6
-    )
+    financial = dict(payload.get("financial_payload") or {})
+    compact["financial_payload"] = {
+        "financial_index": financial.get("financial_index"),
+        "financial_confidence": financial.get("financial_confidence"),
+        "financial_sub_scores": {
+            str(key): value for key, value in (financial.get("financial_sub_scores") or {}).items()
+            if isinstance(value, (str, int, float, bool))
+        },
+        "financial_findings": _compact_fact_check_records(
+            financial.get("financial_findings") or [], section_text, 8
+        ),
+    }
+    raw_foresight = dict(payload.get("foresight_context") or {})
+    foresight = {
+        "source_counts": raw_foresight.get("source_counts") or {},
+        "verification_rule": str(raw_foresight.get("verification_rule") or "")[:500],
+        "forces": _compact_fact_check_records(
+            raw_foresight.get("forces") or [], section_text, 6
+        ),
+    }
     compact["foresight_context"] = foresight
     return compact
 
@@ -2280,20 +2367,54 @@ def ai_fact_check_detailed_report(
             for item in compact_evidence + compact_foresight
             if isinstance(item, dict)
         }
+        explicit_refs = {
+            int(value) for value in re.findall(r"\[(\d{1,3})\]", batch_text)
+        }
         compact_manifest = [
-            item for item in (evidence_manifest or [])
+            _project_fact_check_record(item) for item in (evidence_manifest or [])
             if isinstance(item, dict)
-            and str(item.get("evidence_id") or item.get("source_id") or "").strip() in selected_source_ids
+            and (
+                str(item.get("evidence_id") or item.get("source_id") or "").strip() in selected_source_ids
+                or (
+                    str(item.get("report_ref") or "").isdigit()
+                    and int(item.get("report_ref")) in explicit_refs
+                )
+            )
         ][:20]
+        manifest_seen = {
+            str(item.get("evidence_id") or item.get("source_id") or item.get("report_ref") or "").strip()
+            for item in compact_manifest
+        }
+        for item in _compact_fact_check_records(evidence_manifest or [], batch_text, 12):
+            item_key = str(
+                item.get("evidence_id") or item.get("source_id") or item.get("report_ref") or ""
+            ).strip()
+            if item_key and item_key not in manifest_seen:
+                compact_manifest.append(item)
+                manifest_seen.add(item_key)
+            if len(compact_manifest) >= 20:
+                break
         compact_claim_graph = _compact_fact_check_records(claim_graph or [], batch_text, 14)
         compact_payload = _compact_fact_check_payload(scan_payload, batch_text)
+        packet_records = compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
         estimated_chars = len(batch_text) + sum(
-            len(json.dumps(item, ensure_ascii=False))
-            for item in compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
+            len(json.dumps(item, ensure_ascii=False)) for item in packet_records
         ) + len(json.dumps(compact_payload, ensure_ascii=False))
         # Include the stable verifier instructions and JSON schema, which are
         # not represented in the compact evidence character count above.
         estimated_input_tokens = max(1, ((estimated_chars + 3) // 4) + 3000)
+        if estimated_input_tokens > 24000:
+            # Keep explicit/citation-selected records, but trim broad context
+            # before allowing packet size to distort scheduling or timeouts.
+            compact_evidence = compact_evidence[:10]
+            compact_foresight = compact_foresight[:4]
+            compact_manifest = compact_manifest[:12]
+            compact_claim_graph = compact_claim_graph[:8]
+            packet_records = compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
+            estimated_chars = len(batch_text) + sum(
+                len(json.dumps(item, ensure_ascii=False)) for item in packet_records
+            ) + len(json.dumps(compact_payload, ensure_ascii=False))
+            estimated_input_tokens = max(1, ((estimated_chars + 3) // 4) + 3000)
         load = _detailed_fact_check_load(batch_text, estimated_input_tokens)
         primary_capacity = max(0, remaining - future_primary_floor)
         primary_allocation = min(load["primary_seconds"], primary_capacity)

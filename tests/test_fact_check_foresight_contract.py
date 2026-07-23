@@ -13,6 +13,75 @@ if _BACKEND not in sys.path:
 import reality_check  # noqa: E402
 
 
+def test_fact_check_record_projection_caps_excerpts_and_drops_large_internal_fields():
+    projected = reality_check._project_fact_check_record({
+        "evidence_id": "EVD-EXPLICIT",
+        "report_ref": 7,
+        "source_quote": "x" * 5000,
+        "normalized_content": "y" * 100000,
+        "generation_eligible": True,
+    })
+
+    assert projected["evidence_id"] == "EVD-EXPLICIT"
+    assert projected["report_ref"] == 7
+    assert len(projected["source_quote"]) == 1200
+    assert "normalized_content" not in projected
+
+
+def test_compact_fact_check_records_prioritize_explicit_report_reference():
+    records = [
+        {"evidence_id": "EVD-GENERIC", "report_ref": 1, "source_quote": "generic context"},
+        {"evidence_id": "EVD-CITED", "report_ref": 7, "source_quote": "otherwise unrelated"},
+    ]
+
+    selected = reality_check._compact_fact_check_records(records, "The material claim cites [7].", 1)
+
+    assert selected[0]["evidence_id"] == "EVD-CITED"
+
+
+def test_detailed_report_verifier_uses_bounded_packet_and_current_manifest(monkeypatch):
+    packets = []
+
+    def fake_check(*_args, **kwargs):
+        packets.append(kwargs)
+        return {
+            "verified": True,
+            "verification_status": "verified",
+            "fact_check_skipped": False,
+            "false_claims": [],
+            "false_claims_detailed": [],
+            "wording_adjustments": [],
+            "wording_adjustments_detailed": [],
+            "audit_notes": [],
+            "audit_notes_detailed": [],
+            "evidence_handoff_failures": [],
+            "premise_reference_failures": [],
+            "fact_check_model": "test-verifier",
+        }
+
+    monkeypatch.setattr(reality_check, "ai_fact_check_summary", fake_check)
+    result = reality_check.ai_fact_check_detailed_report(
+        "## Key Findings\n\nThe cited current-run record reports a supported movement [7].",
+        evidence_links=[],
+        company_name="Example Oy",
+        evidence_manifest=[{
+            "evidence_id": "EVD-CURRENT",
+            "report_ref": 7,
+            "source_quote": "The current-run record reports a supported movement.",
+            "normalized_content": "x" * 150000,
+            "generation_eligible": True,
+        }],
+        scan_payload={"prohibited_reasoning": {"large": "y" * 150000}},
+        time_budget_seconds=70,
+    )
+
+    assert result["verified"] is True
+    assert result["batch_results"][0]["estimated_input_tokens"] < 25000
+    manifest = packets[0]["evidence_manifest"]
+    assert manifest[0]["evidence_id"] == "EVD-CURRENT"
+    assert "normalized_content" not in manifest[0]
+
+
 def _foresight_source():
     return {
         "title": "Industrial automation outlook",

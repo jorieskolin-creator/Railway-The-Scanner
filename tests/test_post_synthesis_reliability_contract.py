@@ -153,9 +153,13 @@ def test_detailed_report_has_damage_aware_single_recovery_and_specific_statuses(
     report_source = (ROOT / "backend" / "detailed_report.py").read_text(encoding="utf-8")
 
     assert "for repair_cycle in range(1, 4)" not in source
-    assert "_extend_dr_recovery_deadline(90)" in source
+    assert "_extend_dr_recovery_deadline(120)" in source
     assert "repair_detailed_report_sections(" in source
     assert "regenerate_detailed_report_after_claim_actions(" in source
+    assert "remove_flagged_report_paragraphs(" in source
+    assert "if (changed or pending_calibration_claims) and not final_unresolved" not in source
+    assert "initial_unavailable_sections" in source
+    assert '"claim_action_manifest": claim_action_manifest' in source
     assert '"withheld_material_claims"' in source
     assert '"internal_draft_verification_pending"' in source
     assert '"regenerated_verified"' in report_source

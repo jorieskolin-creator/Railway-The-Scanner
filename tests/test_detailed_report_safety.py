@@ -213,6 +213,16 @@ def test_clean_verified_report_publishes_as_generated_verified():
     assert status == "generated_verified"
 
 
+def test_safe_condensation_has_specific_verified_publication_status():
+    status = detailed_report.detailed_report_publication_status(
+        {"complete": True, "condensed": False},
+        {"verified": True, "deterministic_removals": 2},
+        {"repair_mode": "safe_condensation", "recovery_status": "succeeded"},
+    )
+
+    assert status == "verified_condensed_after_removals"
+
+
 def test_unresolved_material_claims_are_withheld():
     status = detailed_report.detailed_report_publication_status(
         {"complete": True},
@@ -223,3 +233,72 @@ def test_unresolved_material_claims_are_withheld():
     )
 
     assert status == "withheld_material_claims"
+
+
+def test_claim_action_manifest_preserves_prohibited_current_run_proposition():
+    report = """## Key Findings
+
+Supported context remains.
+
+## Operating Model
+
+The company has deployed enterprise AI across every operation.
+
+## Strategy
+
+Supported strategy remains.
+
+## AI Readiness
+
+Validation is required.
+
+## Verdict
+
+Further evidence is needed."""
+    manifest = detailed_report.build_detailed_report_claim_action_manifest(
+        report,
+        [{
+            "claim_id": "DR-AI-1",
+            "claim": "The company has deployed enterprise AI across every operation.",
+            "error_type": "Fabrication",
+            "correction": "Current evidence does not establish enterprise-wide AI deployment.",
+            "source_ids": ["EVD-1"],
+        }],
+    )
+
+    assert manifest[0]["claim_id"] == "DR-AI-1"
+    assert manifest[0]["section"] == "Operating Model"
+    assert manifest[0]["issue_type"] == "false_fact"
+    assert manifest[0]["approved_narrowing"].startswith("Current evidence")
+    assert manifest[0]["current_run_only"] is True
+
+
+def test_safe_paragraph_removal_clears_claim_sentence_matching_missed():
+    report = """## Key Findings
+
+Supported context remains.
+
+## Operating Model
+
+Supplier concentration across internationally distributed partners creates a proven operational bottleneck for the company. The paragraph depends on that unsupported proposition.
+
+## Strategy
+
+Supported strategy remains.
+
+## AI Readiness
+
+Validation is required.
+
+## Verdict
+
+Further evidence is needed."""
+    claims = [{
+        "claim": "The company's internationally distributed supplier base proves a supplier-concentration operational bottleneck."
+    }]
+
+    cleaned, removed = detailed_report.remove_flagged_report_paragraphs(report, claims)
+
+    assert removed == 1
+    assert "operational bottleneck" not in cleaned
+    assert "## Verdict" in cleaned

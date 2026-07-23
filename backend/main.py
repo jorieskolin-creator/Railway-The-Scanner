@@ -7795,6 +7795,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
         else:
             try:
                 from detailed_report import (
+                    build_detailed_report_claim_action_manifest,
                     complete_detailed_report_draft,
                     detailed_report_quality,
                     detailed_report_publication_status,
@@ -7804,6 +7805,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     polish_detailed_report_text,
                     regenerate_detailed_report_after_claim_actions,
                     repair_detailed_report_sections,
+                    remove_flagged_report_paragraphs,
                     remove_flagged_report_sentences,
                 )
                 dr_start = time.time()
@@ -8006,6 +8008,15 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 blocking_items = _ensure_detailed_claim_ids(
                     _dedupe_claims(initial_dr_check.get("false_claims_detailed") or [])
                 )
+                claim_action_manifest = build_detailed_report_claim_action_manifest(
+                    original_dr_text,
+                    detailed_issues + calibration_issues,
+                )
+                initial_unavailable_sections = list(dict.fromkeys(
+                    str(value or "").strip()
+                    for value in (initial_dr_check.get("unavailable_sections") or [])
+                    if str(value or "").strip()
+                ))
                 changed_claim_ids = []
                 removed_claim_ids = []
                 for issue in detailed_issues + calibration_issues:
@@ -8060,6 +8071,14 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         list(recovery_impact.get("affected_sections") or [])
                         + [value for value in calibration_sections if value]
                     ))
+                recovery_impact["affected_sections"] = list(dict.fromkeys(
+                    list(recovery_impact.get("affected_sections") or [])
+                    + [
+                        str(item.get("section") or "").strip()
+                        for item in claim_action_manifest
+                        if str(item.get("section") or "").strip()
+                    ]
+                ))
                 print(
                     "   🧭 [Detailed Report Recovery] "
                     f"retained={recovery_impact.get('retained_ratio')} | "
@@ -8080,33 +8099,38 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 })
 
                 changed = bool(total_replacements or total_removals)
-                if remaining_after_actions:
-                    final_unresolved = remaining_after_actions
-                    final_recheck_status = "unresolved_blocking_claims"
-                elif initial_dr_check.get("fact_check_skipped"):
+                if initial_dr_check.get("fact_check_skipped"):
                     final_recheck_status = "unavailable"
-                elif not blocking_items and initial_dr_check.get("verified"):
+                elif (
+                    not blocking_items
+                    and not calibration_issues
+                    and initial_dr_check.get("verified")
+                    and not initial_verification_incomplete
+                ):
                     final_verified = True
                     final_recheck_status = initial_dr_check.get("verification_status", "verified")
 
-                # Generative recovery is conditional. It receives fresh borrowed
-                # time only after governed edits materially changed the report.
-                if (changed or pending_calibration_claims) and not final_unresolved:
-                    recovery_mode = (
+                # A remaining claim is the reason to recover, never a reason to
+                # skip recovery. Targeted repair is mandatory below the damage
+                # threshold; failed local repair escalates to full regeneration.
+                recovery_required = bool(
+                    changed or remaining_after_actions or pending_calibration_claims
+                )
+                if recovery_required:
+                    recovery_mode = str(
                         recovery_impact.get("repair_mode") or "targeted_paragraph_repair"
-                        if blocking_items
-                        else "targeted_paragraph_repair"
                     )
-                    _extend_dr_recovery_deadline(90)
+                    _extend_dr_recovery_deadline(120)
                     verifier_floor = 30
                     available_for_repair = max(0, _dr_stage_remaining() - verifier_floor)
-                    try:
-                        if recovery_mode == "targeted_paragraph_repair" and available_for_repair >= 20:
+                    if recovery_mode == "targeted_paragraph_repair" and available_for_repair >= 20:
+                        try:
                             repair_budget = min(45, available_for_repair)
                             candidate, candidate_model = repair_detailed_report_sections(
                                 dr_text,
                                 affected_sections=recovery_impact.get("affected_sections") or [],
                                 claim_issues=detailed_issues + calibration_issues,
+                                claim_action_manifest=claim_action_manifest,
                                 time_budget_seconds=repair_budget,
                             )
                             candidate_quality = detailed_report_quality(
@@ -8114,54 +8138,121 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                 compact=dr_compact,
                                 allow_condensed=True,
                             )
-                            if candidate and candidate_quality.get("complete"):
+                            candidate_remaining = flagged_report_claims_remaining(
+                                candidate,
+                                detailed_issues + calibration_issues,
+                            )
+                            if candidate and candidate_quality.get("complete") and not candidate_remaining:
                                 dr_text = candidate
                                 recovery_model = candidate_model
                                 recovery_status = "succeeded"
                                 dr_model = f"{dr_model}+{candidate_model}-targeted" if dr_model else candidate_model
                             else:
                                 recovery_status = "failed_quality"
-                        elif (
-                            recovery_mode == "full_regeneration"
-                            and blocking_items
-                            and available_for_repair >= 30
-                        ):
-                            repair_budget = min(80, available_for_repair)
-                            candidate, candidate_model, candidate_quality = regenerate_detailed_report_after_claim_actions(
-                                full_data,
-                                companyName,
-                                foresight_data,
-                                dr_text,
-                                prior_summaries=prior_summaries if prior_summaries else None,
-                                compact=dr_compact,
-                                time_budget_seconds=repair_budget,
-                            )
-                            if candidate and candidate_quality.get("complete"):
-                                dr_text = candidate
-                                recovery_model = candidate_model
-                                recovery_status = "succeeded"
-                                dr_model = f"{dr_model}+{candidate_model}" if dr_model else candidate_model
-                            else:
-                                recovery_status = "failed_quality"
+                        except Exception as recovery_err:
+                            recovery_status = "failed"
+                            print(f"   ⚠️ [Detailed Report Recovery] targeted repair failed: {recovery_err}")
+
+                    remaining_after_targeted = flagged_report_claims_remaining(
+                        dr_text,
+                        blocking_items,
+                    )
+                    should_regenerate = bool(
+                        recovery_mode == "full_regeneration"
+                        or recovery_status in {"failed", "failed_quality"}
+                        or remaining_after_targeted
+                    )
+                    if should_regenerate:
+                        recovery_mode = "full_regeneration"
+                        _extend_dr_recovery_deadline(120)
+                        available_for_regeneration = max(0, _dr_stage_remaining() - verifier_floor)
+                        if available_for_regeneration >= 30:
+                            try:
+                                repair_budget = min(120, available_for_regeneration)
+                                candidate, candidate_model, candidate_quality = regenerate_detailed_report_after_claim_actions(
+                                    full_data,
+                                    companyName,
+                                    foresight_data,
+                                    dr_text,
+                                    prior_summaries=prior_summaries if prior_summaries else None,
+                                    compact=dr_compact,
+                                    time_budget_seconds=repair_budget,
+                                    claim_action_manifest=claim_action_manifest,
+                                )
+                                candidate_remaining = flagged_report_claims_remaining(
+                                    candidate,
+                                    detailed_issues + calibration_issues,
+                                )
+                                if candidate and candidate_quality.get("complete") and not candidate_remaining:
+                                    dr_text = candidate
+                                    recovery_model = candidate_model
+                                    recovery_status = "succeeded"
+                                    dr_model = f"{dr_model}+{candidate_model}" if dr_model else candidate_model
+                                else:
+                                    recovery_status = "failed_quality"
+                            except Exception as recovery_err:
+                                recovery_status = "failed"
+                                print(f"   ⚠️ [Detailed Report Recovery] full regeneration failed: {recovery_err}")
                         else:
                             recovery_status = "skipped_budget"
-                    except Exception as recovery_err:
-                        recovery_status = "failed"
-                        print(f"   ⚠️ [Detailed Report Recovery] {recovery_mode} failed: {recovery_err}")
+
+                    # Last safe fallback removes the complete affected paragraph
+                    # only when sentence-level correction and both model recovery
+                    # branches could not clear a known material proposition.
+                    remaining_after_recovery = flagged_report_claims_remaining(
+                        dr_text,
+                        blocking_items,
+                    )
+                    if remaining_after_recovery:
+                        condensed, removed_sentences = remove_flagged_report_sentences(
+                            dr_text,
+                            remaining_after_recovery,
+                        )
+                        total_removals += removed_sentences
+                        still_remaining = flagged_report_claims_remaining(condensed, blocking_items)
+                        removed_paragraphs = 0
+                        if still_remaining:
+                            condensed, removed_paragraphs = remove_flagged_report_paragraphs(
+                                condensed,
+                                still_remaining,
+                            )
+                        condensed_quality = detailed_report_quality(
+                            condensed,
+                            compact=dr_compact,
+                            allow_condensed=True,
+                        )
+                        still_remaining = flagged_report_claims_remaining(condensed, blocking_items)
+                        if condensed_quality.get("complete") and not still_remaining:
+                            dr_text = condensed
+                            recovery_mode = "safe_condensation"
+                            recovery_status = "succeeded"
+                            total_removals += removed_paragraphs
+                        else:
+                            recovery_status = "failed_material_claims"
                     dr_text = polish_detailed_report_text(dr_text)
+
+                final_unresolved = flagged_report_claims_remaining(dr_text, blocking_items)
+                if final_unresolved:
+                    final_recheck_status = "unresolved_blocking_claims"
 
                 # One final decision pass verifies the complete reader-facing
                 # report. If it finds a narrow issue, resolve that issue once;
                 # do not restart a broad rewrite/recheck loop.
-                needs_final_check = bool(changed or recovery_status == "succeeded")
+                needs_final_check = bool(
+                    initial_verification_incomplete
+                    or changed
+                    or recovery_required
+                    or not initial_dr_check.get("verified")
+                )
+                coverage_repaired = not initial_verification_incomplete
+                recheck_sections = []
                 if needs_final_check and not final_unresolved:
                     if _dr_stage_remaining() >= 20:
                         full_data["detailed_report"] = dr_text
-                        recheck_sections = (
-                            []
-                            if recovery_mode == "full_regeneration"
-                            else recovery_impact.get("affected_sections") or []
-                        )
+                        recheck_sections = [] if recovery_mode == "full_regeneration" else list(dict.fromkeys(
+                            initial_unavailable_sections
+                            + list(recovery_impact.get("affected_sections") or [])
+                        ))
                         recheck_load = detailed_report_fact_check_budget(
                             dr_text,
                             only_section_names=recheck_sections,
@@ -8217,17 +8308,26 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         final_calibrations = _ensure_detailed_claim_ids(
                             _dedupe_claims(final_check.get("wording_adjustments_detailed") or [])
                         )
+                        coverage_repaired = bool(
+                            not final_check.get("fact_check_skipped")
+                            and not final_check.get("verification_partial")
+                            and not final_check.get("unavailable_sections")
+                        )
                         if (
                             final_check.get("verified")
                             and not final_check.get("fact_check_skipped")
                             and not final_check.get("verification_partial")
-                            and not initial_verification_incomplete
+                            and coverage_repaired
                             and not final_blocking
                             and not final_calibrations
                         ):
                             final_verified = True
                             final_unresolved = []
-                        elif final_check.get("fact_check_skipped") or final_check.get("verification_partial"):
+                        elif (
+                            (final_check.get("fact_check_skipped") or final_check.get("verification_partial"))
+                            and not final_blocking
+                            and not final_calibrations
+                        ):
                             final_verified = False
                             final_unresolved = []
                             final_recheck_status = (
@@ -8273,16 +8373,21 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                     final_remaining,
                                 )
                             final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
+                            if final_remaining:
+                                dr_text, removed_paragraphs = remove_flagged_report_paragraphs(
+                                    dr_text,
+                                    final_remaining,
+                                )
+                                final_removals += removed_paragraphs
+                                final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
                             total_replacements += final_replacements
                             total_removals += final_removals
                             dr_text = polish_detailed_report_text(dr_text)
                             final_unresolved = final_remaining
-                            final_verified = not final_remaining and not initial_verification_incomplete
+                            final_verified = False
                             final_recheck_status = (
-                                "verified_after_final_resolution"
-                                if final_verified
-                                else "partially_unavailable"
-                                if initial_verification_incomplete and not final_remaining
+                                "focused_recheck_required"
+                                if not final_remaining
                                 else "unresolved_blocking_claims"
                             )
                             verification_history.append({
@@ -8295,6 +8400,55 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                 "deterministic_removals": final_removals,
                                 "remaining_after_actions": final_remaining,
                             })
+
+                            # Corrections found by the final decision pass need
+                            # one changed-section verification before the report
+                            # can be called verified.
+                            if not final_remaining and _dr_stage_remaining() >= 25:
+                                resolution_manifest = build_detailed_report_claim_action_manifest(
+                                    dr_text,
+                                    final_issues,
+                                )
+                                resolution_sections = list(dict.fromkeys(
+                                    str(item.get("section") or "").strip()
+                                    for item in resolution_manifest
+                                    if str(item.get("section") or "").strip()
+                                ))
+                                resolution_budget = min(40, max(25, _dr_stage_remaining()))
+                                resolution_check = ai_fact_check_detailed_report(
+                                    report_text=dr_text,
+                                    evidence_links=managed_evidence_links,
+                                    company_name=companyName,
+                                    scan_payload=_build_fact_check_scan_payload(full_data),
+                                    foresight_links=full_data.get("foresight_links", []),
+                                    evidence_manifest=full_data.get("evidence_manifest", []),
+                                    claim_graph=full_data.get("claim_graph", []),
+                                    time_budget_seconds=resolution_budget,
+                                    only_section_names=resolution_sections,
+                                )
+                                final_check = resolution_check
+                                resolution_blocking = _dedupe_claims(
+                                    resolution_check.get("false_claims_detailed") or []
+                                )
+                                resolution_calibrations = _dedupe_claims(
+                                    resolution_check.get("wording_adjustments_detailed") or []
+                                )
+                                final_verified = bool(
+                                    resolution_check.get("verified")
+                                    and not resolution_check.get("fact_check_skipped")
+                                    and not resolution_check.get("verification_partial")
+                                    and not resolution_blocking
+                                    and not resolution_calibrations
+                                    and coverage_repaired
+                                )
+                                final_recheck_status = (
+                                    "verified_after_final_resolution"
+                                    if final_verified
+                                    else "unavailable"
+                                    if resolution_check.get("fact_check_skipped")
+                                    else "unresolved_blocking_claims"
+                                )
+                                final_unresolved = resolution_blocking
                     else:
                         final_verified = False
                         final_unresolved = []
@@ -8309,17 +8463,10 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         if final_verified and (total_removals or total_replacements)
                         else final_recheck_status
                     ),
-                    "fact_check_skipped": bool(
-                        initial_dr_check.get("fact_check_skipped")
-                        or final_check.get("fact_check_skipped")
-                    ),
-                    "verification_partial": bool(
-                        initial_dr_check.get("verification_partial")
-                        or final_check.get("verification_partial")
-                    ),
+                    "fact_check_skipped": bool(final_check.get("fact_check_skipped")),
+                    "verification_partial": bool(final_check.get("verification_partial")),
                     "unavailable_sections": list(dict.fromkeys(
-                        list(initial_dr_check.get("unavailable_sections", []) or [])
-                        + list(final_check.get("unavailable_sections", []) or [])
+                        list(final_check.get("unavailable_sections", []) or [])
                     )),
                     "batch_results": initial_dr_check.get("batch_results", []),
                     "false_claims": initial_dr_check.get("false_claims", []),
@@ -8341,6 +8488,12 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     "repair_cycles": verification_history,
                     "changed_claim_ids": list(dict.fromkeys(value for value in changed_claim_ids if value)),
                     "removed_claim_ids": list(dict.fromkeys(value for value in removed_claim_ids if value)),
+                    "claim_action_manifest": claim_action_manifest,
+                    "verification_coverage": {
+                        "initially_unavailable_sections": initial_unavailable_sections,
+                        "recheck_sections": recheck_sections if needs_final_check else [],
+                        "coverage_repaired": coverage_repaired,
+                    },
                 }
                 full_data["detailed_report_recovery"] = {
                     **recovery_impact,
