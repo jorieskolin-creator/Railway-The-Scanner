@@ -1420,20 +1420,56 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
         })
 
     financial_findings = []
+    financial_fact_manifest = []
+    evidence_by_url = {
+        str(item.get("url") or item.get("source_url") or "").strip(): item
+        for item in (data.get("evidence_links") or [])
+        if isinstance(item, dict) and str(item.get("url") or item.get("source_url") or "").strip()
+    }
     for item in (data.get("financial_findings") or [])[:20]:
         if not isinstance(item, dict):
             continue
+        source_url = str(item.get("source_url") or item.get("url") or "").strip()
+        assessment = str(
+            item.get("assessment") or item.get("finding") or item.get("summary") or item.get("claim") or ""
+        ).strip()
+        evidence_snippet = str(
+            item.get("evidence_snippet") or item.get("source_quote") or item.get("snippet") or ""
+        ).strip()
+        source_record = evidence_by_url.get(source_url) or {}
         financial_findings.append({
             "dimension": item.get("dimension") or item.get("category"),
             "finding": item.get("finding") or item.get("summary") or item.get("claim"),
             "metric": item.get("metric") or item.get("label"),
             "value": item.get("value") or item.get("amount"),
-            "evidence_snippet": item.get("evidence_snippet") or item.get("source_quote") or item.get("snippet"),
+            "evidence_snippet": evidence_snippet,
             "source_title": item.get("source_title") or item.get("title"),
-            "source_url": item.get("source_url") or item.get("url"),
+            "source_url": source_url,
             "analysis_verified": item.get("analysis_verified"),
             "generation_eligible": item.get("generation_eligible"),
         })
+        fact_basis = " ".join(value for value in (assessment, evidence_snippet) if value)
+        if fact_basis:
+            financial_fact_manifest.append({
+                "fact_id": "FINFACT-" + uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{data.get('companyName')}|{item.get('dimension')}|{source_url}|{fact_basis}",
+                ).hex[:12].upper(),
+                "dimension": item.get("dimension") or item.get("category"),
+                "assessment": assessment[:1800],
+                "evidence_snippet": evidence_snippet[:1200],
+                "periods": sorted(set(re.findall(r"\b(?:FY\s*)?20\d{2}\b", fact_basis, flags=re.IGNORECASE))),
+                "metric": item.get("metric") or item.get("label"),
+                "value": item.get("value") or item.get("amount"),
+                "source_title": item.get("source_title") or item.get("title"),
+                "source_url": source_url,
+                "evidence_id": source_record.get("evidence_id") or source_record.get("source_id"),
+                "report_ref": source_record.get("report_ref"),
+                "entity_scope": item.get("entity_scope") or source_record.get("entity_scope") or "unknown",
+                "analysis_verified": item.get("analysis_verified"),
+                "generation_eligible": item.get("generation_eligible"),
+                "promotion_status": source_record.get("promotion_status"),
+            })
 
     foresight_forces = []
     foresight_data = data.get("strategic_foresight") or {}
@@ -1481,6 +1517,7 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             "financial_confidence": data.get("financial_confidence"),
             "financial_sub_scores": data.get("financial_sub_scores") or {},
             "financial_findings": financial_findings,
+            "financial_fact_manifest": financial_fact_manifest,
         },
         "foresight_context": {
             "forces": foresight_forces,
@@ -7671,6 +7708,37 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 gs_text = gs_check["corrected_summary"]
                 print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
+            # Corrections can leave duplicated phrases or broken sentence
+            # joins even when their factual content is now safe. Review the
+            # whole final text, while sending only flagged passages to a
+            # grammar-only editor that must preserve numbers and citations.
+            from detailed_report import final_public_language_review
+            gs_language_budget = min(
+                25,
+                max(0, _gs_budget - int(time.time() - _gs_stage_start)),
+            )
+            gs_text, gs_language_quality = final_public_language_review(
+                gs_text,
+                time_budget_seconds=gs_language_budget,
+                label="General Summary",
+            )
+            pitch_language_quality = {"status": "not_present"}
+            if full_data.get("pitch_text"):
+                pitch_text, pitch_language_quality = final_public_language_review(
+                    str(full_data.get("pitch_text") or ""),
+                    time_budget_seconds=min(20, max(0, int(_scan_remaining()) - DETAILED_REPORT_MIN_FLOOR - FINAL_SAVE_MIN_FLOOR)),
+                    label="Strategic Pitch",
+                )
+                full_data["pitch_text"] = pitch_text
+            full_data.setdefault("public_language_quality", {}).update({
+                "general_summary": gs_language_quality,
+                "pitch": pitch_language_quality,
+            })
+            if pitch_language_quality.get("unresolved_defects"):
+                full_data.setdefault("quality_notes", []).append(
+                    "Strategic Pitch retains unresolved sentence or duplication defects after final language QA."
+                )
+
             full_data["general_summary"] = gs_text
             full_data["general_summary_model"] = gs_model
             full_data["general_summary_generation"] = {
@@ -7681,11 +7749,14 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 ),
                 "generation_time_ms": gs_ms,
             }
-            full_data["general_summary_verified"] = gs_check.get("verified", True)
+            gs_language_clean = not bool(gs_language_quality.get("unresolved_defects"))
+            full_data["general_summary_verified"] = bool(
+                gs_check.get("verified", True) and gs_language_clean
+            )
             full_data["general_summary_status"] = (
                 "generated_verified_after_resolution"
-                if gs_check.get("final_verification_status") == "verified_after_final_resolution"
-                else "generated_verified" if gs_check.get("verified") else "generated_unverified"
+                if gs_check.get("final_verification_status") == "verified_after_final_resolution" and gs_language_clean
+                else "generated_verified" if gs_check.get("verified") and gs_language_clean else "generated_unverified"
             )
             full_data["general_summary_false_claims"] = [
                 fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
@@ -7702,9 +7773,11 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 "correction_model": gs_check.get("corrected_model", ""),
                 "time_ms": gs_check.get("check_time_ms", 0),
             }
-            if not gs_check.get("verified"):
+            if not full_data.get("general_summary_verified"):
                 final_gs_status = str(gs_check.get("final_verification_status") or "unavailable")
-                if final_gs_status.startswith("unavailable"):
+                if not gs_language_clean:
+                    note = "General Summary retains unresolved sentence or duplication defects after final language QA."
+                elif final_gs_status.startswith("unavailable"):
                     note = "General Summary was generated, but independent verification was unavailable within its protected stage budget."
                 elif full_data["general_summary_false_claims"]:
                     note = (
@@ -7800,6 +7873,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     detailed_report_quality,
                     detailed_report_publication_status,
                     detailed_report_repair_impact,
+                    final_public_language_review,
                     flagged_report_claims_remaining,
                     generate_detailed_report,
                     polish_detailed_report_text,
@@ -7923,9 +7997,9 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 if conditional_verifier_budget >= 70:
                     required_stage_time = conditional_verifier_budget + 20
                     if required_stage_time > _dr_fc_remaining:
-                        _extend_dr_recovery_deadline(
-                            required_stage_time - int(_dr_fc_remaining)
-                        )
+                        # The helper guarantees this much time remains from
+                        # now; passing only the difference underfunds the stage.
+                        _extend_dr_recovery_deadline(required_stage_time)
                 dr_fc_budget = min(
                     conditional_verifier_budget,
                     max(20, int(_dr_stage_remaining()) - 20),
@@ -7959,6 +8033,13 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 recovery_mode = "none"
                 recovery_status = "not_needed"
                 recovery_model = ""
+                recovery_attempts = []
+                detailed_language_quality = {
+                    "status": "not_required",
+                    "flagged_paragraph_count": 0,
+                    "repaired_paragraph_count": 0,
+                    "unresolved_defects": [],
+                }
                 initial_verification_incomplete = bool(
                     initial_dr_check.get("fact_check_skipped")
                     or initial_dr_check.get("verification_partial")
@@ -8142,7 +8223,18 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                 candidate,
                                 detailed_issues + calibration_issues,
                             )
-                            if candidate and candidate_quality.get("complete") and not candidate_remaining:
+                            candidate_accepted = bool(
+                                candidate and candidate_quality.get("complete") and not candidate_remaining
+                            )
+                            recovery_attempts.append({
+                                "stage": "targeted_paragraph_repair",
+                                "model": candidate_model,
+                                "status": "accepted" if candidate_accepted else "rejected_quality",
+                                "applied": candidate_accepted,
+                                "complete": bool(candidate_quality.get("complete")),
+                                "prohibited_claim_recurrence_count": len(candidate_remaining),
+                            })
+                            if candidate_accepted:
                                 dr_text = candidate
                                 recovery_model = candidate_model
                                 recovery_status = "succeeded"
@@ -8183,7 +8275,18 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                     candidate,
                                     detailed_issues + calibration_issues,
                                 )
-                                if candidate and candidate_quality.get("complete") and not candidate_remaining:
+                                candidate_accepted = bool(
+                                    candidate and candidate_quality.get("complete") and not candidate_remaining
+                                )
+                                recovery_attempts.append({
+                                    "stage": "full_regeneration",
+                                    "model": candidate_model,
+                                    "status": "accepted" if candidate_accepted else "rejected_quality",
+                                    "applied": candidate_accepted,
+                                    "complete": bool(candidate_quality.get("complete")),
+                                    "prohibited_claim_recurrence_count": len(candidate_remaining),
+                                })
+                                if candidate_accepted:
                                     dr_text = candidate
                                     recovery_model = candidate_model
                                     recovery_status = "succeeded"
@@ -8231,6 +8334,22 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                             recovery_status = "failed_material_claims"
                     dr_text = polish_detailed_report_text(dr_text)
 
+                    # Review the assembled reader-facing report after all
+                    # replacements/regeneration. The entire report is scanned;
+                    # only paragraphs with deterministic language defects are
+                    # sent to the bounded grammar-only editor.
+                    _extend_dr_recovery_deadline(75)
+                    language_budget = min(35, max(0, _dr_stage_remaining() - 35))
+                    dr_text, detailed_language_quality = final_public_language_review(
+                        dr_text,
+                        time_budget_seconds=language_budget,
+                        label="Detailed Report",
+                    )
+                    verification_history.append({
+                        "stage": "final_language_review",
+                        **detailed_language_quality,
+                    })
+
                 final_unresolved = flagged_report_claims_remaining(dr_text, blocking_items)
                 if final_unresolved:
                     final_recheck_status = "unresolved_blocking_claims"
@@ -8265,9 +8384,9 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                             available_recheck_time,
                         )
                         if target_recheck_budget > _dr_stage_remaining():
-                            _extend_dr_recovery_deadline(
-                                target_recheck_budget - int(_dr_stage_remaining())
-                            )
+                            # Ensure the complete requested recheck window,
+                            # rather than treating the helper as additive.
+                            _extend_dr_recovery_deadline(target_recheck_budget)
                         recheck_budget = min(
                             target_recheck_budget,
                             max(0, int(_dr_stage_remaining())),
@@ -8454,6 +8573,25 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         final_unresolved = []
                         final_recheck_status = "skipped_budget"
 
+                # Corrections made by the final verifier can create new prose
+                # seams. Scan the complete assembled report once more without
+                # another generative pass; unresolved language defects keep the
+                # artifact in internal-draft status rather than overstating QA.
+                dr_text, post_resolution_language = final_public_language_review(
+                    dr_text,
+                    time_budget_seconds=0,
+                    label="Detailed Report",
+                )
+                if post_resolution_language.get("unresolved_defects"):
+                    final_verified = False
+                    final_recheck_status = "language_qa_unresolved"
+                if post_resolution_language.get("flagged_paragraph_count"):
+                    detailed_language_quality = post_resolution_language
+                    verification_history.append({
+                        "stage": "post_resolution_language_scan",
+                        **post_resolution_language,
+                    })
+
                 full_data["detailed_report_verification"] = {
                     "verified": final_verified,
                     "verification_status": (
@@ -8469,6 +8607,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         list(final_check.get("unavailable_sections", []) or [])
                     )),
                     "batch_results": initial_dr_check.get("batch_results", []),
+                    "final_batch_results": final_check.get("batch_results", []),
                     "false_claims": initial_dr_check.get("false_claims", []),
                     "wording_adjustments": initial_dr_check.get("wording_adjustments", []),
                     "wording_calibrations_applied": wording_calibrations_applied,
@@ -8494,12 +8633,15 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         "recheck_sections": recheck_sections if needs_final_check else [],
                         "coverage_repaired": coverage_repaired,
                     },
+                    "language_quality": detailed_language_quality,
                 }
                 full_data["detailed_report_recovery"] = {
                     **recovery_impact,
                     "repair_mode": recovery_mode,
                     "recovery_status": recovery_status,
                     "recovery_model": recovery_model,
+                    "recovery_attempts": recovery_attempts,
+                    "language_quality": detailed_language_quality,
                     "final_word_count": len(dr_text.split()),
                 }
             else:

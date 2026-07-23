@@ -164,6 +164,11 @@ def test_detailed_report_has_damage_aware_single_recovery_and_specific_statuses(
     assert '"internal_draft_verification_pending"' in source
     assert '"regenerated_verified"' in report_source
     assert '"repair_cycles": verification_history' in source
+    assert "_extend_dr_recovery_deadline(required_stage_time)" in source
+    assert "_extend_dr_recovery_deadline(target_recheck_budget)" in source
+    assert "target_recheck_budget - int(_dr_stage_remaining())" not in source
+    assert "final_public_language_review(" in source
+    assert '"recovery_attempts": recovery_attempts' in source
 
 
 def test_pitch_scoped_audit_findings_are_customer_safe_blocking_actions():

@@ -153,21 +153,46 @@ def _is_internal_scanner_observation(text: str) -> bool:
 
 
 def _is_supported_structured_financial_payload_claim(text: str, scan_payload: dict | None) -> bool:
-    """Return true when a financial claim is directly represented in the compact scan payload."""
+    """Return true when one governed financial record supports the complete claim.
+
+    Requiring one period-specific record prevents values from different years
+    or entity scopes from being combined into a claim that no source supports.
+    """
     if not text or not isinstance(scan_payload, dict):
         return False
     if not re.search(r'\b(?:revenue|sales|ebit|ebitda|profit|margin|cash flow|equity|financial|fy20\d{2}|€|\b\d+(?:\.\d+)?%|\bm\b|\bmillion)\b', text, re.IGNORECASE):
         return False
-    payload_text = json.dumps(scan_payload.get("financial_payload") or {}, ensure_ascii=False).lower()
-    if not payload_text or payload_text == "{}":
+    financial = scan_payload.get("financial_payload") or {}
+    records = list(financial.get("financial_fact_manifest") or [])
+    if not records:
+        records = list(financial.get("financial_findings") or [])
+    records = [item for item in records if isinstance(item, dict)]
+    if not records:
+        legacy_values = {
+            str(key): value for key, value in financial.items()
+            if isinstance(value, (str, int, float, bool))
+        }
+        if legacy_values:
+            records = [{"finding": json.dumps(legacy_values, ensure_ascii=False)}]
+    if not records:
         return False
     claim_text = text.lower()
     values = re.findall(r'(?:€\s*)?\d+(?:[.,]\d+)?\s*(?:m|million|%|bn|billion)?', claim_text)
     values = [re.sub(r'\s+', '', v.replace(",", ".")) for v in values if len(v.strip()) >= 2]
-    if values and all(v in re.sub(r'\s+', '', payload_text.replace(",", ".")) for v in values[:4]):
-        return True
     words = [w for w in re.findall(r'[a-zåäöA-ZÅÄÖ]{4,}', claim_text) if w not in {"reported", "shows", "company", "annual", "financial"}]
-    return len(words) >= 4 and sum(1 for w in words[:10] if w in payload_text) >= 4
+    for record in records:
+        record_text = " ".join(str(record.get(key) or "") for key in (
+            "dimension", "assessment", "finding", "metric", "value",
+            "evidence_snippet", "periods", "entity_scope",
+        )).lower()
+        normalized_record = re.sub(r'\s+', '', record_text.replace(",", "."))
+        if values:
+            if all(value in normalized_record for value in values[:6]):
+                return True
+            continue
+        if len(words) >= 4 and sum(1 for word in words[:10] if word in record_text) >= 4:
+            return True
+    return False
 
 
 _AUDIT_NOTE_LABELS = {
@@ -1747,6 +1772,29 @@ def ai_fact_check_summary(
                 print(f"      [Fact-Check] Premise reference mismatch; preserving as an audit warning: {claim_text[:80]}...")
                 continue
 
+            # The governed, period-specific financial manifest is a valid
+            # evidence handoff even when the verifier did not echo a public
+            # source index. Resolve it before classifying handoff failure.
+            if not source_indices and _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
+                audit_notes.append(_format_audit_note("structured_payload_supported", claim_text, reasoning))
+                audit_notes_detailed.append({
+                    "type": "audit_note",
+                    "claim_id": claim_id,
+                    "issue_type": "structured_payload_supported",
+                    "claim": claim_text,
+                    "error_type": error_type,
+                    "claim_class": claim_class or "structured_financial_payload_fact",
+                    "support_level": "exact",
+                    "missing_or_contradicted_premise": "",
+                    "reasoning": reasoning or "Supported by a governed period-specific financial fact.",
+                    "source_urls": source_urls,
+                    "source_indices": source_indices,
+                    "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
+                    "field_paths": (fc.get("field_paths") or []) if isinstance(fc, dict) else [],
+                })
+                print(f"      [Fact-Check] Governed financial fact supports claim: {claim_text[:70]}...")
+                continue
+
             if error_type == "Evidence Handoff Failure":
                 handoff_failures.append({
                     "claim_id": claim_id,
@@ -1779,26 +1827,6 @@ def ai_fact_check_summary(
             if _SCAN_HISTORY_RE.search(claim_text):
                 error_type = "Prohibited Scanner Observation"
                 claim_class = "internal_scanner_observation"
-
-            if not source_indices and _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
-                audit_notes.append(_format_audit_note("structured_payload_supported", claim_text, reasoning))
-                audit_notes_detailed.append({
-                    "type": "audit_note",
-                    "claim_id": claim_id,
-                    "issue_type": "structured_payload_supported",
-                    "claim": claim_text,
-                    "error_type": error_type,
-                    "claim_class": claim_class or "structured_financial_payload_fact",
-                    "support_level": "exact",
-                    "missing_or_contradicted_premise": "",
-                    "reasoning": reasoning or "Supported by structured financial payload.",
-                    "source_urls": source_urls,
-                    "source_indices": source_indices,
-                    "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
-                    "field_paths": (fc.get("field_paths") or []) if isinstance(fc, dict) else [],
-                })
-                print(f"      [Fact-Check] Structured financial payload supports claim: {claim_text[:70]}...")
-                continue
 
             # Scanner-process observations are checked against the internal
             # scan payload, not public web sources. If the model labels one as
@@ -2288,6 +2316,9 @@ def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) ->
         },
         "financial_findings": _compact_fact_check_records(
             financial.get("financial_findings") or [], section_text, 8
+        ),
+        "financial_fact_manifest": _compact_fact_check_records(
+            financial.get("financial_fact_manifest") or [], section_text, 10
         ),
     }
     raw_foresight = dict(payload.get("foresight_context") or {})

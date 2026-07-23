@@ -98,6 +98,26 @@ _TARGETED_REPAIR_SCHEMA = {
     "additionalProperties": False,
 }
 
+_LANGUAGE_REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "repairs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "item_id": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["item_id", "text"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["repairs"],
+    "additionalProperties": False,
+}
+
 
 def _section_headings(text: str) -> list[str]:
     return [
@@ -147,6 +167,165 @@ def polish_detailed_report_text(value: str) -> str:
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _language_defects(text: str) -> list[str]:
+    """Return deterministic public-prose defects without judging analysis."""
+    value = str(text or "").strip()
+    if not value:
+        return ["empty_text"]
+    defects = []
+    checks = (
+        (r"\b([A-Za-zÅÄÖåäö][A-Za-zÅÄÖåäö-]{2,})\s+\1\b", "repeated_word"),
+        (
+            r"\b((?:[A-Za-zÅÄÖåäö0-9'’/-]+\s+){1,3}[A-Za-zÅÄÖåäö0-9'’/-]+)\s*,?\s*\1\b",
+            "repeated_short_phrase",
+        ),
+        (r",\s*['’]s\b", "broken_possessive"),
+        (r"\.\s*[—–-]\s+(?:a|an|the)\b", "broken_transition"),
+        (r"\bwhether\s+(?:if|because)\b", "malformed_whether"),
+        (r"\b(?:and|or|but|because|while|with|to|of)\s*[.!?]?$", "trailing_connector"),
+    )
+    for pattern, label in checks:
+        if re.search(pattern, value, flags=re.IGNORECASE):
+            defects.append(label)
+    if value.count("(") != value.count(")") or value.count("[") != value.count("]"):
+        defects.append("unmatched_bracket")
+    parentheticals = [
+        re.sub(r"\s+", " ", item).strip().lower()
+        for item in re.findall(r"\(([^()]{8,})\)", value)
+    ]
+    if len(parentheticals) != len(set(parentheticals)):
+        defects.append("repeated_parenthetical")
+
+    words = re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9'’/-]*", value.lower())
+    for size in range(8, 3, -1):
+        phrases = {}
+        for index in range(0, max(0, len(words) - size + 1)):
+            phrase = tuple(words[index:index + size])
+            if len(set(phrase)) < 3:
+                continue
+            previous = phrases.get(phrase)
+            if previous is not None and index - previous <= 35:
+                defects.append("repeated_phrase")
+                break
+            phrases[phrase] = index
+        if "repeated_phrase" in defects:
+            break
+    return list(dict.fromkeys(defects))
+
+
+def _language_invariants(text: str) -> dict:
+    """Capture tokens a grammar-only repair is not allowed to alter."""
+    value = str(text or "")
+    return {
+        "numbers": sorted(re.findall(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?", value)),
+        "citations": sorted(re.findall(r"\[[A-Z]+-[^\]]+\]|\[\d{1,3}\]", value)),
+        "urls": sorted(re.findall(r"https?://[^\s)\]]+", value)),
+    }
+
+
+def final_public_language_review(
+    text: str,
+    *,
+    time_budget_seconds: int = 30,
+    label: str = "Detailed Report",
+) -> tuple[str, dict]:
+    """Review the whole output, repairing only paragraphs with language defects.
+
+    This is deliberately evidence-neutral: all numbers, citations and URLs must
+    remain identical. The complete output is scanned, but the model receives
+    only the passages that fail deterministic fluency checks.
+    """
+    source = polish_detailed_report_text(text)
+    chunks = re.split(r"(\n\s*\n+)", source)
+    flagged = []
+    for index in range(0, len(chunks), 2):
+        paragraph = chunks[index].strip()
+        if not paragraph or paragraph.startswith("## "):
+            continue
+        defects = _language_defects(paragraph)
+        if defects:
+            flagged.append({
+                "item_id": f"P{index // 2 + 1:03d}",
+                "chunk_index": index,
+                "text": paragraph,
+                "defects": defects,
+            })
+
+    metadata = {
+        "status": "clean" if not flagged else "defects_detected",
+        "reviewed_paragraph_count": len([item for item in chunks[::2] if item.strip()]),
+        "flagged_paragraph_count": len(flagged),
+        "repaired_paragraph_count": 0,
+        "unresolved_defects": [],
+        "model": "",
+    }
+    if not flagged:
+        return source, metadata
+    if int(time_budget_seconds or 0) < 12:
+        metadata["status"] = "unresolved_budget"
+        metadata["unresolved_defects"] = [
+            {"item_id": item["item_id"], "defects": item["defects"]} for item in flagged
+        ]
+        return source, metadata
+
+    prompt_items = [
+        {"item_id": item["item_id"], "text": item["text"], "defects": item["defects"]}
+        for item in flagged[:8]
+    ]
+    prompt = f"""You are the final language editor for an evidence-governed {label}.
+
+Repair grammar, duplication, punctuation, sentence completeness and paragraph fluency only. Preserve every factual proposition, analytical conclusion, number, date, entity, citation and URL. Do not add, remove, strengthen, weaken or reinterpret any claim. Return exactly one complete replacement for every item_id. Do not include headings or commentary.
+
+FLAGGED PASSAGES:
+{json.dumps(prompt_items, ensure_ascii=False)}
+"""
+    try:
+        raw = call_anthropic_text(
+            prompt,
+            model=CLAUDE_SONNET_MODEL,
+            max_tokens=5000,
+            timeout=max(12, min(40, int(time_budget_seconds or 30))),
+            max_retries=0,
+            reasoning_effort="low",
+            json_schema=_LANGUAGE_REPAIR_SCHEMA,
+            json_schema_name="final_public_language_review",
+            log_label=f"{label} Language QA",
+        )
+        parsed = parse_json_object(raw)
+        repairs = {
+            str(item.get("item_id") or ""): str(item.get("text") or "").strip()
+            for item in (parsed.get("repairs") or [])
+            if isinstance(item, dict)
+        }
+        expected = {item["item_id"] for item in prompt_items}
+        if set(repairs) != expected:
+            raise ValueError("Language QA did not return exactly the requested item IDs")
+        for item in flagged[:8]:
+            candidate = repairs[item["item_id"]]
+            if (
+                not candidate
+                or _language_invariants(candidate) != _language_invariants(item["text"])
+                or _language_defects(candidate)
+            ):
+                continue
+            chunks[item["chunk_index"]] = candidate
+            metadata["repaired_paragraph_count"] += 1
+        metadata["model"] = CLAUDE_SONNET_MODEL
+    except Exception as exc:
+        metadata["error"] = str(exc)[:240]
+
+    reviewed = polish_detailed_report_text("".join(chunks))
+    unresolved = []
+    for item in flagged:
+        paragraph = chunks[item["chunk_index"]].strip()
+        defects = _language_defects(paragraph)
+        if defects:
+            unresolved.append({"item_id": item["item_id"], "defects": defects})
+    metadata["unresolved_defects"] = unresolved
+    metadata["status"] = "repaired" if not unresolved else "unresolved"
+    return reviewed, metadata
 
 
 def detailed_report_quality(

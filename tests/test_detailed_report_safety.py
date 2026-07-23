@@ -10,6 +10,7 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 import detailed_report  # noqa: E402
+import reality_check  # noqa: E402
 
 
 def _report_with_words(words_per_section: int = 160) -> str:
@@ -48,6 +49,33 @@ def test_detailed_report_payload_excludes_model_financial_assessment_prose():
     assert len(payload["financial_findings"]) == 1
     assert "assessment" not in payload["financial_findings"][0]
     assert payload["financial_findings"][0]["entity_scope"] == "local_legal_entity"
+
+
+def test_financial_fact_support_must_exist_within_one_period_record():
+    payload = {
+        "financial_payload": {
+            "financial_fact_manifest": [
+                {
+                    "assessment": "Revenue was EUR 91.6 million in FY2025.",
+                    "periods": ["FY2025"],
+                    "entity_scope": "local_legal_entity",
+                },
+                {
+                    "assessment": "Operating profit was EUR 11.1 million with a 21.8% margin in FY2024.",
+                    "periods": ["FY2024"],
+                    "entity_scope": "local_legal_entity",
+                },
+            ]
+        }
+    }
+
+    assert reality_check._is_supported_structured_financial_payload_claim(
+        "Revenue was EUR 91.6 million in FY2025.", payload
+    )
+    assert not reality_check._is_supported_structured_financial_payload_claim(
+        "Revenue was EUR 91.6 million and operating profit was EUR 11.1 million in FY2025.",
+        payload,
+    )
 
 
 def test_flagged_sentence_removal_is_fuzzy_and_preserves_report_headings():
@@ -193,6 +221,57 @@ def test_detailed_report_language_qa_removes_adjacent_duplicate_words():
     )
 
     assert polished == "The manufacturer expanded its supported portfolio."
+
+
+def test_final_language_review_repairs_only_flagged_paragraphs(monkeypatch):
+    text = """## Key Findings
+
+Supported context remains unchanged.
+
+Profitable growth, profitable growth, creates a clear identity, and a clear identity, for the offer.
+
+## Verdict
+
+Validation remains necessary."""
+    monkeypatch.setattr(
+        detailed_report,
+        "call_anthropic_text",
+        lambda *_args, **_kwargs: (
+            '{"repairs":[{"item_id":"P003","text":'
+            '"Profitable growth creates a clear identity for the offer."}]}'
+        ),
+    )
+
+    reviewed, metadata = detailed_report.final_public_language_review(
+        text,
+        time_budget_seconds=20,
+    )
+
+    assert "Supported context remains unchanged." in reviewed
+    assert "Profitable growth creates a clear identity for the offer." in reviewed
+    assert metadata["status"] == "repaired"
+    assert metadata["repaired_paragraph_count"] == 1
+
+
+def test_final_language_review_rejects_repairs_that_change_numbers(monkeypatch):
+    text = "Revenue revenue reached EUR 91.6 million in 2025."
+    monkeypatch.setattr(
+        detailed_report,
+        "call_anthropic_text",
+        lambda *_args, **_kwargs: (
+            '{"repairs":[{"item_id":"P001","text":'
+            '"Revenue reached EUR 92.0 million in 2025."}]}'
+        ),
+    )
+
+    reviewed, metadata = detailed_report.final_public_language_review(
+        text,
+        time_budget_seconds=20,
+    )
+
+    assert "91.6" in reviewed
+    assert "92.0" not in reviewed
+    assert metadata["status"] == "clean"
 
 
 def test_unavailable_verifier_cannot_publish_as_generated_verified():
