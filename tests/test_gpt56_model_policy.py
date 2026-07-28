@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 import sys
 import types
 
@@ -11,6 +12,8 @@ def test_model_policy_defaults_to_gpt56_sol_without_haiku(monkeypatch):
         "SCANNER_PREMIUM_MODEL",
         "SCANNER_DETAILED_COMPLETION_MODEL",
         "SCANNER_ENABLE_GPT56_SOL_TEST",
+        "SCANNER_MODEL_POLICY_VERSION",
+        "CLAUDE_OPUS_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.syspath_prepend("backend")
@@ -21,9 +24,38 @@ def test_model_policy_defaults_to_gpt56_sol_without_haiku(monkeypatch):
     assert policy.GPT_PRO_MODEL == "gpt-5.6-sol"
     assert policy.GPT_PRO_REASONING_MODE == "pro"
     assert policy.DETAILED_COMPLETION_MODEL == "gpt-5.6-sol"
+    assert policy.CLAUDE_OPUS_MODEL == "claude-opus-5"
+    assert policy.CLAUDE_SONNET_MODEL == "claude-sonnet-5"
+    assert policy.MODEL_POLICY_VERSION == "model-policy-v3-gpt56-claude5"
     assert all("haiku" not in model.lower() for model in policy.buying_generation_chain())
     assert policy.policy_for("buying_insight_generation")["qualification"]["max_output_tokens"] == 9000
     assert policy.policy_for("activation_strategic_synthesis")["max_output_tokens"] == 16000
+
+
+def test_model_policy_allows_explicit_opus48_rollback(monkeypatch):
+    monkeypatch.setenv("CLAUDE_OPUS_MODEL", "claude-opus-4-8")
+    monkeypatch.syspath_prepend("backend")
+    sys.modules.pop("model_policy", None)
+    try:
+        policy = importlib.import_module("model_policy")
+        assert policy.CLAUDE_OPUS_MODEL == "claude-opus-4-8"
+    finally:
+        sys.modules.pop("model_policy", None)
+
+
+def test_active_backend_paths_do_not_pin_opus48():
+    backend = Path(__file__).resolve().parents[1] / "backend"
+    active_paths = (
+        "model_policy.py",
+        "main.py",
+        "seed_manager.py",
+        "foresight_observatory.py",
+        "detailed_report.py",
+    )
+
+    for relative_path in active_paths:
+        source = (backend / relative_path).read_text(encoding="utf-8")
+        assert "claude-opus-4-8" not in source, relative_path
 
 
 def _load_llm_clients(monkeypatch, response):

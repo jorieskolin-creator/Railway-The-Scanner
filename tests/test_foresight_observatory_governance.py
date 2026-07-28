@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 
 
 _BACKEND = os.path.join(os.path.dirname(__file__), "..", "backend")
@@ -28,6 +29,37 @@ def _signal(title: str, eligible: bool, **extra) -> dict:
     }
     signal.update(extra)
     return signal
+
+
+def test_opus5_generation_preserves_adaptive_thinking_contract(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    captured = {}
+
+    class Messages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(type="text", text="Evidence-grounded domain dossier")]
+            )
+
+    class Anthropic:
+        def __init__(self, **_kwargs):
+            self.messages = Messages()
+
+    monkeypatch.setattr(observatory.anthropic, "Anthropic", Anthropic)
+
+    text, word_count = observatory._generate_opus("Build the dossier", max_tokens=16000)
+
+    assert text == "Evidence-grounded domain dossier"
+    assert word_count == 3
+    assert observatory.OBSERVATORY_L3_MODEL == "claude-opus-5"
+    assert captured["model"] == "claude-opus-5"
+    assert captured["max_tokens"] == 16000
+    assert captured["thinking"] == {"type": "adaptive"}
+    assert captured["extra_body"] == {"output_config": {"effort": "xhigh"}}
+    assert "temperature" not in captured
+    assert "top_p" not in captured
+    assert "top_k" not in captured
 
 
 def test_central_kb_aggregate_requires_explicit_context_eligibility():

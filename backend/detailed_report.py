@@ -1337,7 +1337,7 @@ def generate_detailed_report(
         print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} failed ({elapsed}ms): {e}")
 
     if anthropic_key and remaining_budget() >= 10:
-        # --- Attempt 3: Claude Opus 4.8 premium fallback ---
+        # --- Attempt 3: Claude Opus 5 premium fallback ---
         OPUS_MODEL = CLAUDE_OPUS_MODEL
         try:
             print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL} premium fallback...")
