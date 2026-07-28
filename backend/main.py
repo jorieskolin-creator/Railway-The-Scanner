@@ -74,8 +74,8 @@ from evidence_graph import attach_evidence_graph, build_evidence_manifest, evide
 from evidence_absence import build_evidence_absence_signals, format_absence_signals_for_prompt
 from evidence_contracts import build_classification_namespaces
 
-# VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
-print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
+# VERIFICATION LOG: v5.4.0 - Adaptive Thinking + Search Budget Upgrade
+print("Starting Adaptability Scanner Backend (v5.4.0 - Adaptive Thinking + Search Budget Upgrade)...", flush=True)
 
 ARCHETYPE_LABELS = ("Thriving", "Modernizing", "Cash Cow", "At Risk")
 
@@ -6248,9 +6248,9 @@ Respond with valid JSON only. Required fields:
 Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. The archetype field is audit-only and must not appear in diagnostic_summary or evidence_based_risks. Do not add a foresight paragraph.
 Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
-                # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT frontier → Sonnet 5 ---
+                # --- Diagnosis synthesis with fallback chain: Opus 5 → GPT frontier → Sonnet 5 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
-                # Opus uses Extended Thinking to reason through conflicting intent vs. reality
+                # Opus uses adaptive thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
                 response_text = ""
                 synth_start = time.time()
@@ -6358,7 +6358,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 OPUS_SYNTH_TIMEOUT,
                                 max(8, _diagnosis_budget_left()),
                             )
-                            print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {_opus_timeout}s)...")
+                            print(f"   🔄 [Synthesis] Attempting {CLAUDE_OPUS_MODEL} with adaptive thinking (timeout: {_opus_timeout}s)...")
                             response_text = call_anthropic_text(
                                 synthesis_prompt,
                                 model=CLAUDE_OPUS_MODEL,
@@ -6375,7 +6375,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 "timeout_seconds": _opus_timeout,
                                 "elapsed_seconds": round(time.time() - attempt_started, 2),
                             })
-                            print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                            print(f"   ✅ [Synthesis] {CLAUDE_OPUS_MODEL} + adaptive thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                         except Exception as opus_err:
                             diagnosis_generation_meta["attempts"].append({
                                 "model": CLAUDE_OPUS_MODEL,
@@ -6385,10 +6385,10 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 "error": str(opus_err)[:240],
                             })
                             diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_OPUS_MODEL} failed: {opus_err}"
-                            print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
+                            print(f"   ❌ [Synthesis] {CLAUDE_OPUS_MODEL} failed: {opus_err}")
                     else:
                         print(
-                            f"   ⏭ [Synthesis] Skipping Opus 4.8 — {_synth_available}s synthesis budget "
+                            f"   ⏭ [Synthesis] Skipping {CLAUDE_OPUS_MODEL} — {_synth_available}s synthesis budget "
                             f"reserved for shorter fallback path"
                         )
 

@@ -8,7 +8,7 @@ Synthesizes existing Scanner data into macro-level strategic intelligence:
 
 Model pipeline:
   - GPT-5.5 Pro: Layer 1 and Layer 2 strategic analysis
-  - Claude Opus 4.8: Layer 3 domain dossiers
+  - Claude Opus 5: Layer 3 domain dossiers
   - GPT-5.5 high / Sonnet: Independent verification
 
 All data comes from existing DB — no new scanning or web search required.
@@ -1847,7 +1847,7 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
 
 
 def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
-    """Generate text via Opus 4.8. Returns (text, word_count).
+    """Generate text via Opus 5. Returns (text, word_count).
     Used for Domain Dossiers (Layer 3) where analytical depth matters most."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
@@ -1857,7 +1857,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     t0 = time.time()
 
     response = client.messages.create(
-        model="claude-opus-4-8",
+        model=OBSERVATORY_L3_MODEL,
         max_tokens=max_tokens,
         thinking={"type": "adaptive"},
         extra_body={"output_config": {"effort": "xhigh"}},
@@ -1875,7 +1875,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
 
     wc = len(text.split())
     elapsed = int((time.time() - t0) * 1000)
-    print(f"   [Observatory] Opus 4.8: {wc} words ({elapsed}ms)")
+    print(f"   [Observatory] {OBSERVATORY_L3_MODEL}: {wc} words ({elapsed}ms)")
     return text, wc
 
 
@@ -1993,7 +1993,7 @@ def _generate_with_verification(
     use_gpt_pro: bool = False,
 ) -> tuple[str, dict]:
     """Generate via Claude, then verify via GPT/Claude. Returns (text, verification).
-    use_opus=True uses Opus 4.8 for deeper analytical reasoning (Layer 3).
+    use_opus=True uses Opus 5 for deeper analytical reasoning (Layer 3).
     signal_evidence: when provided, enables claim-level cross-validation against KB signals."""
     if use_gpt_pro:
         text, wc, generation_model = _generate_gpt_pro(prompt)
