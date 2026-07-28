@@ -1217,9 +1217,16 @@ const App = () => {
  if (!finalStatus) throw new Error('Buying Insight timed out while polling status.');
  const counts = finalStatus.source_counts || {};
  const warnings = (finalStatus.warnings || []).slice(0, 5);
+ const reliability = finalStatus.reliability_status || {};
+ const reliabilityLabel = reliability.code
+   ? `${reliability.code} — ${reliability.label || 'Reliability status'}`
+   : (finalStatus.confidence != null ? `Legacy confidence ${finalStatus.confidence}` : 'Status unavailable');
+ const allowedUse = reliability.allowed_use
+   || String(finalStatus.publication_status || 'internal_review_required').replaceAll('_', ' ');
  alert(
  `Buying Insight created for "${companyName}".\n\n` +
- `Confidence: ${finalStatus.confidence ?? 'n/a'}\n` +
+ `Reliability: ${reliabilityLabel}\n` +
+ `Allowed use: ${allowedUse}\n` +
  `Generation-eligible evidence: ${counts.generation_eligible ?? 0}\n` +
  `Financial sources: ${counts.financial_sources ?? 0}\n` +
  `Blocked/display-only sources: ${counts.blocked_or_display_only ?? 0}` +
@@ -1518,11 +1525,14 @@ const App = () => {
     const items = selectedDomain === 'All' ? data : data.filter(d => d.domain === selectedDomain);
     if (items.length === 0) return null;
     const avgIntent = Math.round(items.reduce((s, i) => s + (i.intent_score || 0), 0) / items.length);
-    const avgReality = Math.round(items.reduce((s, i) => s + (i.reality_score || 0), 0) / items.length);
+    const currentRealityItems = items.filter(i => i.current_reality_unavailable !== true && i.reality_score_valid !== false);
+    const avgReality = currentRealityItems.length
+      ? Math.round(currentRealityItems.reduce((s, i) => s + (i.reality_score || 0), 0) / currentRealityItems.length)
+      : null;
     const financialItems = items.filter(i => i.financial_index != null);
     const avgFinancial = financialItems.length > 0 ? Math.round(financialItems.reduce((s, i) => s + i.financial_index, 0) / financialItems.length) : null;
     let archetypes = { 'Thriving': 0, 'Modernizing': 0, 'Cash Cow': 0, 'At Risk': 0 };
-    items.forEach(i => {
+    currentRealityItems.forEach(i => {
       const label = getArchetype(i.archetype, i.reality_score || 0, i.financial_index ?? i.intent_score ?? 0).label;
       archetypes[label]++;
     });
@@ -1775,7 +1785,15 @@ const App = () => {
                 </thead>
                 <tbody className="divide-y divide-white/5 text-slate-300">
                   {sortedData.map((row) => {
-                    const archetype = getArchetype(row.archetype, row.reality_score, row.financial_index ?? row.intent_score ?? 0);
+                    const currentRealityAvailable = row.current_reality_unavailable !== true && row.reality_score_valid !== false;
+                    const archetype = currentRealityAvailable
+                      ? getArchetype(row.archetype, row.reality_score, row.financial_index ?? row.intent_score ?? 0)
+                      : {
+                          label: 'Unavailable',
+                          bg: 'bg-slate-500/10',
+                          border: 'border-slate-500/30',
+                          color: 'text-slate-400',
+                        };
                     const revTier = getRevenueTier(row.revenue_avg_3yr);
                     const lowConfidence = row.confidence_score != null && row.confidence_score < 50;
                     const tierColors = { XL: 'text-violet-300 bg-violet-500/15 border-violet-500/30', L: 'text-blue-300 bg-blue-500/15 border-blue-500/30', M: 'text-slate-300 bg-slate-500/15 border-slate-500/30', S: 'text-slate-500 bg-slate-500/10 border-slate-500/20' };
@@ -1793,7 +1811,7 @@ const App = () => {
                         <span className="text-[10px] font-mono text-slate-500 truncate block max-w-[120px]">{row.domain || '-'}</span>
                       </td>
                       <td className="px-3 py-3">{row.intent_score}</td>
-                      <td className="px-3 py-3">{row.reality_score}</td>
+                      <td className="px-3 py-3">{currentRealityAvailable ? row.reality_score : 'N/A'}</td>
                       <td className="px-3 py-3 hidden md:table-cell">
                         {row.financial_index != null ? <span className="font-mono">{row.financial_index}</span> : <span className="text-slate-600">-</span>}
                       </td>

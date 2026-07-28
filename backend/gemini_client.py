@@ -5,14 +5,7 @@ from __future__ import annotations
 import os
 
 from llm_clients import clean_env_var
-
-
-GEMINI_HARVEST_MODEL = (
-    os.environ.get("GEMINI_HARVEST_MODEL") or "gemini-3.1-pro-preview"
-).strip().strip('"').strip("'")
-GEMINI_FORENSIC_MODEL = (
-    os.environ.get("GEMINI_FORENSIC_MODEL") or "gemini-3.1-pro-preview"
-).strip().strip('"').strip("'")
+from model_policy import GEMINI_FORENSIC_MODEL, GEMINI_HARVEST_MODEL
 
 
 def gemini_api_key() -> str:
@@ -25,8 +18,8 @@ def call_gemini_harvest_text(
     model: str = GEMINI_HARVEST_MODEL,
     timeout: int = 90,
     max_output_tokens: int = 7000,
-    temperature: float = 0.3,
-    thinking_level: str | None = None,
+    temperature: float | None = None,
+    thinking_level: str | None = "medium",
 ) -> str:
     """Run one grounded Gemini discovery call with a provider-native timeout."""
     api_key = gemini_api_key()
@@ -42,9 +35,10 @@ def call_gemini_harvest_text(
     )
     config_kwargs = {
         "tools": [types.Tool(google_search=types.GoogleSearch())],
-        "temperature": temperature,
         "max_output_tokens": max_output_tokens,
     }
+    if temperature is not None:
+        config_kwargs["temperature"] = temperature
     if thinking_level and hasattr(types, "ThinkingConfig"):
         try:
             config_kwargs["thinking_config"] = types.ThinkingConfig(
@@ -81,6 +75,6 @@ def call_gemini_forensic_text(
         model=model,
         timeout=timeout,
         max_output_tokens=max_output_tokens,
-        temperature=0.2,
+        temperature=None,
         thinking_level=thinking_level,
     )

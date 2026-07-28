@@ -33,7 +33,17 @@ from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
-from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence, _call_openai_text, sanitize_inference_wording
+from reality_check import (
+    validate_summary,
+    validate_pitch,
+    ai_fact_check_summary,
+    ai_fact_check_detailed_report,
+    detailed_report_fact_check_budget,
+    clean_summary,
+    purge_false_evidence,
+    _call_openai_text,
+    sanitize_inference_wording,
+)
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import (
     manage_evidence_sources,
@@ -54,7 +64,8 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
-from llm_clients import GPT_PRO_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from model_policy import policy_for
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
@@ -286,6 +297,17 @@ def _activation_pair_candidates(payload: dict) -> list[dict]:
                 "what": what_text,
                 "what_to_do": what_text,
                 "what_progress_shows": progress_text,
+                "parent_evidence_ids": [
+                    str(value) for value in item.get("parent_evidence_ids", []) if value
+                ][:8] if isinstance(item.get("parent_evidence_ids"), list) else [],
+                "parent_foresight_ids": [
+                    str(value) for value in item.get("parent_foresight_ids", []) if value
+                ][:8] if isinstance(item.get("parent_foresight_ids"), list) else [],
+                "independent_source_count": max(0, int(item.get("independent_source_count") or 0)) if str(item.get("independent_source_count") or "0").isdigit() else 0,
+                "source_freshness": str(item.get("source_freshness") or "")[:80],
+                "pressure_horizon": str(item.get("pressure_horizon") or item.get("horizon") or "")[:120],
+                "sales_validation_window": str(item.get("sales_validation_window") or "")[:120],
+                "timing_basis": _clip_sentence(item.get("timing_basis") or "", 320),
             })
     return pairs
 
@@ -420,6 +442,142 @@ def _parse_activation_json(text: str) -> dict | None:
     return None
 
 
+_STRATEGIC_SYNTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {"strategic_synthesis": {"type": "string"}},
+    "required": ["strategic_synthesis"],
+    "additionalProperties": False,
+}
+
+_ACTIVATION_PAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "theme_type": {"type": "string", "enum": ["current_status", "foresight_driven", "proactive_opportunity"]},
+        "sales_use": {"type": "string", "enum": ["current_status", "foresight_driven", "proactive_opportunity"]},
+        "theme": {"type": "string"},
+        "why": {"type": "string"},
+        "what": {"type": "string"},
+        "what_to_do": {"type": "string"},
+        "what_progress_shows": {"type": "string"},
+        "parent_evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "parent_foresight_ids": {"type": "array", "items": {"type": "string"}},
+        "independent_source_count": {"type": "integer"},
+        "source_freshness": {"type": "string"},
+        "pressure_horizon": {"type": "string"},
+        "sales_validation_window": {"type": "string"},
+        "timing_basis": {"type": "string"},
+    },
+    "required": [
+        "theme_type", "sales_use", "theme", "why", "what", "what_to_do",
+        "what_progress_shows", "parent_evidence_ids", "parent_foresight_ids",
+        "independent_source_count", "source_freshness", "pressure_horizon",
+        "sales_validation_window", "timing_basis",
+    ],
+    "additionalProperties": False,
+}
+
+_ACTIVATION_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "commercial_pitch": {"type": "string"},
+        # Provider-facing schemas stay deliberately conservative. Anthropic does
+        # not accept minItems/maxItems here; Scanner enforces 2-3 pairs after parse.
+        "activation_pairs": {"type": "array", "items": _ACTIVATION_PAIR_SCHEMA},
+        "why_proposals": {"type": "array", "items": {"type": "string"}},
+        "what_proposals": {"type": "array", "items": {"type": "string"}},
+        "what_progress_proposals": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["commercial_pitch", "activation_pairs", "why_proposals", "what_proposals", "what_progress_proposals"],
+    "additionalProperties": False,
+}
+
+_ACTIVATION_FULL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "strategic_synthesis": {"type": "string"},
+        **_ACTIVATION_OUTPUT_SCHEMA["properties"],
+    },
+    "required": ["strategic_synthesis", *_ACTIVATION_OUTPUT_SCHEMA["required"]],
+    "additionalProperties": False,
+}
+
+_PITCH_ONLY_SCHEMA = {
+    "type": "object",
+    "properties": {"commercial_pitch": {"type": "string"}},
+    "required": ["commercial_pitch"],
+    "additionalProperties": False,
+}
+
+_PITCH_INTERNAL_LANGUAGE = (
+    "scanner", "scan payload", "source register", "source gate",
+    "generation-eligible", "display-only", "promoted evidence",
+    "promoted source", "public evidence", "verified evidence",
+    "proof gap", "evidence gap", "no evidence", "no verified",
+    "unverified",
+)
+
+
+def _pitch_contract_issues(pitch_text: str) -> list[str]:
+    """Return reader-facing Pitch contract defects after model parsing."""
+    pitch = str(pitch_text or "").strip()
+    if not pitch or pitch == "Pitch Unavailable":
+        return ["missing_pitch"]
+
+    issues = []
+    word_count = len(re.findall(r"\b[\w][\w'’/-]*\b", pitch, flags=re.UNICODE))
+    if not 90 <= word_count <= 110:
+        issues.append(f"word_count:{word_count}")
+
+    paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", pitch) if item.strip()]
+    if len(paragraphs) != 3:
+        issues.append(f"paragraph_count:{len(paragraphs)}")
+    elif any(not re.search(r"[.!?][\]\)\"']?$", paragraph) for paragraph in paragraphs):
+        issues.append("incomplete_paragraph")
+
+    lowered = pitch.lower()
+    exposed = [term for term in _PITCH_INTERNAL_LANGUAGE if term in lowered]
+    if exposed:
+        issues.append("internal_evidence_language:" + ",".join(exposed[:4]))
+    if re.search(
+        r"\b(?:zero|no)\s+(?:currently\s+)?(?:verified\s+|public\s+)?"
+        r"(?:capability|architecture|integration|platform|cloud|ai|data foundation|governance model)",
+        lowered,
+    ):
+        issues.append("proof_gap_as_absence")
+    return issues
+
+
+def _pitch_contract_severity(pitch_text: str) -> dict:
+    """Separate customer-safety failures from recoverable presentation drift."""
+    pitch = str(pitch_text or "").strip()
+    issues = _pitch_contract_issues(pitch)
+    hard = []
+    soft = []
+    word_count = len(re.findall(r"\b[\w][\w'’/-]*\b", pitch, flags=re.UNICODE))
+    paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", pitch) if item.strip()]
+
+    for issue in issues:
+        if issue.startswith(("internal_evidence_language:", "proof_gap_as_absence")):
+            hard.append(issue)
+        elif issue == "missing_pitch" or issue == "incomplete_paragraph":
+            hard.append(issue)
+        elif issue.startswith("word_count:"):
+            # The 90-110 target remains the preferred contract. A modest
+            # deviation is a readability warning, not grounds to discard an
+            # otherwise safe and complete customer-facing Pitch.
+            (soft if 80 <= word_count <= 125 else hard).append(issue)
+        elif issue.startswith("paragraph_count:"):
+            complete = all(re.search(r"[.!?][\]\)\"']?$", item) for item in paragraphs)
+            (soft if 2 <= len(paragraphs) <= 4 and complete else hard).append(issue)
+        else:
+            hard.append(issue)
+    return {"issues": issues, "hard": hard, "soft": soft}
+
+
+def _pitch_contract_complete(pitch_text: str) -> bool:
+    return not _pitch_contract_severity(pitch_text)["hard"]
+
+
 def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> dict:
     """Accept current and legacy activation aliases without changing meaning."""
     prior = prior or {}
@@ -442,6 +600,240 @@ def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> d
         "what_proposals": sanitize_inference_wording(_activation_list(what)),
         "what_progress_proposals": sanitize_inference_wording(_activation_list(progress)),
     }
+
+
+_EDITORIAL_CORRECTION_RE = re.compile(
+    r"^(?:remove|omit|delete|qualify|rewrite|replace|exclude|do\s+not\s+(?:use|say|include)|"
+    r"mark\s+as|treat\s+as)\b",
+    flags=re.IGNORECASE,
+)
+_EDITORIAL_CORRECTION_FRAGMENT_RE = re.compile(
+    r"\b(?:remove\s+or\s+qualify\s+as\s+unverified|remove\s+this\s+claim|"
+    r"omit\s+this\s+claim|do\s+not\s+use\s+this\s+claim|replace\s+this\s+claim)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _publishable_fact_check_correction(correction: str) -> str:
+    """Return only ordinary reader-facing prose, never verifier commands."""
+    cleaned = re.sub(r"\s+", " ", str(correction or "")).strip()
+    if not cleaned or _EDITORIAL_CORRECTION_RE.search(cleaned):
+        return ""
+    return cleaned
+
+
+def _remove_sentence_containing_claim(text: str, claim: str) -> tuple[str, bool]:
+    """Remove the complete sentence when no safe replacement prose is available."""
+    needle = re.sub(r"\s+", " ", str(claim or "")).strip().lower()
+    if not text or not needle:
+        return text, False
+    paragraphs = re.split(r"(\n\s*\n+)", text)
+    removed = False
+    for index in range(0, len(paragraphs), 2):
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-ZÅÄÖ0-9])", paragraphs[index].strip())
+        kept = []
+        for sentence in sentences:
+            normalized = re.sub(r"\s+", " ", sentence).strip().lower()
+            if needle in normalized:
+                removed = True
+                continue
+            if sentence.strip():
+                kept.append(sentence.strip())
+        paragraphs[index] = " ".join(kept)
+    cleaned = "".join(paragraphs)
+    cleaned = re.sub(r"\n\s*\n(?:\s*\n)+", "\n\n", cleaned)
+    return cleaned.strip(), removed
+
+
+def _final_public_language_qa(value):
+    """Repair deterministic language seams after all claim transformations."""
+    if isinstance(value, list):
+        cleaned = [_final_public_language_qa(item) for item in value]
+        return [item for item in cleaned if item not in (None, "", [], {})]
+    if isinstance(value, dict):
+        return {key: _final_public_language_qa(item) for key, item in value.items()}
+    if not isinstance(value, str):
+        return value
+
+    paragraphs = re.split(r"(\n\s*\n+)", value)
+    for index in range(0, len(paragraphs), 2):
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-ZÅÄÖ0-9])", paragraphs[index].strip())
+        sentences = [
+            sentence for sentence in sentences
+            if not _EDITORIAL_CORRECTION_FRAGMENT_RE.search(sentence)
+        ]
+        paragraphs[index] = " ".join(sentence.strip() for sentence in sentences if sentence.strip())
+    text = "".join(paragraphs)
+    text = re.sub(r"\bwhether\s+(?:if|because)\b", "whether", text, flags=re.IGNORECASE)
+    text = re.sub(r"\.\s*,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"([.!?])\s*\1+", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _replace_flagged_claim(value, claim: str, correction: str):
+    """Apply one verified correction without changing unrelated structure."""
+    if isinstance(value, str):
+        claim = re.sub(r"\s+", " ", str(claim or "")).strip()
+        if not claim:
+            return value
+        replacement = _publishable_fact_check_correction(correction)
+        pattern = re.escape(claim).replace(r"\ ", r"\s+")
+        if replacement:
+            updated, count = re.subn(pattern, replacement, value, count=0, flags=re.IGNORECASE)
+        else:
+            updated, removed = _remove_sentence_containing_claim(value, claim)
+            count = int(removed)
+            if not removed:
+                updated, count = re.subn(pattern, "", value, count=0, flags=re.IGNORECASE)
+        if not count:
+            return value
+        updated = re.sub(r"\s+([,.;:!?])", r"\1", updated)
+        updated = re.sub(r"[ \t]{2,}", " ", updated)
+        updated = re.sub(r"\n[ \t]+", "\n", updated)
+        return updated.strip()
+    if isinstance(value, list):
+        cleaned = [_replace_flagged_claim(item, claim, correction) for item in value]
+        return [item for item in cleaned if item not in (None, "", [], {})]
+    if isinstance(value, dict):
+        return {key: _replace_flagged_claim(item, claim, correction) for key, item in value.items()}
+    return value
+
+
+def _known_foresight_ids(data: dict) -> set[str]:
+    known = set()
+    for collection_key in ("foresight_links", "foresight_evidence", "generation_evidence_manifest"):
+        for item in data.get(collection_key) or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("evidence_id", "source_id", "foresight_id", "id"):
+                value = str(item.get(key) or "").strip()
+                if value.startswith("FOR-"):
+                    known.add(value)
+    return known
+
+
+def _apply_foresight_citation_correction(data: dict, issue: dict) -> bool:
+    """Attach a verifier-selected foresight ID without rewriting synthesis prose."""
+    if str(issue.get("error_type") or "").strip().lower() != "misattribution":
+        return False
+    synthesis = str(data.get("strategic_synthesis") or "")
+    claim = str(issue.get("claim") or "").strip()
+    if not synthesis or not claim:
+        return False
+
+    known_ids = _known_foresight_ids(data)
+    correction_ids = re.findall(r"\bFOR-[A-Z0-9]+\b", str(issue.get("correction") or "").upper())
+    replacement_id = next((item for item in correction_ids if item in known_ids), "")
+    if not replacement_id:
+        return False
+
+    # Verifiers sometimes quote a sentence with a trailing contextual citation
+    # that the rendered synthesis does not attach to that exact sentence. Keep
+    # the prose locked and attach the correct source directly to the claim.
+    claim_text = re.sub(r"(?:\s*\[[A-Z]+-[^\]]+\])+$", "", claim).strip()
+    if not claim_text:
+        return False
+    pattern = re.escape(claim_text).replace(r"\ ", r"\s+")
+    match = re.search(pattern, synthesis, flags=re.IGNORECASE)
+    if not match:
+        return False
+    if f"[{replacement_id}]" in synthesis[match.end():match.end() + 80]:
+        return False
+    matched = match.group(0)
+    punctuation = matched[-1] if matched[-1:] in ".!?" else ""
+    stem = matched[:-1] if punctuation else matched
+    replacement = f"{stem}[{replacement_id}]{punctuation}"
+    data["strategic_synthesis"] = synthesis[:match.start()] + replacement + synthesis[match.end():]
+    return True
+
+
+def _apply_fact_check_corrections(data: dict, fact_check: dict) -> list[str]:
+    """Apply verifier corrections to every reader-facing occurrence."""
+    corrected_summary = fact_check.get("corrected_summary") or ""
+    corrected_pitch = fact_check.get("corrected_pitch") or ""
+    corrected_sections = fact_check.get("corrected_sections") or {}
+    if corrected_summary:
+        data["summary_text"] = _strip_tac_codes(sanitize_inference_wording(corrected_summary))
+    if corrected_pitch:
+        data["pitch_text"] = sanitize_inference_wording(corrected_pitch)
+    if isinstance(corrected_sections, dict):
+        section_map = {
+            "strategic_synthesis": "strategic_synthesis",
+            "evidence_based_risks": "evidence_based_risks",
+            "activation_pairs": "activation_pairs",
+            "why_proposals": "why_proposals",
+            "what_proposals": "what_proposals",
+            "what_progress_proposals": "what_progress_proposals",
+        }
+        for section_key, data_key in section_map.items():
+            if corrected_sections.get(section_key) not in (None, "", [], {}):
+                data[data_key] = sanitize_inference_wording(corrected_sections[section_key])
+
+    public_keys = (
+        "summary_text", "strategic_synthesis", "pitch_text", "evidence_based_risks",
+        "activation_pairs", "why_proposals", "what_proposals", "what_progress_proposals",
+    )
+    applied_ids = []
+    for issue in fact_check.get("false_claims_detailed") or []:
+        if not isinstance(issue, dict):
+            continue
+        claim = str(issue.get("claim") or "").strip()
+        if not claim:
+            continue
+        if _apply_foresight_citation_correction(data, issue):
+            applied_ids.append(str(issue.get("claim_id") or ""))
+            continue
+        correction = str(issue.get("correction") or "").strip()
+        before = {key: json.dumps(data.get(key), ensure_ascii=False, sort_keys=True, default=str) for key in public_keys}
+        for key in public_keys:
+            data[key] = _replace_flagged_claim(data.get(key), claim, correction)
+        if any(before[key] != json.dumps(data.get(key), ensure_ascii=False, sort_keys=True, default=str) for key in public_keys):
+            applied_ids.append(str(issue.get("claim_id") or ""))
+
+    activation_norm = _normalize_activation_payload({
+        "strategic_synthesis": data.get("strategic_synthesis"),
+        "commercial_pitch": data.get("pitch_text"),
+        "activation_pairs": data.get("activation_pairs"),
+        "why_proposals": data.get("why_proposals"),
+        "what_proposals": data.get("what_proposals"),
+        "what_progress_proposals": data.get("what_progress_proposals"),
+    })
+    data["strategic_synthesis"] = activation_norm["strategic_synthesis"]
+    data["pitch_text"] = activation_norm["pitch"]
+    data["activation_pairs"] = activation_norm["activation_pairs"]
+    data["why_proposals"] = activation_norm["why_proposals"]
+    data["what_proposals"] = activation_norm["what_proposals"]
+    data["what_progress_proposals"] = activation_norm["what_progress_proposals"]
+    for key in public_keys:
+        data[key] = _final_public_language_qa(data.get(key))
+    return list(dict.fromkeys(item for item in applied_ids if item))
+
+
+def _unresolved_fact_check_claim_ids(data: dict, fact_check: dict) -> list[str]:
+    """Find exact blocked wording that survived public-field propagation."""
+    public_payload = json.dumps({
+        "summary_text": data.get("summary_text"),
+        "strategic_synthesis": data.get("strategic_synthesis"),
+        "pitch_text": data.get("pitch_text"),
+        "evidence_based_risks": data.get("evidence_based_risks"),
+        "activation_pairs": data.get("activation_pairs"),
+        "why_proposals": data.get("why_proposals"),
+        "what_proposals": data.get("what_proposals"),
+        "what_progress_proposals": data.get("what_progress_proposals"),
+    }, ensure_ascii=False, default=str)
+    normalized_payload = re.sub(r"\s+", " ", public_payload).lower()
+    unresolved = []
+    for issue in fact_check.get("false_claims_detailed") or []:
+        if not isinstance(issue, dict):
+            continue
+        claim = re.sub(r"\s+", " ", str(issue.get("claim") or "")).strip().lower()
+        if claim and claim in normalized_payload:
+            unresolved.append(str(issue.get("claim_id") or ""))
+    return list(dict.fromkeys(item for item in unresolved if item))
 
 
 def _plain_text_activation_fallback(text: str, prior: dict | None = None) -> dict:
@@ -1028,20 +1420,69 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
         })
 
     financial_findings = []
+    financial_fact_manifest = []
+    evidence_by_url = {
+        str(item.get("url") or item.get("source_url") or "").strip(): item
+        for item in (data.get("evidence_links") or [])
+        if isinstance(item, dict) and str(item.get("url") or item.get("source_url") or "").strip()
+    }
     for item in (data.get("financial_findings") or [])[:20]:
         if not isinstance(item, dict):
             continue
+        source_url = str(item.get("source_url") or item.get("url") or "").strip()
+        assessment = str(
+            item.get("assessment") or item.get("finding") or item.get("summary") or item.get("claim") or ""
+        ).strip()
+        evidence_snippet = str(
+            item.get("evidence_snippet") or item.get("source_quote") or item.get("snippet") or ""
+        ).strip()
+        source_record = evidence_by_url.get(source_url) or {}
+        registry_context = data.get("registry_context") or {}
+        legal_entity = str(
+            item.get("legal_entity")
+            or item.get("entity_name")
+            or source_record.get("legal_entity")
+            or source_record.get("entity_name")
+            or registry_context.get("legal_name")
+            or registry_context.get("current_legal_name")
+            or data.get("companyName")
+            or ""
+        ).strip()
         financial_findings.append({
             "dimension": item.get("dimension") or item.get("category"),
             "finding": item.get("finding") or item.get("summary") or item.get("claim"),
             "metric": item.get("metric") or item.get("label"),
             "value": item.get("value") or item.get("amount"),
-            "evidence_snippet": item.get("evidence_snippet") or item.get("source_quote") or item.get("snippet"),
+            "evidence_snippet": evidence_snippet,
             "source_title": item.get("source_title") or item.get("title"),
-            "source_url": item.get("source_url") or item.get("url"),
+            "source_url": source_url,
             "analysis_verified": item.get("analysis_verified"),
             "generation_eligible": item.get("generation_eligible"),
         })
+        fact_basis = " ".join(value for value in (assessment, evidence_snippet) if value)
+        if fact_basis:
+            financial_fact_manifest.append({
+                "fact_id": "FINFACT-" + uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{data.get('companyName')}|{item.get('dimension')}|{source_url}|{fact_basis}",
+                ).hex[:12].upper(),
+                "dimension": item.get("dimension") or item.get("category"),
+                "assessment": assessment[:1800],
+                "evidence_snippet": evidence_snippet[:1200],
+                "periods": sorted(set(re.findall(r"\b(?:FY\s*)?20\d{2}\b", fact_basis, flags=re.IGNORECASE))),
+                "metric": item.get("metric") or item.get("label"),
+                "value": item.get("value") or item.get("amount"),
+                "source_title": item.get("source_title") or item.get("title"),
+                "source_url": source_url,
+                "canonical_url": source_url.rstrip("/"),
+                "evidence_id": source_record.get("evidence_id") or source_record.get("source_id"),
+                "report_ref": source_record.get("report_ref"),
+                "entity_scope": item.get("entity_scope") or source_record.get("entity_scope") or "unknown",
+                "legal_entity": legal_entity,
+                "analysis_verified": item.get("analysis_verified"),
+                "generation_eligible": item.get("generation_eligible"),
+                "promotion_status": source_record.get("promotion_status"),
+            })
 
     foresight_forces = []
     foresight_data = data.get("strategic_foresight") or {}
@@ -1089,6 +1530,7 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             "financial_confidence": data.get("financial_confidence"),
             "financial_sub_scores": data.get("financial_sub_scores") or {},
             "financial_findings": financial_findings,
+            "financial_fact_manifest": financial_fact_manifest,
         },
         "foresight_context": {
             "forces": foresight_forces,
@@ -1098,6 +1540,7 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
                 "strategic inference and is not proof of company action or deployment."
             ),
         },
+        "generation_premise_manifest": data.get("generation_premise_manifest") or [],
         "evidence_absence_signals": data.get("evidence_absence_signals") or [],
         "evidence_absence_contract": (
             "Absence-of-promoted-evidence signals are deterministic Scanner evidence-state findings. "
@@ -1529,7 +1972,7 @@ def health_check():
 async def find_company_url(name: str):
     """Find the official homepage URL using GPT/Claude web search."""
     prompt = f"What is the official website homepage URL for the organization '{name}'? Return ONLY the URL string (e.g. https://www.example.com). Do not include markdown or explanations."
-    for model_name, provider in (("gpt-5.5", "openai"), ("claude-sonnet-4-6", "anthropic")):
+    for model_name, provider in ((GPT_REASONING_MODEL, "openai"), (CLAUDE_SONNET_MODEL, "anthropic")):
         try:
             if provider == "anthropic":
                 text = call_anthropic_text(prompt, model=model_name, max_tokens=120, timeout=45, web_search=True, max_searches=2)
@@ -2063,6 +2506,12 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             _append_buying_job_log(job_id, f"Company Source Ledger loaded: {stats.get('buying_eligible', 0)} buying-eligible records")
         else:
             _append_buying_job_log(job_id, "No Company Source Ledger found")
+        previous_lookup = buying_storage.get_buying_potential_report(resolved_company)
+        previous_report = previous_lookup.get("report") if previous_lookup.get("exists") else None
+        if previous_report:
+            _append_buying_job_log(job_id, "Previous Buying Insight loaded for same-company continuity recovery")
+        else:
+            _append_buying_job_log(job_id, "No previous Buying Insight found for continuity recovery")
 
         def stage_callback(stage: str, progress: int, message: str):
             set_stage(stage, progress, message)
@@ -2072,6 +2521,7 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             service_kb,
             company_evidence=company_evidence,
             company_source_ledger=company_source_ledger,
+            previous_report=previous_report,
             stage_callback=stage_callback,
         )
 
@@ -2092,6 +2542,8 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             progress=100,
             metadata=metadata,
             confidence=report_json.get("overall_confidence"),
+            reliability_status=report_json.get("reliability_status", {}),
+            publication_status=report_json.get("publication_status"),
             source_counts=report_json.get("source_counts", {}),
             warnings=report_json.get("missing_input_warnings", []),
             completed_at=datetime.utcnow().isoformat(),
@@ -2567,17 +3019,17 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
 
             # Fact-check General Summary against its own input payload
             data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary_factcheck")
-            gs_check = fact_check_general_summary(gs_text, data, company_name)
+            gs_check = fact_check_general_summary(gs_text, data, company_name, generator_model=gs_model)
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
-                gs_model = gs_check["corrected_model"] or gs_model
                 print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
             data["general_summary"] = gs_text
             data["general_summary_model"] = gs_model
             data["general_summary_verified"] = gs_check.get("verified", True)
             data["general_summary_false_claims"] = [
-                fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
+                if isinstance(fc, dict) and fc.get("claim")
             ]
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
@@ -2877,20 +3329,20 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"]}}"""
+{{"activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"]}}"""
 
     old_why = data.get("why_proposals", [])
     old_what = data.get("what_proposals", [])
 
-    # --- Model chain: GPT-5.5 → Claude Sonnet 4.6 ---
+    # --- Model chain: GPT frontier → Claude Sonnet 5 ---
     response_text = ""
     model_used = ""
     start = _time.time()
 
-    for _model in ("gpt-5.5", "claude-sonnet-4-6"):
+    for _model in (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL):
         try:
             print(f"   🔄 [Refresh Proposals] {company_name}: Attempting {_model}...")
-            response_text, model_used = call_json_model_chain(prompt, (_model,), max_tokens=2200, timeout=75)
+            response_text, model_used = call_json_model_chain(prompt, (_model,), max_tokens=2200, timeout=75, validate_json=True)
             ms = int((_time.time() - start) * 1000)
             print(f"   ✅ [Refresh Proposals] {company_name}: {model_used} complete ({ms}ms)")
             break
@@ -3294,6 +3746,7 @@ Do NOT write adaptability archetype labels in diagnostic_summary, evidence_based
 Target: {company_name}
 Financial Health Index: {fin_for_arch} ({"actual financial index" if fin_score is not None else "fallback: using intent score"})
 Summary Confidence: {confidence}/100
+Current Reality Availability: {"unavailable — do not treat the compatibility score or archetype as a current finding" if _s2_unavailable else "current governed result available"}
 
 Evidence Found: {evidence_list}
 Intent Data: {intent_narrative}
@@ -3398,7 +3851,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 The archetype field is audit-only and must not appear in diagnostic_summary, commercial_pitch, why_proposals, what_proposals, or evidence_based_risks.
 Note: why_proposals contains WHY texts, what_proposals contains WHAT_TO_DO texts, and what_progress_proposals contains WHAT_PROGRESS_SHOWS texts. Preserve the same order across all three arrays.
@@ -3420,25 +3873,25 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     resynth_text = ""
     resynth_model_used = ""
 
-    # Primary: GPT 5.5
+    # Primary: configured GPT frontier model
     try:
-        print(f"   🔄 [Clean Re-Synthesis] Attempting gpt-5.5...")
-        resynth_text = _call_openai_text(synthesis_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
-        resynth_model_used = "gpt-5.5"
+        print(f"   🔄 [Clean Re-Synthesis] Attempting {GPT_REASONING_MODEL}...")
+        resynth_text = _call_openai_text(synthesis_prompt, model=GPT_REASONING_MODEL, max_output_tokens=12000, timeout=120)
+        resynth_model_used = GPT_REASONING_MODEL
         resynth_ms = int((time.time() - resynth_start) * 1000)
-        print(f"   ✅ [Clean Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
+        print(f"   ✅ [Clean Re-Synthesis] {GPT_REASONING_MODEL} complete ({resynth_ms}ms)")
     except Exception as gpt_err:
-        print(f"   ❌ [Clean Re-Synthesis] GPT 5.5 failed: {gpt_err}")
+        print(f"   ❌ [Clean Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-    # Fallback: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
+    # Fallback: Claude Sonnet 5 (independent provider — survives OpenAI outages)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not resynth_text and anthropic_key:
         try:
-            print(f"   🔄 [Clean Re-Synthesis] Falling back to Claude Sonnet 4.6...")
+            print(f"   🔄 [Clean Re-Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")
             m_start = time.time()
             sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
             sonnet_resp = sonnet_client.messages.create(
-                model="claude-sonnet-4-6",
+                model=CLAUDE_SONNET_MODEL,
                 max_tokens=4000,
                 messages=[{"role": "user", "content": synthesis_prompt}],
             )
@@ -3446,12 +3899,12 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 if getattr(block, 'type', None) == 'text':
                     resynth_text = block.text
                     break
-            resynth_model_used = "claude-sonnet-4-6"
+            resynth_model_used = CLAUDE_SONNET_MODEL
             resynth_ms = int((time.time() - m_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] Claude Sonnet 4.6 complete ({resynth_ms}ms)")
+            print(f"   ✅ [Clean Re-Synthesis] {CLAUDE_SONNET_MODEL} complete ({resynth_ms}ms)")
         except Exception as sonnet_err:
             resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ❌ [Clean Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
+            print(f"   ❌ [Clean Re-Synthesis] {CLAUDE_SONNET_MODEL} failed: {sonnet_err} ({resynth_ms}ms)")
 
     # Step 4: Parse re-synthesis result and apply
     if resynth_text:
@@ -3561,17 +4014,17 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
                     # Fact-check General Summary against its own input payload
                     data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary_factcheck")
-                    gs_check = fact_check_general_summary(gs_text, data, company_name)
+                    gs_check = fact_check_general_summary(gs_text, data, company_name, generator_model=gs_model)
                     if gs_check.get("corrected_summary"):
                         gs_text = gs_check["corrected_summary"]
-                        gs_model = gs_check["corrected_model"] or gs_model
                         print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
                     data["general_summary"] = gs_text
                     data["general_summary_model"] = gs_model
                     data["general_summary_verified"] = gs_check.get("verified", True)
                     data["general_summary_false_claims"] = [
-                        fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                        fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
+                        if isinstance(fc, dict) and fc.get("claim")
                     ]
                 else:
                     print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
@@ -4809,14 +5262,41 @@ def _execute_scan_pipeline(
         #   Financial:     120s (parallel with reality, non-blocking)
         #   No cross-scan score analysis: historical runs seed URLs only
         #   Synthesis:     protected core budget with adaptive fallback chain
-        #   Final outputs: protected reserve for fact-check, General Summary,
-        #                  save/index; Detailed Report is optional when time is tight.
+        #   Final outputs: independently protected budgets. Earlier final stages
+        #                  cannot consume the Detailed Report or save allocation.
         SCAN_TOTAL_BUDGET = 900
-        CORE_SYNTHESIS_RESERVE = 220
-        FINAL_OUTPUT_RESERVE = 120
-        REALITY_PHASE_MAX_BUDGET = 420
+        CORE_SYNTHESIS_RESERVE = 240
+
+        # Keep the pre-synthesis reservation unchanged. Scanner 2 and Foresight
+        # use this fixed floor, so post-synthesis recovery cannot reduce their
+        # existing search or jury budgets.
+        FINAL_OUTPUT_RESERVE = 260
+
+        # Post-synthesis allocations are soft targets. A stage may borrow up to
+        # its maximum only after all downstream minimum floors remain protected.
+        DIAGNOSIS_CHAIN_BUDGET = 110
+        DIAGNOSIS_CHAIN_MAX = 150
+        ACTIVATION_CHAIN_BUDGET = 170
+        ACTIVATION_CHAIN_MAX = 220
+        INFERENCE_FACT_CHECK_BUDGET = 60
+        INFERENCE_FACT_CHECK_MAX = 80
+        GENERAL_SUMMARY_BUDGET = 95
+        GENERAL_SUMMARY_MAX = 110
+        DETAILED_REPORT_BUDGET = 150
+        DETAILED_REPORT_MAX = 170
+        FINAL_SAVE_BUDGET = 20
+
+        ACTIVATION_MIN_FLOOR = 100
+        INFERENCE_FACT_CHECK_MIN_FLOOR = 45
+        # Generation may use up to 60 seconds while retaining an independent
+        # verifier allocation inside the General Summary stage.
+        GENERAL_SUMMARY_MIN_FLOOR = 85
+        DETAILED_REPORT_MIN_FLOOR = 130
+        FINAL_SAVE_MIN_FLOOR = 20
+        OPERATIONAL_OVERHEAD_RESERVE = 20
+        REALITY_PHASE_MAX_BUDGET = 380
         DETAIL_REPORT_FULL_MIN = 120
-        DETAIL_REPORT_COMPACT_MIN = 75
+        DETAIL_REPORT_COMPACT_MIN = 20
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
         if job_id:
             _update_scan_job(job_id, phase="initializing", progress=5)
@@ -4829,10 +5309,16 @@ def _execute_scan_pipeline(
             return max(0.0, SCAN_TOTAL_BUDGET - _scan_elapsed())
 
         def _remaining_after_final_reserve() -> float:
-            return max(0.0, _scan_remaining() - FINAL_OUTPUT_RESERVE)
+            return max(0.0, _scan_remaining() - FINAL_OUTPUT_RESERVE - OPERATIONAL_OVERHEAD_RESERVE)
 
         def _remaining_after_synthesis_reserves() -> float:
-            return max(0.0, _scan_remaining() - CORE_SYNTHESIS_RESERVE - FINAL_OUTPUT_RESERVE)
+            return max(
+                0.0,
+                _scan_remaining()
+                - CORE_SYNTHESIS_RESERVE
+                - FINAL_OUTPUT_RESERVE
+                - OPERATIONAL_OVERHEAD_RESERVE,
+            )
 
         def _budget_snapshot() -> dict:
             return {
@@ -4842,7 +5328,48 @@ def _execute_scan_pipeline(
                 "after_core_and_final_reserve": int(_remaining_after_synthesis_reserves()),
                 "core_synthesis_reserve": CORE_SYNTHESIS_RESERVE,
                 "final_output_reserve": FINAL_OUTPUT_RESERVE,
+                "operational_overhead_reserve": OPERATIONAL_OVERHEAD_RESERVE,
             }
+
+        final_stage_timing = {
+            "inference_fact_check": {"allocated_seconds": INFERENCE_FACT_CHECK_BUDGET},
+            "general_summary": {"allocated_seconds": GENERAL_SUMMARY_BUDGET},
+            "detailed_report": {"allocated_seconds": DETAILED_REPORT_BUDGET},
+            "save_finalize": {"allocated_seconds": FINAL_SAVE_BUDGET},
+        }
+
+        def _available_for_stage(target_budget: int, max_budget: int, reserve_after: int) -> int:
+            """Return a soft stage budget while preserving downstream floors."""
+            available = max(
+                0,
+                int(_scan_remaining()) - reserve_after - OPERATIONAL_OVERHEAD_RESERVE,
+            )
+            if available <= target_budget:
+                return available
+            return min(max_budget, available)
+
+        def _record_final_stage(stage: str, started_at: float, status: str) -> None:
+            timing = final_stage_timing.setdefault(stage, {})
+            timing["used_seconds"] = round(max(0.0, time.time() - started_at), 2)
+            timing["borrowed_seconds"] = round(
+                max(0.0, timing["used_seconds"] - float(timing.get("allocated_seconds") or 0)),
+                2,
+            )
+            timing["remaining_seconds"] = round(_scan_remaining(), 2)
+            timing["status"] = status
+
+        def _log_stage_allocation(
+            stage: str,
+            target: int,
+            maximum: int,
+            allowed: int,
+            reserve_after: int,
+        ) -> None:
+            print(
+                f"   ⏱️ [Budget] {stage}: target={target}s | max={maximum}s | allowed={allowed}s | "
+                f"borrowable={max(0, allowed - target)}s | downstream_floor={reserve_after}s | "
+                f"global_remaining={int(_scan_remaining())}s"
+            )
 
         def _log_budget_state(label: str) -> None:
             snap = _budget_snapshot()
@@ -4852,7 +5379,7 @@ def _execute_scan_pipeline(
                 f"after_core+final_reserve={snap['after_core_and_final_reserve']}s"
             )
 
-        # Model pipeline: Sonnet 4.6 + Web Search (forensic) | GPT/Claude financial search | Opus/GPT/Sonnet synthesis.
+        # Model pipeline: Sonnet 5 + Web Search (forensic) | GPT/Claude financial search | Opus/GPT/Sonnet synthesis.
 
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
@@ -4992,8 +5519,9 @@ def _execute_scan_pipeline(
             - elapsed_so_far
             - CORE_SYNTHESIS_RESERVE
             - FINAL_OUTPUT_RESERVE
+            - OPERATIONAL_OVERHEAD_RESERVE
         )
-        reality_budget = max(180, min(REALITY_PHASE_MAX_BUDGET, reality_budget))
+        reality_budget = max(0, min(REALITY_PHASE_MAX_BUDGET, reality_budget))
         reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
         scanner_research_loops = 2
         evidence_jury_counts = (previous_context or {}).get("company_evidence_db_jury_counts", {}) if isinstance(previous_context, dict) else {}
@@ -5028,7 +5556,8 @@ def _execute_scan_pipeline(
         )
         s2_start = time.time()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
             reality_future = executor.submit(
                 x_ray_search, companyName, target_url,
                 model_id=None, intent_score=intent_results["score"],
@@ -5064,13 +5593,18 @@ def _execute_scan_pipeline(
                     "confidence_score": 0,
                     "washing_flag": False,
                     "current_reality_unavailable": True,
+                    "reality_score_valid": False,
+                    "classification_valid": False,
                     "history_reuse_policy": "source_urls_only",
                 }
 
             # Financial search is non-blocking. Prior Scanner financial scores are
-            # not a valid substitute for a failed current lookup.
+            # not a valid substitute for a failed current lookup. Do not let an
+            # unfinished financial request borrow from the protected core/final
+            # stage floors.
             try:
-                financial_results = financial_future.result(timeout=120)
+                financial_wait = max(1, min(120, int(_remaining_after_synthesis_reserves())))
+                financial_results = financial_future.result(timeout=financial_wait)
             except Exception as e:
                 print(f"   [Financial Health] Failed (non-critical): {e}")
                 financial_results = {
@@ -5082,6 +5616,38 @@ def _execute_scan_pipeline(
                     "current_financial_unavailable": True,
                     "history_reuse_policy": "disabled",
                 }
+        finally:
+            # A ThreadPoolExecutor context manager waits for running work on exit,
+            # which would silently defeat the outer stage deadlines.
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        if not isinstance(reality_results, dict):
+            print(
+                f"   ⚠️ [Scanner 2 Boundary] Expected object result, got "
+                f"{type(reality_results).__name__}; current reality marked unavailable."
+            )
+            reality_results = {
+                "score": 50,
+                "checklist": [],
+                "links": [],
+                "key_people": [],
+                "is_simulated": True,
+                "confidence_score": 0,
+                "washing_flag": False,
+                "current_reality_unavailable": True,
+                "reality_score_valid": False,
+                "classification_valid": False,
+                "forensic_fallback_reason": "malformed_scanner_two_result",
+            }
+        reality_results["checklist"] = _safe_dict_list(
+            reality_results.get("checklist"), "reality_results.checklist"
+        )
+        reality_results["links"] = _safe_dict_list(
+            reality_results.get("links"), "reality_results.links"
+        )
+        reality_results["key_people"] = _safe_dict_list(
+            reality_results.get("key_people"), "reality_results.key_people"
+        )
 
         if (
             reality_results.get("is_simulated")
@@ -5117,17 +5683,21 @@ def _execute_scan_pipeline(
                     f"{len(previous_links)} historical URL candidate(s) with all prior verdicts reset."
                 )
                 reality_results = {
-                    "score": existing_data.get("reality_score", 50) if existing_data else 50,
-                    "checklist": existing_data.get("reality_checklist", []) if existing_data else [],
+                    "score": 50,
+                    "checklist": [],
                     "links": previous_links,
                     "key_people": [],
-                    "is_simulated": False,
-                    "confidence_score": max(25, int((existing_data or {}).get("confidence_score", 0) or 0)),
-                    "washing_flag": (existing_data or {}).get("washing_flag", False),
-                    "washing_type": (existing_data or {}).get("washing_type"),
+                    "is_simulated": True,
+                    "confidence_score": 0,
+                    "washing_flag": False,
+                    "washing_type": None,
+                    "current_reality_unavailable": True,
+                    "reality_score_valid": False,
+                    "classification_valid": False,
                     "historical_revalidation_pending": True,
                     "forensic_fallback": True,
-                    "forensic_fallback_reason": "empty_live_result_reused_previous_evidence",
+                    "forensic_fallback_reason": "empty_live_result_retained_historical_urls_for_revalidation",
+                    "history_reuse_policy": "source_urls_only",
                 }
             elif company_evidence_candidates:
                 seeded_links = []
@@ -5155,15 +5725,21 @@ def _execute_scan_pipeline(
                         "checklist": [],
                         "links": seeded_links,
                         "key_people": [],
-                        "is_simulated": False,
-                        "confidence_score": 30,
+                        "is_simulated": True,
+                        "confidence_score": 0,
                         "washing_flag": False,
                         "washing_type": None,
+                        "current_reality_unavailable": True,
+                        "reality_score_valid": False,
+                        "classification_valid": False,
+                        "historical_revalidation_pending": True,
                         "forensic_fallback": True,
-                        "forensic_fallback_reason": "empty_live_result_used_company_evidence_db",
+                        "forensic_fallback_reason": "empty_live_result_retained_company_evidence_db_urls_for_revalidation",
+                        "history_reuse_policy": "source_urls_only",
                     }
 
-        print(f"   ✅ [Scanner 2] Reality check complete in {int((time.time() - s2_start) * 1000)}ms → Score: {reality_results['score']}/100, Confidence: {reality_results.get('confidence_score', 0)}/100")
+        _reality_log_value = "unavailable" if reality_results.get("current_reality_unavailable") else f"{reality_results['score']}/100"
+        print(f"   ✅ [Scanner 2] Reality check complete in {int((time.time() - s2_start) * 1000)}ms → Score: {_reality_log_value}, Confidence: {reality_results.get('confidence_score', 0)}/100")
         if financial_results.get("financial_index") is not None:
             print(f"   ✅ [Financial Health] Index: {financial_results['financial_index']}/100, Confidence: {financial_results['financial_confidence']}/100")
 
@@ -5173,14 +5749,20 @@ def _execute_scan_pipeline(
         _s2_score = reality_results.get("score", 0)
         _s2_conf = reality_results.get("confidence_score", 0)
         _s2_empty = (_s2_score == 0 and _s2_conf == 0)
-        if _s2_empty:
-            print(f"   ⚠️ [Scanner 2] Empty result detected (score=0, confidence=0) — will flag scan_quality='empty_reality'")
+        _s2_unavailable = bool(reality_results.get("current_reality_unavailable") or _s2_empty)
+        reality_results["reality_score_valid"] = not _s2_unavailable
+        reality_results["classification_valid"] = not _s2_unavailable
+        if _s2_unavailable:
+            print(
+                "   ⚠️ [Scanner 2] Current governed reality is unavailable. "
+                "Neutral compatibility values are excluded from current-score and classification claims."
+            )
 
         # Cross-scan score drift is intentionally not analyzed. Scanner telemetry
         # can change after model/prompt revisions and is not a company trend.
         reality_results["cross_scan_reasoning"] = "disabled"
 
-        gap = intent_results["score"] - reality_results["score"]
+        gap = None if _s2_unavailable else intent_results["score"] - reality_results["score"]
         confidence = reality_results.get("confidence_score", 50)
         washing_flag = reality_results.get("washing_flag", False)
         washing_type = reality_results.get("washing_type", None)
@@ -5216,7 +5798,7 @@ def _execute_scan_pipeline(
         # --- LOGIC CONSISTENCY CHECK ---
         # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.
         # It implies they are doing MORE than they say.
-        if reality_results["score"] >= intent_results["score"]:
+        if not _s2_unavailable and reality_results["score"] >= intent_results["score"]:
             if washing_flag:
                 print(f"   [Logic Override] Washing Flag set to FALSE. Reality ({reality_results['score']}) >= Intent ({intent_results['score']}). Reality exceeds narrative.")
             washing_flag = False
@@ -5240,7 +5822,9 @@ def _execute_scan_pipeline(
         # --- EARLY ARCHETYPE (needed for foresight before synthesis step) ---
         fin_score_early = financial_results.get("financial_index")
         fin_for_archetype_early = fin_score_early if fin_score_early is not None else intent_results["score"]
-        if reality_results["score"] >= 50:
+        if _s2_unavailable:
+            archetype = None
+        elif reality_results["score"] >= 50:
             archetype = "Thriving" if fin_for_archetype_early >= 50 else "Modernizing"
         else:
             archetype = "Cash Cow" if fin_for_archetype_early >= 50 else "At Risk"
@@ -5259,6 +5843,10 @@ def _execute_scan_pipeline(
             "source": "scanner2_plus_financial_before_foresight",
         }
         reality_results["frozen_classification_snapshot"] = frozen_classification_snapshot
+        reality_results["frozen_classification_snapshot"]["valid"] = not _s2_unavailable
+        reality_results["frozen_classification_snapshot"]["availability_status"] = (
+            "unavailable" if _s2_unavailable else "current_governed"
+        )
 
         # --- STEP 2.7: STRATEGIC FORESIGHT ---
         foresight_data = None
@@ -5421,13 +6009,34 @@ def _execute_scan_pipeline(
         why_proposals = []
         what_proposals = []
         what_progress_proposals = []
-        scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
+        activation_generation_meta = {
+            "status": "not_attempted",
+            "synthesis_parse_status": "not_attempted",
+            "activation_parse_status": "not_attempted",
+            "provider": "",
+            "fallback_reason": "",
+            "duration_seconds": 0,
+        }
+        scan_quality = "current_reality_unavailable" if _s2_unavailable else "complete"
+        diagnosis_generation_status = "not_attempted"
+        diagnosis_duration_seconds = 0
+        diagnosis_generation_meta = {
+            "status": "not_attempted",
+            "provider": "",
+            "parse_status": "not_attempted",
+            "fallback_reason": "",
+            "attempts": [],
+            "duration_seconds": 0,
+        }
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
-        has_synth_key = anthropic_key
+        has_synth_key = bool(
+            anthropic_key
+            or clean_env_var(os.environ.get("GPT_API_KEY"))
+            or clean_env_var(os.environ.get("OPENAI_API_KEY"))
+        )
         if has_synth_key:
             try:
-                claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 synthesis_source_pool = company_evidence_candidates + (reality_results.get("links") or []) + financial_evidence_links
                 verified_links = _analysis_evidence_links(synthesis_source_pool)
@@ -5639,7 +6248,7 @@ Respond with valid JSON only. Required fields:
 Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. The archetype field is audit-only and must not appear in diagnostic_summary or evidence_based_risks. Do not add a foresight paragraph.
 Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
-                # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
+                # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT frontier → Sonnet 5 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -5649,93 +6258,133 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
                 # Dynamic per-attempt timeout: share remaining budget across
                 # fallback attempts while protecting final report/export phases.
-                _synth_available = max(0, int(synth_remaining) - FINAL_OUTPUT_RESERVE)
-                if _synth_available >= 360:
-                    OPUS_SYNTH_TIMEOUT = 120
-                    GPT_SYNTH_TIMEOUT = 120
-                    SONNET_SYNTH_TIMEOUT = 90
-                elif _synth_available >= 240:
-                    OPUS_SYNTH_TIMEOUT = 90
-                    GPT_SYNTH_TIMEOUT = 90
-                    SONNET_SYNTH_TIMEOUT = 60
-                elif _synth_available >= 180:
-                    OPUS_SYNTH_TIMEOUT = 75
-                    GPT_SYNTH_TIMEOUT = 75
-                    SONNET_SYNTH_TIMEOUT = 50
-                elif _synth_available >= 120:
-                    OPUS_SYNTH_TIMEOUT = 60
-                    GPT_SYNTH_TIMEOUT = 45
-                    SONNET_SYNTH_TIMEOUT = 40
-                elif _synth_available >= 75:
+                _synth_available = max(
+                    0,
+                    int(synth_remaining) - FINAL_OUTPUT_RESERVE - OPERATIONAL_OVERHEAD_RESERVE,
+                )
+                diagnosis_downstream_floor = (
+                    ACTIVATION_MIN_FLOOR
+                    + INFERENCE_FACT_CHECK_MIN_FLOOR
+                    + GENERAL_SUMMARY_MIN_FLOOR
+                    + DETAILED_REPORT_MIN_FLOOR
+                    + FINAL_SAVE_MIN_FLOOR
+                )
+                _diagnosis_available = _available_for_stage(
+                    DIAGNOSIS_CHAIN_BUDGET,
+                    DIAGNOSIS_CHAIN_MAX,
+                    diagnosis_downstream_floor,
+                )
+                _diagnosis_deadline = time.time() + _diagnosis_available
+                _log_stage_allocation(
+                    "AI Diagnosis",
+                    DIAGNOSIS_CHAIN_BUDGET,
+                    DIAGNOSIS_CHAIN_MAX,
+                    _diagnosis_available,
+                    diagnosis_downstream_floor,
+                )
+
+                def _diagnosis_budget_left() -> int:
+                    return max(0, int(_diagnosis_deadline - time.time()))
+
+                _gpt_available = bool(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+                _sonnet_available = bool(anthropic_key)
+                if _gpt_available and not _sonnet_available:
                     OPUS_SYNTH_TIMEOUT = 0
-                    GPT_SYNTH_TIMEOUT = 45
-                    SONNET_SYNTH_TIMEOUT = 35
-                else:
+                    GPT_SYNTH_TIMEOUT = min(110, _diagnosis_available)
+                    SONNET_SYNTH_TIMEOUT = 0
+                elif _sonnet_available and not _gpt_available:
+                    OPUS_SYNTH_TIMEOUT = min(70, max(0, _diagnosis_available - 30))
+                    GPT_SYNTH_TIMEOUT = 0
+                    SONNET_SYNTH_TIMEOUT = max(0, _diagnosis_available - OPUS_SYNTH_TIMEOUT)
+                elif _diagnosis_available >= 130:
+                    OPUS_SYNTH_TIMEOUT = 70
+                    GPT_SYNTH_TIMEOUT = 35 if _gpt_available else 0
+                    SONNET_SYNTH_TIMEOUT = (
+                        max(25, _diagnosis_available - OPUS_SYNTH_TIMEOUT - GPT_SYNTH_TIMEOUT)
+                        if _sonnet_available else 0
+                    )
+                elif _diagnosis_available >= 95:
+                    OPUS_SYNTH_TIMEOUT = 0
+                    GPT_SYNTH_TIMEOUT = min(55, _diagnosis_available - 35) if _gpt_available else 0
+                    SONNET_SYNTH_TIMEOUT = (
+                        max(30, _diagnosis_available - GPT_SYNTH_TIMEOUT)
+                        if _sonnet_available else 0
+                    )
+                elif _diagnosis_available >= 55:
                     OPUS_SYNTH_TIMEOUT = 0
                     GPT_SYNTH_TIMEOUT = 0
-                    SONNET_SYNTH_TIMEOUT = max(25, min(35, _synth_available - 5))
+                    SONNET_SYNTH_TIMEOUT = _diagnosis_available if _sonnet_available else 0
+                else:
+                    OPUS_SYNTH_TIMEOUT = GPT_SYNTH_TIMEOUT = SONNET_SYNTH_TIMEOUT = 0
 
-                _use_opus = OPUS_SYNTH_TIMEOUT > 0
+                _use_opus = OPUS_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
                 _use_gpt = GPT_SYNTH_TIMEOUT > 0
-                _use_sonnet = SONNET_SYNTH_TIMEOUT > 0
+                _use_sonnet = SONNET_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
                 _synth_chain_budget = min(
-                    _synth_available,
+                    _diagnosis_available,
                     OPUS_SYNTH_TIMEOUT + GPT_SYNTH_TIMEOUT + SONNET_SYNTH_TIMEOUT,
                 )
 
                 def _synthesis_budget_left() -> int:
-                    return max(0, int(SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE))
+                    return max(
+                        0,
+                        int(
+                            SCAN_TOTAL_BUDGET
+                            - (time.time() - scan_start)
+                            - FINAL_OUTPUT_RESERVE
+                            - OPERATIONAL_OVERHEAD_RESERVE
+                        ),
+                    )
 
                 print(
                     f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
                     f"protected reserve: {FINAL_OUTPUT_RESERVE}s | "
-                    f"chain budget: {_synth_chain_budget}s | "
+                    f"diagnosis budget: {_synth_chain_budget}s | activation reserve: {ACTIVATION_CHAIN_BUDGET}s | "
                     f"timeouts: opus={OPUS_SYNTH_TIMEOUT}s,gpt={GPT_SYNTH_TIMEOUT}s,sonnet={SONNET_SYNTH_TIMEOUT}s | "
                     f"mode: {'full' if _use_opus else 'gpt/sonnet' if _use_gpt else 'sonnet-only' if _use_sonnet else 'skip'}"
                 )
 
-                if not _use_sonnet:
+                if not (_use_opus or _use_gpt or _use_sonnet):
                     scan_quality = "partial_synthesis"
                     print(
                         f"   ⏭ [Synthesis] Only {_synth_available}s available before final-output reserve "
                         f"— skipping all synthesis models, scan stored as partial"
                     )
                 else:
-                    def _synth_opus():
-                        return claude_client.messages.create(
-                            model="claude-opus-4-8",
-                            max_tokens=16000,
-                            thinking={"type": "adaptive"},
-                            extra_body={"output_config": {"effort": "xhigh"}},
-                            messages=[{"role": "user", "content": synthesis_prompt}]
-                        )
-
                     if _use_opus:
+                        attempt_started = time.time()
                         try:
                             _opus_timeout = min(
                                 OPUS_SYNTH_TIMEOUT,
-                                max(30, _synthesis_budget_left() - 10),
+                                max(8, _diagnosis_budget_left()),
                             )
                             print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {_opus_timeout}s)...")
-                            synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            synth_future = synth_pool.submit(_synth_opus)
-                            try:
-                                response = synth_future.result(timeout=_opus_timeout)
-                                # Extended thinking response: [ThinkingBlock, TextBlock]
-                                # Extract the text block (skip thinking blocks)
-                                response_text = ""
-                                if response.content:
-                                    for block in response.content:
-                                        if getattr(block, 'type', None) == 'text':
-                                            response_text = block.text
-                                            break
-                                print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
-                                synth_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] claude-opus-4-8 timed out after {_opus_timeout}s")
-                                raise Exception(f"Opus timeout after {_opus_timeout}s")
-                            synth_pool.shutdown(wait=False)
+                            response_text = call_anthropic_text(
+                                synthesis_prompt,
+                                model=CLAUDE_OPUS_MODEL,
+                                max_tokens=6000,
+                                timeout=_opus_timeout,
+                                max_retries=0,
+                                reasoning_effort="xhigh",
+                                log_label="Scanner Diagnosis Opus",
+                            )
+                            diagnosis_generation_meta["provider"] = CLAUDE_OPUS_MODEL
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_OPUS_MODEL,
+                                "status": "completed",
+                                "timeout_seconds": _opus_timeout,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                            })
+                            print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                         except Exception as opus_err:
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_OPUS_MODEL,
+                                "status": "failed",
+                                "timeout_seconds": OPUS_SYNTH_TIMEOUT,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                                "error": str(opus_err)[:240],
+                            })
+                            diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_OPUS_MODEL} failed: {opus_err}"
                             print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
                     else:
                         print(
@@ -5743,45 +6392,56 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                             f"reserved for shorter fallback path"
                         )
 
-                    # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
-                    if not response_text and _use_gpt and _synthesis_budget_left() > 30:
+                    # Fallback 1: configured GPT frontier model (text-only synthesis from verified evidence)
+                    if not response_text and _use_gpt and _diagnosis_budget_left() >= 8:
+                        attempt_started = time.time()
                         try:
                             _gpt_timeout = min(
                                 GPT_SYNTH_TIMEOUT,
-                                max(30, _synthesis_budget_left() - 10),
+                                max(8, _diagnosis_budget_left()),
                             )
-                            print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {_gpt_timeout}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to {GPT_REASONING_MODEL} (timeout: {_gpt_timeout}s)...")
                             gpt_start = time.time()
 
-                            def _synth_gpt():
-                                return _call_openai_text(
-                                    synthesis_prompt,
-                                    model="gpt-5.5",
-                                    max_output_tokens=12000,
-                                    timeout=_gpt_timeout,
-                                )
-
-                            gpt_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            gpt_future = gpt_pool.submit(_synth_gpt)
-                            try:
-                                response_text = gpt_future.result(timeout=_gpt_timeout)
-                            except concurrent.futures.TimeoutError:
-                                gpt_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] GPT 5.5 timed out after {_gpt_timeout}s")
-                                raise Exception(f"GPT 5.5 timeout after {_gpt_timeout}s")
-                            gpt_pool.shutdown(wait=False)
-                            print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
+                            response_text = call_openai_text(
+                                synthesis_prompt,
+                                model=GPT_REASONING_MODEL,
+                                max_output_tokens=7000,
+                                timeout=_gpt_timeout,
+                                max_retries=0,
+                                reasoning_effort="medium",
+                                text_verbosity="medium",
+                                log_label="Scanner Diagnosis GPT Fallback",
+                            )
+                            diagnosis_generation_meta["provider"] = GPT_REASONING_MODEL
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": GPT_REASONING_MODEL,
+                                "status": "completed",
+                                "timeout_seconds": _gpt_timeout,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                            })
+                            print(f"   ✅ [Synthesis] {GPT_REASONING_MODEL} succeeded in {int((time.time() - gpt_start) * 1000)}ms")
                         except Exception as gpt_err:
-                            print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": GPT_REASONING_MODEL,
+                                "status": "failed",
+                                "timeout_seconds": GPT_SYNTH_TIMEOUT,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                                "error": str(gpt_err)[:240],
+                            })
+                            diagnosis_generation_meta["fallback_reason"] = f"{GPT_REASONING_MODEL} failed: {gpt_err}"
+                            print(f"   ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
-                    if not response_text and _use_sonnet and _synthesis_budget_left() > 20:
+                    # Independent-provider fallback remains available after either
+                    # Opus or GPT failure. Provider availability must not suppress it.
+                    if not response_text and _use_sonnet and _diagnosis_budget_left() >= 8:
+                        attempt_started = time.time()
                         try:
                             _sonnet_timeout = min(
                                 SONNET_SYNTH_TIMEOUT,
-                                max(25, _synthesis_budget_left() - 10),
+                                max(8, _diagnosis_budget_left()),
                             )
-                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {_sonnet_timeout}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL} (timeout: {_sonnet_timeout}s)...")
                             m_start = time.time()
 
                             _sonnet_system = (
@@ -5792,37 +6452,82 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 "from minor details like tool names in job ads."
                             )
 
-                            def _synth_sonnet():
-                                return claude_client.messages.create(
-                                    model="claude-sonnet-4-6",
-                                    max_tokens=4000,
-                                    system=_sonnet_system,
-                                    messages=[{"role": "user", "content": synthesis_prompt}],
-                                )
-
-                            m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            m_future = m_pool.submit(_synth_sonnet)
-                            try:
-                                sonnet_resp = m_future.result(timeout=_sonnet_timeout)
-                                for block in sonnet_resp.content:
-                                    if getattr(block, 'type', None) == 'text':
-                                        response_text = block.text
-                                        break
-                                print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
-                                m_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {_sonnet_timeout}s")
-                            m_pool.shutdown(wait=False)
+                            response_text = call_anthropic_text(
+                                f"{_sonnet_system}\n\n{synthesis_prompt}",
+                                model=CLAUDE_SONNET_MODEL,
+                                max_tokens=5000,
+                                timeout=_sonnet_timeout,
+                                max_retries=0,
+                                reasoning_effort="medium",
+                                log_label="Scanner Diagnosis Sonnet Fallback",
+                            )
+                            diagnosis_generation_meta["provider"] = CLAUDE_SONNET_MODEL
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_SONNET_MODEL,
+                                "status": "completed",
+                                "timeout_seconds": _sonnet_timeout,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                            })
+                            print(f"   ✅ [Synthesis] {CLAUDE_SONNET_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
                         except Exception as sonnet_err:
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_SONNET_MODEL,
+                                "status": "failed",
+                                "timeout_seconds": SONNET_SYNTH_TIMEOUT,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                                "error": str(sonnet_err)[:240],
+                            })
+                            diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_SONNET_MODEL} failed: {sonnet_err}"
                             print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
 
-                if not response_text and scan_quality == "complete":
+                if not response_text:
+                    # Diagnosis availability must not gate the separately governed
+                    # Strategic Synthesis / Activation stage. A structured placeholder
+                    # carries the availability state while the next stage reasons from
+                    # governed evidence, financial context and foresight directly.
+                    response_text = json.dumps({
+                        "diagnostic_summary": "AI Summary Unavailable",
+                        "evidence_based_risks": [],
+                        "reality_score": reality_results.get("score", 50),
+                        "archetype": "",
+                    })
+                    diagnosis_generation_status = "unavailable"
+                else:
+                    diagnosis_generation_status = "generated"
+                diagnosis_duration_seconds = round(time.time() - synth_start, 2)
+                diagnosis_generation_meta.update({
+                    "status": diagnosis_generation_status,
+                    "duration_seconds": diagnosis_duration_seconds,
+                    "parse_status": "pending" if response_text else "unavailable",
+                    "allowed_seconds": _diagnosis_available,
+                    "borrowed_seconds": max(0, _diagnosis_available - DIAGNOSIS_CHAIN_BUDGET),
+                })
+
+                if diagnosis_generation_status == "unavailable" and scan_quality == "complete":
                     scan_quality = "partial_synthesis"
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
+                    if not payload:
+                        # A provider may return usable diagnosis prose without the
+                        # requested wrapper. Preserve it as diagnosis text, but do not
+                        # let wrapper/parse quality gate the independently governed
+                        # Strategic Synthesis and Activation stage.
+                        payload = json.dumps({
+                            "diagnostic_summary": response_text,
+                            "evidence_based_risks": [],
+                            "reality_score": reality_results.get("score", 50),
+                        })
+                        diagnosis_generation_meta["parse_status"] = "plain_text_fallback"
                     if payload:
                          json_data = json.loads(payload, strict=False)
+                         if (
+                             diagnosis_generation_status == "generated"
+                             and diagnosis_generation_meta.get("parse_status") != "plain_text_fallback"
+                         ):
+                             diagnosis_generation_meta["parse_status"] = "valid"
+                         elif diagnosis_generation_status == "unavailable":
+                             diagnosis_generation_meta["parse_status"] = "unavailable_placeholder"
                          summary = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary))))
                          pitch = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch))
                          evidence_based_risks = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks))
@@ -5839,7 +6544,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                          scanner2_reality = reality_results["score"]
                          scanner_intent = intent_results["score"]
 
-                         if opus_reality is not None and isinstance(opus_reality, (int, float)):
+                         if not _s2_unavailable and opus_reality is not None and isinstance(opus_reality, (int, float)):
                              opus_reality = max(0, min(100, int(opus_reality)))
                              delta_r = abs(opus_reality - scanner2_reality)
                              reality_results["scanner2_reality_score"] = scanner2_reality
@@ -5876,9 +6581,14 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                          # Written diagnosis/summary prose must not contain archetype labels.
                          opus_archetype = json_data.get("archetype")
                          final_reality = reality_results["score"]
-                         expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
+                         expected_archetype = None if _s2_unavailable else (("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk"))
 
-                         if opus_archetype and opus_archetype != expected_archetype:
+                         if _s2_unavailable and opus_archetype:
+                             print(
+                                 f"   ℹ️ [Archetype Audit] Model wrote '{opus_archetype}', but current "
+                                 "Scanner 2 reality is unavailable. Classification remains unavailable."
+                             )
+                         elif opus_archetype and opus_archetype != expected_archetype:
                              print(f"   ⚖️ [Archetype Audit] Model wrote '{opus_archetype}' but frozen scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Written prose keeps archetype labels out.")
                          elif opus_archetype:
                              print(f"   ✅ [Archetype Audit] Model archetype '{opus_archetype}' matches frozen score-derived '{expected_archetype}'")
@@ -5888,12 +6598,28 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                          why_proposals = strip_archetype_labels_from_text(why_proposals)
                          what_proposals = strip_archetype_labels_from_text(what_proposals)
 
-                         # --- STRATEGIC ACTIVATION (WHY / WHAT / PITCH) ---
-                         # This is deliberately split from diagnosis. The first
-                         # call is the strategic judge; this second call activates
-                         # only the locked diagnosis, risks, evidence, and KB.
-                         _activation_left = _synthesis_budget_left()
-                         if summary and _activation_left > 60:
+                         # --- STRATEGIC SYNTHESIS, THEN ACTIVATION ---
+                         # These are separate governed tasks. Diagnosis availability
+                         # may enrich them, but never gates their execution.
+                         _activation_reserve_after = (
+                             INFERENCE_FACT_CHECK_MIN_FLOOR
+                             + GENERAL_SUMMARY_MIN_FLOOR
+                             + DETAILED_REPORT_MIN_FLOOR
+                             + FINAL_SAVE_MIN_FLOOR
+                         )
+                         _activation_left = _available_for_stage(
+                             ACTIVATION_CHAIN_BUDGET,
+                             ACTIVATION_CHAIN_MAX,
+                             _activation_reserve_after,
+                         )
+                         _log_stage_allocation(
+                             "Strategic Synthesis + Activation",
+                             ACTIVATION_CHAIN_BUDGET,
+                             ACTIVATION_CHAIN_MAX,
+                             _activation_left,
+                             _activation_reserve_after,
+                         )
+                         if _activation_left >= 55:
                              generation_graph_input = {
                                  "evidence_links": verified_links,
                                  "foresight_links": foresight_links,
@@ -5902,7 +6628,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                              }
                              attach_evidence_graph(generation_graph_input)
                              generation_manifest = generation_graph_input.get("evidence_manifest", [])
-                             activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=40)
+                             activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=18)
                              activation_classification_context = build_classification_namespaces(
                                  adaptability_archetype=expected_archetype,
                                  foresight_force_profile={
@@ -5923,24 +6649,19 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                      )
                                  except Exception as fs_err:
                                      print(f"   ⚠️ [Activation] Foresight context unavailable: {type(fs_err).__name__}: {fs_err}")
-                             activation_prompt = f"""You are writing the Strategic Synthesis and Activation layer for {companyName}.
-The AI Diagnosis below is LOCKED. The Knowledge Base is the mandatory baseline. You may turn the diagnosis into WHY/WHAT proposals and a concise pitch, but you may not introduce new facts.
+                             activation_context = f"""COMPANY: {companyName}
 
-### KNOWLEDGE BASE BASELINE — MANDATORY
-{knowledge_context}
-
-### LOCKED DIAGNOSTIC CONTRACT
+### GOVERNED CURRENT CONTEXT
 Reality score: {reality_results["score"]}
 Intent score: {intent_results["score"]}
 Financial context: {financial_context or "No financial interpretation available."}
-Washing / contradiction context: {washing_context or "No washing flag detected."}
-Archetype is audit-only and intentionally omitted from this writing context. Do not write labels such as Thriving, Modernizing, Cash Cow, or At Risk in strategic_synthesis, pitch, WHY, or WHAT.
+Contradiction context: {washing_context or "No washing flag detected."}
+Diagnosis status: {diagnosis_generation_status}
+Diagnosis: {summary if diagnosis_generation_status == "generated" else "Unavailable; use governed evidence directly."}
+Evidence-based risks: {json.dumps(evidence_based_risks, ensure_ascii=False)}
 
-Diagnosis:
-{summary}
-
-Evidence-based risks:
-{json.dumps(evidence_based_risks, ensure_ascii=False)}
+### KNOWLEDGE BASE BASELINE — MANDATORY
+{knowledge_context}
 
 ### CLASSIFICATION NAMESPACES
 {json.dumps(activation_classification_context, ensure_ascii=False)}
@@ -5950,119 +6671,238 @@ Evidence-based risks:
 {negative_findings_context}
 {foresight_context}
 {evidence_absence_context}
+"""
 
-### ACTIVATION RULES
-1. Use the Knowledge Base terminology and proposal logic as the baseline.
-2. Ground every WHY/WHAT/Pitch claim in the locked diagnosis, risks, or evidence packet above.
-3. Do NOT add new facts, people, metrics, events, client names, partnerships, or timelines.
-4. Always produce 2-3 paired WHY/WHAT items. If evidence is thin, frame pairs as validation or discovery triggers instead of omitting them.
-5. WHY1 must pair with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
-6. Keep activation suggestive but evidence-bound: proposals, not promises.
-7. Write strategic_synthesis as the explicit reasoning bridge between CURRENT COMPANY REALITY and EXTERNAL FORESIGHT PRESSURES.
-8. A macro pressure never proves that the company has acted. Use modal language such as "may increase pressure", "creates a question", or "could affect".
-9. Preserve contradictions between current-reality premises; explain what they may mean instead of averaging them away.
-10. Do not compare Scanner outputs across scans or discuss Scanner performance.
-11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
-12. If you use an absence-of-promoted-evidence signal, phrase it as an evidence/proof gap, never as proof that the capability is absent.
-13. If partial/contextual support exists, say what is partially supported and what remains unconfirmed; do not write absolute "no source verifies" wording for a broader capability.
-14. Treat evidence limits as one qualifier, not the whole thesis. Spend most of the synthesis on bounded interpretation, priorities, and pressure-readiness fit.
-
-### STRATEGIC SYNTHESIS
-Write 300-500 words. This is the deepest company-specific reasoning layer, not a sales pitch.
-It must include:
-- Current adaptation thesis: the company's present position in one clear opening sentence.
-- 2-3 strategic tensions grounded in the locked diagnosis, risks, financial context, or evidence gaps.
-- At least 2 external foresight pressure links, each connected to a current company readiness or proof condition.
-- At least 1 financial-capacity implication.
-- At least 2 time horizons (for example: "next 6-12 months" and "12-36 months").
-- 1 uncertainty or invalidation condition that would change the thesis.
-Do not use section headings inside strategic_synthesis. Write coherent executive prose.
-
-### PITCH
-Write a direct cold-outreach message to a C-level executive at {companyName}.
-- 90-110 words.
-- Exactly 3 short paragraphs separated by \\n\\n.
-- Opening hook / concrete proposal / closing CTA.
-- No generic service names.
-
-### WHY / WHAT
-Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair because evidence is thin.
-- WHY = why this matters for the customer: connect a detected challenge/problem to end-value, future strategy, risk, cost of inaction, or missed opportunity.
-- WHAT_TO_DO = the outcome or deliverable state to achieve next. It must describe what becomes clarified, evidenced, decision-ready, or observable for the customer; do not describe HOW to deliver it.
-- WHAT_PROGRESS_SHOWS = observable proof of progress after the activity. It may be qualitative or measurable, but do not invent numeric KPI targets unless already evidenced.
-- The legacy "what" field must contain the same outcome/deliverable-state text as WHAT_TO_DO for backward compatibility.
-- Do NOT lead WHAT with run, conduct, facilitate, perform, execute, or build.
-- Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Evolving Modernization tactics, TAC codes, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
-- Each WHY/WHAT field: 1-2 sentences.
-- Each pair must have exactly one theme_type:
-  - current_status: current evidence, operating-model, financial, proof, or portfolio reality.
-  - foresight_driven: external pressure combined with current readiness or uncertainty.
-  - proactive_opportunity: a bounded hypothesis or discovery trigger to validate, not a claim.
-- Each pair must also include sales_use with the same allowed values: current_status, foresight_driven, proactive_opportunity.
-- If evidence is thin, frame the pair as a validation/discovery trigger instead of omitting it.
-- WHY1 pairs with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
-
-### OUTPUT
-Respond with valid JSON only:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
+                             strategic_synthesis_prompt = activation_context + f"""
+### TASK: STRATEGIC SYNTHESIS ONLY
+Write 300-500 words as exactly 4-5 short paragraphs separated by \\n\\n inside the JSON string.
+Paragraph 1: current adaptation thesis. Paragraph 2: 2-3 strategic tensions.
+Paragraph 3: at least two external pressure/readiness links. Paragraph 4: financial
+capacity and at least two time horizons. Optional paragraph 5: invalidation condition.
+Use evidence IDs already present. Macro pressure never proves company action. Treat
+absence as a proof gap, not proof of absence. Do not write archetype labels, sales pitch,
+WHY/WHAT, section headings, Scanner comparisons, or new facts.
+Return only the schema-constrained strategic_synthesis object.
+"""
 
                              activation_text = ""
-                             activation_timeout = min(95, max(50, _activation_left - 25))
+                             activation_provider = ""
+                             activation_fallback_reason = ""
+                             activation_policy = policy_for("activation_strategic_synthesis")
+                             activation_chain_started = time.time()
+                             activation_chain_cap = int(_activation_left)
+                             activation_chain_deadline = activation_chain_started + activation_chain_cap
+
+                             def _activation_chain_remaining() -> int:
+                                 return max(0, int(activation_chain_deadline - time.time()))
+
+                             synthesis_timeout = min(110, max(45, activation_chain_cap - 80))
+                             synthesis_only = ""
                              try:
-                                 print(f"   🔄 [Activation] Generating Strategic Synthesis/WHY/WHAT/Pitch from locked diagnosis via {GPT_PRO_MODEL} (timeout: {activation_timeout}s)...")
+                                 print(
+                                     f"   🔄 [Activation:Synthesis] {GPT_PRO_MODEL} Pro "
+                                     f"(timeout={synthesis_timeout}s, chain_cap={activation_chain_cap}s)..."
+                                 )
                                  act_start = time.time()
-
-                                 def _activation_gpt():
-                                     return _call_openai_text(
-                                         activation_prompt,
-                                         model=GPT_PRO_MODEL,
-                                         max_output_tokens=5000,
-                                         timeout=activation_timeout,
-                                     )
-
-                                 act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                 act_future = act_pool.submit(_activation_gpt)
-                                 try:
-                                     activation_text = act_future.result(timeout=activation_timeout)
-                                 except concurrent.futures.TimeoutError:
-                                     act_pool.shutdown(wait=False)
-                                     print(f"   ⏰ [Activation] {GPT_PRO_MODEL} timed out after {activation_timeout}s")
-                                     raise Exception(f"GPT activation timeout after {activation_timeout}s")
-                                 act_pool.shutdown(wait=False)
-                                 print(f"   ✅ [Activation] {GPT_PRO_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
+                                 synthesis_text = call_openai_text(
+                                     strategic_synthesis_prompt,
+                                     model=GPT_PRO_MODEL,
+                                     max_output_tokens=16000,
+                                     timeout=synthesis_timeout,
+                                     max_retries=0,
+                                     reasoning_mode=str(activation_policy.get("reasoning_mode") or "pro"),
+                                     reasoning_effort=str(activation_policy.get("effort") or "high"),
+                                     text_verbosity="medium",
+                                     json_schema=_STRATEGIC_SYNTHESIS_SCHEMA,
+                                     json_schema_name="scanner_strategic_synthesis",
+                                     log_label="Strategic Synthesis",
+                                 )
+                                 synthesis_json = _parse_activation_json(synthesis_text) or {}
+                                 synthesis_only = sanitize_inference_wording(str(synthesis_json.get("strategic_synthesis") or "").strip())
+                                 if not synthesis_only:
+                                     raise ValueError("Strategic Synthesis response did not contain strategic_synthesis")
+                                 strategic_synthesis = synthesis_only
+                                 activation_generation_meta["synthesis_parse_status"] = "valid"
+                                 print(f"   ✅ [Activation:Synthesis] Complete ({int((time.time() - act_start) * 1000)}ms)")
                              except Exception as act_gpt_err:
-                                 print(f"   ❌ [Activation] {GPT_PRO_MODEL} failed: {act_gpt_err}")
+                                 activation_fallback_reason = f"{GPT_PRO_MODEL} synthesis failed: {act_gpt_err}"
+                                 activation_generation_meta["synthesis_parse_status"] = "failed"
+                                 print(f"   ❌ [Activation:Synthesis] {activation_fallback_reason}")
 
-                             if not activation_text and _synthesis_budget_left() > 50:
-                                 sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
+                             if not synthesis_only and _activation_chain_remaining() >= 75:
                                  try:
-                                     print(f"   🔄 [Activation] Falling back to Claude Sonnet 4.6 (timeout: {sonnet_activation_timeout}s)...")
+                                     # Preserve enough time for activation pairs and a
+                                     # bounded Pitch-only repair after synthesis fallback.
+                                     fallback_timeout = min(45, _activation_chain_remaining() - 75)
+                                     fallback_text = call_anthropic_text(
+                                         strategic_synthesis_prompt,
+                                         model=CLAUDE_SONNET_MODEL,
+                                         max_tokens=5000,
+                                         timeout=max(20, fallback_timeout),
+                                         max_retries=0,
+                                         reasoning_effort="high",
+                                         json_schema=_STRATEGIC_SYNTHESIS_SCHEMA,
+                                         json_schema_name="scanner_strategic_synthesis_fallback",
+                                         log_label="Strategic Synthesis Sonnet Fallback",
+                                     )
+                                     fallback_json = _parse_activation_json(fallback_text) or {}
+                                     synthesis_only = sanitize_inference_wording(
+                                         str(fallback_json.get("strategic_synthesis") or "").strip()
+                                     )
+                                     if not synthesis_only:
+                                         raise ValueError("Sonnet fallback returned no strategic_synthesis")
+                                     strategic_synthesis = synthesis_only
+                                     activation_generation_meta["synthesis_parse_status"] = "valid_fallback"
+                                 except Exception as synthesis_fallback_err:
+                                     activation_fallback_reason += f"; Sonnet synthesis failed: {synthesis_fallback_err}"
+                                     print(f"   ❌ [Activation:Synthesis] Sonnet fallback failed: {synthesis_fallback_err}")
+
+                             chain_remaining = _activation_chain_remaining()
+                             pitch_repair_reserve = 25
+                             sonnet_activation_timeout = min(
+                                 50,
+                                 max(0, chain_remaining - pitch_repair_reserve),
+                             )
+                             if sonnet_activation_timeout >= 18:
+                                 try:
+                                     sonnet_prompt = activation_context + f"""
+### LOCKED STRATEGIC SYNTHESIS
+{synthesis_only or "Unavailable. Use the governed context directly and keep every pair question-led."}
+
+### TASK: WHY/WHAT PAIRS AND PITCH ONLY
+Generate 2-3 paired activation items and one 90-110 word, three-paragraph C-level pitch.
+WHY explains customer end-value, strategic consequence, cost of inaction, or missed
+opportunity. WHAT_TO_DO describes an outcome/deliverable state, never a method or HOW.
+WHAT_PROGRESS_SHOWS gives observable proof. Keep legacy what identical to what_to_do.
+Do not lead WHAT with run, conduct, facilitate, perform, execute, or build. Do not name
+workshops, diagnostics, assessments, tactics, TAC codes, or consulting methods.
+Use current_status, foresight_driven, or proactive_opportunity consistently for
+theme_type and sales_use. Use only evidence/foresight IDs present above. Do not invent
+timing, people, metrics, events, services, or facts. Return only the activation schema.
+The Pitch is customer-safe commercial language, not an audit note. Write exactly three
+short paragraphs separated by blank lines: current position and tension; future pressure
+and business consequence; response direction and customer value. Do not mention Scanner,
+sources, evidence registers, promoted/public/verified evidence, proof gaps, evidence gaps,
+or claim that an unverified capability is absent. Keep uncertainty modal and proportionate.
+"""
+                                     print(
+                                         f"   🔄 [Activation:Pairs] {CLAUDE_SONNET_MODEL} "
+                                         f"(timeout={sonnet_activation_timeout}s, synthesis_available={bool(synthesis_only)})..."
+                                     )
                                      act_start = time.time()
-
-                                     def _activation_sonnet():
-                                         return claude_client.messages.create(
-                                             model="claude-sonnet-4-6",
-                                             max_tokens=4500,
-                                             system="You are a conservative activation writer. Use only the locked diagnosis, evidence packet, and Knowledge Base. Return JSON only.",
-                                             messages=[{"role": "user", "content": activation_prompt}],
-                                         )
-
-                                     act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                     act_future = act_pool.submit(_activation_sonnet)
-                                     try:
-                                         sonnet_resp = act_future.result(timeout=sonnet_activation_timeout)
-                                         for block in sonnet_resp.content:
-                                             if getattr(block, 'type', None) == 'text':
-                                                 activation_text = block.text
-                                                 break
-                                     except concurrent.futures.TimeoutError:
-                                         act_pool.shutdown(wait=False)
-                                         print(f"   ⏰ [Activation] Claude Sonnet 4.6 timed out after {sonnet_activation_timeout}s")
-                                     act_pool.shutdown(wait=False)
-                                     if activation_text:
-                                         print(f"   ✅ [Activation] Claude Sonnet 4.6 complete ({int((time.time() - act_start) * 1000)}ms)")
+                                     sonnet_text = call_anthropic_text(
+                                         sonnet_prompt,
+                                         model=CLAUDE_SONNET_MODEL,
+                                         max_tokens=6000,
+                                         timeout=sonnet_activation_timeout,
+                                         max_retries=0,
+                                         reasoning_effort="medium",
+                                         json_schema=_ACTIVATION_OUTPUT_SCHEMA,
+                                         json_schema_name="scanner_activation_pairs",
+                                         log_label="Strategic Activation Pairs",
+                                     )
+                                     sonnet_json = _parse_activation_json(sonnet_text)
+                                     if not sonnet_json:
+                                         raise ValueError("Structured activation response was not parseable")
+                                     activation_generation_meta["activation_parse_status"] = "valid"
+                                     raw_pairs = _activation_pair_candidates(sonnet_json)
+                                     if len(raw_pairs) < 2 and _activation_chain_remaining() >= 18:
+                                         recovery_prompt = activation_context + f"""
+### MISSING-PAIR RECOVERY
+Existing pair: {json.dumps(raw_pairs[:1], ensure_ascii=False)}
+Generate exactly one distinct additional activation pair using the same WHY/WHAT
+contract. Return the normal activation schema with one pair; leave pitch and proposal
+arrays empty. No web research and no new facts.
+"""
+                                         try:
+                                             recovery_text = call_anthropic_text(
+                                                 recovery_prompt,
+                                                 model=CLAUDE_SONNET_MODEL,
+                                                 max_tokens=2200,
+                                                 timeout=min(22, _activation_chain_remaining()),
+                                                 max_retries=0,
+                                                 reasoning_effort="medium",
+                                                 json_schema=_ACTIVATION_OUTPUT_SCHEMA,
+                                                 json_schema_name="scanner_activation_pair_recovery",
+                                                 log_label="Strategic Activation Missing Pair Recovery",
+                                             )
+                                             recovery_json = _parse_activation_json(recovery_text) or {}
+                                             recovered_pairs = _activation_pair_candidates(recovery_json)
+                                             if recovered_pairs:
+                                                 sonnet_json["activation_pairs"] = raw_pairs + recovered_pairs[:1]
+                                                 activation_generation_meta["missing_pair_recovery"] = "model_recovered"
+                                         except Exception as pair_recovery_err:
+                                             activation_generation_meta["missing_pair_recovery"] = f"failed: {pair_recovery_err}"
+                                     sonnet_json["strategic_synthesis"] = synthesis_only
+                                     activation_text = json.dumps(sonnet_json, ensure_ascii=False)
+                                     synthesis_provider = (
+                                         GPT_PRO_MODEL
+                                         if activation_generation_meta.get("synthesis_parse_status") == "valid"
+                                         else CLAUDE_SONNET_MODEL
+                                     )
+                                     activation_provider = f"{synthesis_provider}+{CLAUDE_SONNET_MODEL}"
+                                     print(f"   ✅ [Activation:Pairs] Complete ({int((time.time() - act_start) * 1000)}ms)")
                                  except Exception as act_sonnet_err:
-                                     print(f"   ❌ [Activation] Claude Sonnet 4.6 failed: {act_sonnet_err}")
+                                     activation_generation_meta["activation_parse_status"] = "failed"
+                                     print(f"   ❌ [Activation:Pairs] {CLAUDE_SONNET_MODEL} failed: {act_sonnet_err}")
+                                     activation_fallback_reason = "; ".join(filter(None, [
+                                         activation_fallback_reason,
+                                         f"{CLAUDE_SONNET_MODEL} activation failed: {act_sonnet_err}",
+                                     ]))
+                                     # Schema/transport failures are provider-specific. Retry only
+                                     # the activation task with the standard GPT route while the
+                                     # locked synthesis and shared deadline remain unchanged.
+                                     if _activation_chain_remaining() >= 18:
+                                         try:
+                                             gpt_activation_timeout = min(45, _activation_chain_remaining())
+                                             print(
+                                                 f"   🔄 [Activation:Pairs] {GPT_REASONING_MODEL} fallback "
+                                                 f"(timeout={gpt_activation_timeout}s)..."
+                                             )
+                                             gpt_activation_text = call_openai_text(
+                                                 sonnet_prompt,
+                                                 model=GPT_REASONING_MODEL,
+                                                 max_output_tokens=6000,
+                                                 timeout=gpt_activation_timeout,
+                                                 max_retries=0,
+                                                 reasoning_effort="medium",
+                                                 text_verbosity="medium",
+                                                 json_schema=_ACTIVATION_OUTPUT_SCHEMA,
+                                                 json_schema_name="scanner_activation_pairs_fallback",
+                                                 log_label="Strategic Activation Pairs GPT Fallback",
+                                             )
+                                             gpt_activation_json = _parse_activation_json(gpt_activation_text)
+                                             if not gpt_activation_json:
+                                                 raise ValueError("GPT activation fallback was not parseable")
+                                             gpt_activation_json["strategic_synthesis"] = synthesis_only
+                                             activation_text = json.dumps(gpt_activation_json, ensure_ascii=False)
+                                             synthesis_provider = (
+                                                 GPT_PRO_MODEL
+                                                 if activation_generation_meta.get("synthesis_parse_status") == "valid"
+                                                 else CLAUDE_SONNET_MODEL
+                                             )
+                                             activation_provider = f"{synthesis_provider}+{GPT_REASONING_MODEL}"
+                                             activation_generation_meta["activation_parse_status"] = "valid_fallback"
+                                             activation_fallback_reason += "; GPT activation fallback succeeded"
+                                         except Exception as gpt_activation_err:
+                                             activation_fallback_reason += f"; GPT activation fallback failed: {gpt_activation_err}"
+                                             print(f"   ❌ [Activation:Pairs] GPT fallback failed: {gpt_activation_err}")
+                             activation_generation_meta.update({
+                                 "status": (
+                                     "pending_validation" if activation_text
+                                     else "synthesis_complete_activation_failed" if synthesis_only
+                                     else "unavailable"
+                                 ),
+                                 "provider": activation_provider,
+                                 "fallback_reason": activation_fallback_reason,
+                                 "duration_seconds": int(time.time() - activation_chain_started),
+                                 "allowed_seconds": activation_chain_cap,
+                                 "borrowed_seconds": max(0, activation_chain_cap - ACTIVATION_CHAIN_BUDGET),
+                             })
+                             print(
+                                 f"   ⏱️ [Activation] Chain complete in {activation_generation_meta['duration_seconds']}s "
+                                 f"(cap={activation_chain_cap}s, provider={activation_provider or 'none'})"
+                             )
 
                              if activation_text:
                                  prior_activation = {
@@ -6074,22 +6914,23 @@ Respond with valid JSON only:
                                      "what_progress_proposals": what_progress_proposals,
                                  }
                                  activation_json = _parse_activation_json(activation_text)
-                                 if not activation_json and _synthesis_budget_left() > 25:
+                                 if not activation_json and _activation_chain_remaining() > 18:
                                      try:
-                                         repair_timeout = min(35, max(18, _synthesis_budget_left() - 10))
+                                         repair_timeout = min(35, _activation_chain_remaining())
                                          print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
                                          repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
 Do not add facts. Preserve the meaning. Required keys:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "outcome or deliverable state, not HOW/method language", "what_progress_shows": "observable proof of progress"}}], "why_proposals": ["..."], "what_proposals": ["what_to_do outcome/deliverable-state texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "outcome or deliverable state, not HOW/method language", "what_progress_shows": "observable proof of progress", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["..."], "what_proposals": ["what_to_do outcome/deliverable-state texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
 Do not write method-led WHAT text such as run, conduct, workshop, diagnostic, assessment, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning.
 
 TEXT TO REPAIR:
 {activation_text[:7000]}"""
                                          repaired_text = call_openai_text(
                                              repair_prompt,
-                                             model="gpt-5.4",
+                                             model=GPT_VERIFIER_MODEL,
                                              max_output_tokens=2600,
                                              timeout=repair_timeout,
+                                             max_retries=0,
                                          )
                                          activation_json = _parse_activation_json(repaired_text)
                                      except Exception as repair_err:
@@ -6114,13 +6955,159 @@ TEXT TO REPAIR:
                                      what_proposals = activation_norm["what_proposals"]
                                  if activation_norm.get("what_progress_proposals"):
                                      what_progress_proposals = activation_norm["what_progress_proposals"]
-                                 if pitch or why_proposals or what_proposals or strategic_synthesis:
+
+                                 pitch_contract_issues = _pitch_contract_issues(pitch)
+                                 activation_generation_meta["pitch_contract_issues_initial"] = pitch_contract_issues
+                                 if pitch_contract_issues and 2 <= len(activation_pairs) <= 3:
+                                     locked_pitch_context = {
+                                         "strategic_synthesis": strategic_synthesis,
+                                         "activation_pairs": activation_pairs,
+                                     }
+                                     pitch_rewrite_prompt = f"""You are editing only the customer-facing C-level Pitch.
+The Strategic Synthesis and activation pairs below are locked. Do not regenerate, alter,
+or add activation pairs. Do not add facts, timing, metrics, services, methods, or causal
+claims that are not present in the locked material.
+
+LOCKED MATERIAL:
+{json.dumps(locked_pitch_context, ensure_ascii=False)}
+
+CURRENT PITCH:
+{pitch}
+
+CONTRACT DEFECTS:
+{json.dumps(pitch_contract_issues, ensure_ascii=False)}
+
+Return a 90-110 word Pitch in exactly three short paragraphs separated by blank lines:
+1. current company position and customer-relevant tension;
+2. supported future pressure and proportionate business consequence;
+3. outcome-led response direction and end value.
+
+Use customer-safe language. Do not mention Scanner, source/evidence mechanics, promoted,
+public or verified evidence, proof/evidence gaps, or assert that an unverified capability
+is absent. Keep hypotheses modal. Return only the pitch schema.
+"""
+                                     pitch_rewrite_errors = []
+                                     for pitch_model, pitch_provider in (
+                                         (CLAUDE_SONNET_MODEL, "anthropic"),
+                                         (GPT_REASONING_MODEL, "openai"),
+                                     ):
+                                         minimum_viable = 12 if pitch_provider == "anthropic" else 18
+                                         if _activation_chain_remaining() < minimum_viable:
+                                             break
+                                         try:
+                                             pitch_timeout = min(25, _activation_chain_remaining())
+                                             if pitch_provider == "anthropic":
+                                                 pitch_raw = call_anthropic_text(
+                                                     pitch_rewrite_prompt,
+                                                     model=pitch_model,
+                                                     max_tokens=1600,
+                                                     timeout=pitch_timeout,
+                                                     max_retries=0,
+                                                     reasoning_effort="low",
+                                                     json_schema=_PITCH_ONLY_SCHEMA,
+                                                     json_schema_name="scanner_pitch_only_recovery",
+                                                     log_label="Strategic Pitch Recovery",
+                                                 )
+                                             else:
+                                                 pitch_raw = call_openai_text(
+                                                     pitch_rewrite_prompt,
+                                                     model=pitch_model,
+                                                     max_output_tokens=1800,
+                                                     timeout=pitch_timeout,
+                                                     max_retries=0,
+                                                     reasoning_effort="low",
+                                                     text_verbosity="low",
+                                                     json_schema=_PITCH_ONLY_SCHEMA,
+                                                     json_schema_name="scanner_pitch_only_recovery",
+                                                     log_label="Strategic Pitch Recovery Fallback",
+                                                 )
+                                             pitch_json = _parse_activation_json(pitch_raw) or {}
+                                             candidate_pitch = sanitize_inference_wording(
+                                                 str(pitch_json.get("commercial_pitch") or "").strip()
+                                             )
+                                             candidate_severity = _pitch_contract_severity(candidate_pitch)
+                                             if candidate_severity["hard"]:
+                                                 raise ValueError(
+                                                     "Pitch-only recovery retained blocking defects: "
+                                                     + ", ".join(candidate_severity["hard"])
+                                                 )
+                                             pitch = candidate_pitch
+                                             activation_generation_meta["pitch_recovery"] = {
+                                                 "status": "recovered",
+                                                 "model": pitch_model,
+                                                 "initial_issues": pitch_contract_issues,
+                                                 "remaining_soft_issues": candidate_severity["soft"],
+                                             }
+                                             print(
+                                                 f"   ✅ [Activation:Pitch] Contract recovered with {pitch_model} "
+                                                 f"({len(pitch.split())} words)"
+                                             )
+                                             break
+                                         except Exception as pitch_rewrite_err:
+                                             pitch_rewrite_errors.append(f"{pitch_model}: {pitch_rewrite_err}")
+                                     final_pitch_severity = _pitch_contract_severity(pitch)
+                                     if final_pitch_severity["hard"]:
+                                         pitch = "Pitch Unavailable"
+                                         activation_generation_meta["pitch_recovery"] = {
+                                             "status": "failed",
+                                             "initial_issues": pitch_contract_issues,
+                                             "errors": pitch_rewrite_errors,
+                                         }
+                                     elif final_pitch_severity["soft"]:
+                                         activation_generation_meta["pitch_recovery"] = {
+                                             "status": "retained_with_warning",
+                                             "initial_issues": pitch_contract_issues,
+                                             "remaining_soft_issues": final_pitch_severity["soft"],
+                                             "errors": pitch_rewrite_errors,
+                                         }
+                                         print(
+                                             "   ⚠️ [Activation:Pitch] Retaining customer-safe Pitch with "
+                                             f"soft format warning(s): {', '.join(final_pitch_severity['soft'])}"
+                                         )
+
+                                 final_pitch_severity = _pitch_contract_severity(pitch)
+                                 activation_generation_meta["pitch_contract_issues_final"] = final_pitch_severity["issues"]
+                                 activation_generation_meta["pitch_contract_hard_issues"] = final_pitch_severity["hard"]
+                                 activation_generation_meta["pitch_contract_warnings"] = final_pitch_severity["soft"]
+                                 activation_contract_complete = bool(
+                                     strategic_synthesis
+                                     and 2 <= len(activation_pairs) <= 3
+                                     and pitch
+                                     and pitch != "Pitch Unavailable"
+                                     and _pitch_contract_complete(pitch)
+                                 )
+                                 activation_generation_meta["status"] = (
+                                     "completed_with_pitch_warning"
+                                     if activation_contract_complete and final_pitch_severity["soft"]
+                                     else "completed" if activation_contract_complete
+                                     else "synthesis_complete_activation_failed" if strategic_synthesis
+                                     else "unavailable"
+                                 )
+                                 if activation_contract_complete:
                                      print(
                                          f"   ✅ [Activation] Grounded activation complete "
-                                         f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
+                                         f"(provider={activation_provider or 'unknown'}, why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
-                         elif summary:
-                             print(f"   ⏭ [Activation] Budget < 60s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
+                                 else:
+                                     print(
+                                         "   ⚠️ [Activation] Strategic Synthesis completed, but the activation "
+                                         f"contract is incomplete (pairs={len(activation_pairs)}, "
+                                         f"pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'})."
+                                     )
+                             elif synthesis_only:
+                                 activation_generation_meta["status"] = "synthesis_complete_activation_failed"
+                                 activation_generation_meta["provider"] = activation_provider or GPT_PRO_MODEL
+                                 print("   ⚠️ [Activation] Strategic Synthesis completed; activation pairs and Pitch are unavailable.")
+                             activation_generation_meta["duration_seconds"] = int(
+                                 time.time() - activation_chain_started
+                             )
+                             activation_generation_meta["fallback_reason"] = activation_fallback_reason
+                         else:
+                             activation_generation_meta.update({
+                                 "status": "skipped_budget",
+                                 "fallback_reason": f"Only {_activation_left}s available after protected downstream floors.",
+                             })
+                             print(f"   ⏭ [Activation] Only {_activation_left}s available after downstream floors")
 
                     else:
                          summary = response_text
@@ -6170,7 +7157,9 @@ TEXT TO REPAIR:
         # --- FINAL ARCHETYPE (computed from finalized scores) ---
         fin_score = financial_results.get("financial_index")
         fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
-        if reality_results["score"] >= 50:
+        if _s2_unavailable:
+            archetype = None
+        elif reality_results["score"] >= 50:
             archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
         else:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
@@ -6244,6 +7233,9 @@ TEXT TO REPAIR:
             "reality_score": reality_results["score"],
             "reality_gap": gap,
             "confidence_score": confidence,
+            "current_reality_unavailable": _s2_unavailable,
+            "reality_score_valid": not _s2_unavailable,
+            "classification_valid": not _s2_unavailable,
             "archetype": archetype,
             "frozen_classification_snapshot": reality_results.get("frozen_classification_snapshot", {}),
             "classification_context": classification_context,
@@ -6268,6 +7260,11 @@ TEXT TO REPAIR:
                 "ai_readiness": ai_readiness_evidence,
                 "absence_signals": final_evidence_absence_signals,
             },
+            # Preserve the exact premise namespace supplied to generation. The
+            # managed evidence pass may legitimately recompute a different final
+            # evidence-state view, but verification must resolve the IDs that the
+            # generated analysis actually received.
+            "generation_premise_manifest": evidence_absence_signals,
             "evidence_absence_signals": final_evidence_absence_signals,
             "ai_readiness_evidence_note": ai_readiness_evidence.get("warning", ""),
             "key_people": key_people,
@@ -6281,6 +7278,8 @@ TEXT TO REPAIR:
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
             "what_progress_proposals": what_progress_proposals,
+            "activation_generation": activation_generation_meta,
+            "ai_diagnosis_status": diagnosis_generation_status,
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),
@@ -6292,6 +7291,37 @@ TEXT TO REPAIR:
             "strategic_foresight": foresight_data,
             "foresight_links": foresight_links,
             "scan_quality": scan_quality,
+                "scan_timing": {
+                    "total_budget_seconds": SCAN_TOTAL_BUDGET,
+                    "core_synthesis_reserve_seconds": CORE_SYNTHESIS_RESERVE,
+                    "final_output_reserve_seconds": FINAL_OUTPUT_RESERVE,
+                    "operational_overhead_reserve_seconds": OPERATIONAL_OVERHEAD_RESERVE,
+                    "core_stages": {
+                        "ai_diagnosis": {
+                            "allocated_seconds": DIAGNOSIS_CHAIN_BUDGET,
+                            "maximum_seconds": DIAGNOSIS_CHAIN_MAX,
+                            "allowed_seconds": diagnosis_generation_meta.get("allowed_seconds", 0),
+                            "borrowed_seconds": diagnosis_generation_meta.get("borrowed_seconds", 0),
+                            "used_seconds": diagnosis_duration_seconds,
+                            "status": diagnosis_generation_status,
+                            "provider": diagnosis_generation_meta.get("provider", ""),
+                            "parse_status": diagnosis_generation_meta.get("parse_status", "not_attempted"),
+                            "attempts": diagnosis_generation_meta.get("attempts", []),
+                        },
+                        "strategic_activation": {
+                            "allocated_seconds": ACTIVATION_CHAIN_BUDGET,
+                            "maximum_seconds": ACTIVATION_CHAIN_MAX,
+                            "allowed_seconds": activation_generation_meta.get("allowed_seconds", 0),
+                            "borrowed_seconds": activation_generation_meta.get("borrowed_seconds", 0),
+                            "used_seconds": activation_generation_meta.get("duration_seconds", 0),
+                            "status": activation_generation_meta.get("status", "not_attempted"),
+                            "provider": activation_generation_meta.get("provider", ""),
+                            "synthesis_parse_status": activation_generation_meta.get("synthesis_parse_status", "not_attempted"),
+                            "activation_parse_status": activation_generation_meta.get("activation_parse_status", "not_attempted"),
+                        },
+                    },
+                    "final_stages": final_stage_timing,
+                },
             # Exact bibliography supplied to generation. Verification uses this
             # frozen packet instead of reconstructing a different bibliography.
             "generation_evidence_manifest": generation_manifest or generation_company_manifest,
@@ -6317,6 +7347,56 @@ TEXT TO REPAIR:
         full_data["hallucination_risk"] = summary_check["risk"]
         full_data["hallucination_score"] = summary_check["score"]
 
+        if diagnosis_generation_status == "unavailable":
+            full_data["quality_notes"].append(
+                "AI Diagnosis was unavailable; downstream synthesis was attempted directly from governed evidence."
+            )
+        elif diagnosis_generation_meta.get("provider") != CLAUDE_OPUS_MODEL:
+            full_data["quality_notes"].append(
+                f"AI Diagnosis used the governed fallback provider ({diagnosis_generation_meta.get('provider') or 'unknown'})."
+            )
+        activation_status = activation_generation_meta.get("status")
+        if activation_status not in {"completed", "completed_with_pitch_warning"}:
+            if activation_generation_meta.get("status") == "synthesis_complete_activation_failed":
+                if len(full_data.get("activation_pairs") or []) >= 2 and full_data.get("pitch_text") == "Pitch Unavailable":
+                    full_data["quality_notes"].append(
+                        "Strategic Synthesis and activation pairs completed, but the Pitch did not satisfy its governed customer-facing contract."
+                    )
+                else:
+                    full_data["quality_notes"].append(
+                        "Strategic Synthesis completed, but the required activation coverage was incomplete."
+                    )
+            else:
+                full_data["quality_notes"].append(
+                    "Strategic Synthesis or Activation was unavailable within its protected stage deadline."
+                )
+            if scan_quality == "complete":
+                scan_quality = "partial_synthesis"
+        elif activation_status == "completed_with_pitch_warning":
+            warning_text = ", ".join(activation_generation_meta.get("pitch_contract_warnings") or [])
+            full_data["quality_notes"].append(
+                "The customer-safe Pitch was retained with a soft presentation warning"
+                + (f" ({warning_text})." if warning_text else ".")
+            )
+        elif len(full_data.get("activation_pairs") or []) < 2:
+            full_data["quality_notes"].append(
+                "Strategic Activation did not satisfy the required two-pair coverage contract."
+            )
+            if scan_quality == "complete":
+                scan_quality = "partial_synthesis"
+        elif activation_generation_meta.get("synthesis_parse_status") == "valid_fallback":
+            full_data["quality_notes"].append(
+                f"Strategic Synthesis used the governed fallback provider ({CLAUDE_SONNET_MODEL})."
+            )
+        if activation_generation_meta.get("missing_pair_recovery"):
+            full_data["quality_notes"].append(
+                "One missing Strategic Activation pair required bounded no-web recovery."
+            )
+        if diagnosis_generation_meta.get("parse_status") == "plain_text_fallback":
+            full_data["quality_notes"].append(
+                "AI Diagnosis returned usable prose without its requested JSON wrapper; downstream synthesis remained independent."
+            )
+
         if summary_check["risk"] == "high":
             print(f"   ⚠️ [Reality Check] HIGH hallucination risk (score {summary_check['score']}/100)! Flags: {summary_check['flags']}")
             print(f"   ℹ️ [Reality Check] Heuristic is diagnostic only — proceeding to AI fact-check for independent verification.")
@@ -6330,9 +7410,43 @@ TEXT TO REPAIR:
         # Strategic Synthesis are inference layers: the verifier may flag unsupported
         # premises or weak reasoning, but it must not purge valid evidence or replace
         # the whole analysis with a factual correction.
-        _fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-        if _fc_remaining < 60:
-            print(f"   ⏭ [Fact-Check] Budget < 60s remaining ({int(_fc_remaining)}s) — skipping, summary stored as unverified")
+        _fc_stage_start = time.time()
+        _fc_reserve_after = GENERAL_SUMMARY_MIN_FLOOR + DETAILED_REPORT_MIN_FLOOR + FINAL_SAVE_MIN_FLOOR
+        _fc_budget = _available_for_stage(
+            INFERENCE_FACT_CHECK_BUDGET,
+            INFERENCE_FACT_CHECK_MAX,
+            _fc_reserve_after,
+        )
+        _log_stage_allocation(
+            "Inference Fact-Check",
+            INFERENCE_FACT_CHECK_BUDGET,
+            INFERENCE_FACT_CHECK_MAX,
+            _fc_budget,
+            _fc_reserve_after,
+        )
+        final_stage_timing["inference_fact_check"]["allowed_seconds"] = _fc_budget
+        _analysis_available_for_check = bool(
+            (full_data.get("ai_diagnosis_status") != "unavailable" and full_data.get("summary_text"))
+            or full_data.get("evidence_based_risks")
+            or full_data.get("strategic_synthesis")
+            or full_data.get("activation_pairs")
+            or (full_data.get("pitch_text") and full_data.get("pitch_text") != "Pitch Unavailable")
+        )
+        if not _analysis_available_for_check:
+            print("   ⏭ [Fact-Check] No generated analytical section is available; placeholder was not fact-checked")
+            fact_check = {
+                "verified": False,
+                "verification_status": "unavailable_no_analysis",
+                "fact_check_skipped": True,
+                "false_claims": [],
+                "false_claims_detailed": [],
+                "audit_notes": [],
+                "audit_notes_detailed": [],
+                "fact_check_model": "skipped_no_analysis",
+                "fact_check_time_ms": 0,
+            }
+        elif _fc_budget < 20:
+            print(f"   ⏭ [Fact-Check] Protected stage budget unavailable ({_fc_budget}s) — summary stored as unverified")
             fact_check = {
                 "verified": False,
                 "fact_check_skipped": True,
@@ -6346,9 +7460,12 @@ TEXT TO REPAIR:
             if scan_quality == "complete":
                 scan_quality = "unverified"
         else:
-            print(f"   🔄 [Fact-Check] Independent GPT/Claude fact-check ({int(_fc_remaining)}s remaining)...")
+            print(f"   🔄 [Fact-Check] Independent GPT/Claude fact-check (protected budget: {_fc_budget}s)...")
             fact_check = ai_fact_check_summary(
-                summary_text=full_data["summary_text"],
+                summary_text=(
+                    "" if full_data.get("ai_diagnosis_status") == "unavailable"
+                    else full_data["summary_text"]
+                ),
                 evidence_links=managed_evidence_links,
                 company_name=companyName,
                 pitch_text=full_data.get("pitch_text", ""),
@@ -6356,12 +7473,22 @@ TEXT TO REPAIR:
                 analysis_sections={
                     "evidence_based_risks": full_data.get("evidence_based_risks") or [],
                     "strategic_synthesis": full_data.get("strategic_synthesis") or "",
+                    "activation_pairs": full_data.get("activation_pairs") or [],
+                    "why_proposals": full_data.get("why_proposals") or [],
+                    "what_proposals": full_data.get("what_proposals") or [],
+                    "what_progress_proposals": full_data.get("what_progress_proposals") or [],
                 },
                 document_label="AI Diagnosis, Evidence-Based Risks, and Strategic Synthesis",
                 foresight_links=full_data.get("foresight_links", []),
                 evidence_manifest=full_data.get("generation_evidence_manifest", []),
                 claim_graph=full_data.get("claim_graph", []),
+                time_budget_seconds=_fc_budget,
             )
+        _record_final_stage(
+            "inference_fact_check",
+            _fc_stage_start,
+            "skipped" if fact_check.get("fact_check_skipped") else fact_check.get("verification_status", "completed"),
+        )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
             "verification_status": fact_check.get("verification_status", "unavailable"),
@@ -6373,7 +7500,28 @@ TEXT TO REPAIR:
             "model": fact_check["fact_check_model"],
             "time_ms": fact_check["fact_check_time_ms"],
             "evidence_handoff_failures": fact_check.get("evidence_handoff_failures", []),
+            "premise_reference_failures": fact_check.get("premise_reference_failures", []),
+            "corrected_claim_ids": fact_check.get("corrected_claim_ids", []),
+            "unresolved_handoff_ids": fact_check.get("unresolved_handoff_ids", []),
         }
+
+        applied_correction_ids = []
+        if not fact_check.get("fact_check_skipped") and fact_check.get("false_claims"):
+            applied_correction_ids = _apply_fact_check_corrections(full_data, fact_check)
+            full_data["ai_verification"]["corrected_claim_ids"] = list(dict.fromkeys(
+                (fact_check.get("corrected_claim_ids") or []) + applied_correction_ids
+            ))
+            full_data["ai_verification"]["unresolved_public_claim_ids"] = (
+                _unresolved_fact_check_claim_ids(full_data, fact_check)
+            )
+            if (
+                applied_correction_ids
+                and not full_data["ai_verification"]["unresolved_public_claim_ids"]
+                and not fact_check.get("evidence_handoff_failures")
+                and not fact_check.get("premise_reference_failures")
+            ):
+                full_data["ai_verification"]["verified"] = True
+                full_data["ai_verification"]["verification_status"] = "corrected"
 
         if fact_check.get("fact_check_skipped"):
             # --- SKIPPED: Budget exhausted or all fact-check models failed. Summary is unverified. ---
@@ -6381,29 +7529,52 @@ TEXT TO REPAIR:
             print(f"   ⚠️ [Fact-Check] Skipped ({_fc_skip_reason}) — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
             if scan_quality == "complete":
                 scan_quality = "unverified"
-        elif fact_check.get("verification_status") == "failed_handoff" or fact_check.get("evidence_handoff_failures"):
+        elif fact_check.get("evidence_handoff_failures"):
             # The verifier did not receive one or more evidence records cited by
             # generation. This is a pipeline integrity failure, not proof that the
-            # claim or its source is fabricated. Preserve both without correction
-            # or purging and make the unverified state explicit for the report.
+            # claim or its source is fabricated. Preserve unresolved references,
+            # while still applying corrections for independently resolved claims.
             handoff_failures = fact_check.get("evidence_handoff_failures", [])
+            mixed_corrections = bool(applied_correction_ids or fact_check.get("corrected_summary") or fact_check.get("corrected_sections") or fact_check.get("corrected_pitch"))
             print(
-                f"   ⚠️ [Fact-Check] Evidence handoff failed for "
-                f"{len(handoff_failures)} reference(s) — preserving analysis and sources as UNVERIFIED"
+                f"   ⚠️ [Fact-Check] Evidence handoff failed for {len(handoff_failures)} reference(s); "
+                f"{'independent corrections were applied' if mixed_corrections else 'analysis remains unverified'}"
             )
             full_data["ai_verification"]["verified"] = False
-            full_data["ai_verification"]["verification_status"] = "failed_handoff"
+            full_data["ai_verification"]["verification_status"] = (
+                "corrected_with_handoff_warnings" if mixed_corrections else "failed_handoff"
+            )
             full_data["ai_verification"]["note"] = (
                 "Verification could not resolve every cited evidence record. "
-                "No claim correction or evidence purge was applied."
+                + (
+                    "Corrections for independently verified blocking claims were applied; unresolved references remain visible for audit."
+                    if mixed_corrections else
+                    "No source purge was applied; unresolved references remain visible for audit."
+                )
             )
+            full_data["re_synthesis"] = {
+                "was_resynthesized": mixed_corrections,
+                "false_claims_found": fact_check.get("false_claims", []),
+                "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+                "audit_notes": fact_check.get("audit_notes", []),
+                "audit_notes_detailed": fact_check.get("audit_notes_detailed", []),
+                "evidence_purged": {"removed": 0, "skipped": True, "reason": "mixed_outcome_preserved_sources"},
+                "resynth_model": fact_check.get("fact_check_model", ""),
+                "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
+                "method": "public_correction_with_handoff_warnings" if mixed_corrections else "handoff_warning_preserved_original",
+            }
             if scan_quality == "complete":
                 scan_quality = "unverified"
         elif fact_check["verified"] or fact_check.get("false_claims"):
-            if fact_check["verified"]:
+            if full_data["ai_verification"].get("verified"):
                 # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
                 audit_count = len(fact_check.get("audit_notes", []))
-                if audit_count:
+                if full_data["ai_verification"].get("verification_status") == "corrected":
+                    print(
+                        f"   ✅ [Fact-Check] Blocking wording corrected across all public fields "
+                        f"({len(applied_correction_ids)} claim(s), {fact_check['fact_check_time_ms']}ms)"
+                    )
+                elif audit_count:
                     print(
                         f"   ✅ [Fact-Check] Summary verified with {audit_count} non-blocking audit note(s) "
                         f"({fact_check['fact_check_time_ms']}ms)"
@@ -6422,23 +7593,11 @@ TEXT TO REPAIR:
                 corrected_summary = fact_check.get("corrected_summary", "")
                 corrected_sections = fact_check.get("corrected_sections") or {}
                 corrected_pitch = fact_check.get("corrected_pitch", "") or ""
-                if corrected_summary:
+                if corrected_summary or corrected_sections or corrected_pitch or applied_correction_ids:
                     print(
-                        f"   🧭 [Fact-Check] Applying corrected public AI Diagnosis "
-                        f"({len(corrected_summary.split())} words); original retained in audit metadata"
+                        f"   🧭 [Fact-Check] Applied public corrections across governed fields "
+                        f"(claims={len(full_data['ai_verification'].get('corrected_claim_ids') or [])})"
                     )
-                    full_data["summary_text"] = _strip_tac_codes(sanitize_inference_wording(corrected_summary))
-                if isinstance(corrected_sections, dict):
-                    if corrected_sections.get("strategic_synthesis"):
-                        full_data["strategic_synthesis"] = _strip_tac_codes(
-                            sanitize_inference_wording(corrected_sections["strategic_synthesis"])
-                        )
-                    if corrected_sections.get("evidence_based_risks"):
-                        full_data["evidence_based_risks"] = sanitize_inference_wording(
-                            corrected_sections["evidence_based_risks"]
-                        )
-                if corrected_pitch:
-                    full_data["pitch_text"] = sanitize_inference_wording(corrected_pitch)
                 full_data["re_synthesis"] = {
                     "was_resynthesized": bool(corrected_summary or corrected_sections or corrected_pitch),
                     "false_claims_found": fact_check["false_claims"],
@@ -6494,16 +7653,37 @@ TEXT TO REPAIR:
         # Runs after fact-check so evidence_links are already purged/verified.
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
-        _gs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        _gs_stage_start = time.time()
+        _gs_reserve_after = DETAILED_REPORT_MIN_FLOOR + FINAL_SAVE_MIN_FLOOR
+        _gs_budget = _available_for_stage(
+            GENERAL_SUMMARY_BUDGET,
+            GENERAL_SUMMARY_MAX,
+            _gs_reserve_after,
+        )
+        _log_stage_allocation(
+            "General Summary",
+            GENERAL_SUMMARY_BUDGET,
+            GENERAL_SUMMARY_MAX,
+            _gs_budget,
+            _gs_reserve_after,
+        )
+        final_stage_timing["general_summary"]["allowed_seconds"] = _gs_budget
         gs_ms = 0
-        if _gs_remaining < 45:
-            print(f"   ⏭ [General Summary] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping")
+        if _gs_budget < 20:
+            print(f"   ⏭ [General Summary] Protected stage budget unavailable ({_gs_budget}s) — skipping")
             if scan_quality == "complete":
                 scan_quality = "partial_summary"
         else:
             try:
                 gs_start = time.time()
-                gs_text, gs_model = generate_general_summary(full_data, companyName)
+                # Verification receives a protected 30-second floor. Generation
+                # and provider fallback share only the remainder.
+                gs_generation_budget = min(60, max(15, _gs_budget - 30))
+                gs_text, gs_model = generate_general_summary(
+                    full_data,
+                    companyName,
+                    time_budget_seconds=gs_generation_budget,
+                )
                 gs_ms = int((time.time() - gs_start) * 1000)
             except Exception as gs_err:
                 print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
@@ -6511,22 +7691,131 @@ TEXT TO REPAIR:
         if gs_text:
             wc = len(gs_text.split())
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({gs_ms}ms)")
+            gs_generation_model = gs_model
 
             # Fact-check General Summary against its own input payload
-            gs_check = fact_check_general_summary(gs_text, full_data, companyName)
+            gs_elapsed_seconds = int(time.time() - _gs_stage_start)
+            gs_check_budget = max(0, _gs_budget - gs_elapsed_seconds)
+            if gs_check_budget >= 10:
+                gs_check = fact_check_general_summary(
+                    gs_text,
+                    full_data,
+                    companyName,
+                    time_budget_seconds=gs_check_budget,
+                    generator_model=gs_generation_model,
+                )
+            else:
+                gs_check = {
+                    "verified": False,
+                    "false_claims": [],
+                    "corrected_summary": "",
+                    "corrected_model": "",
+                    "fact_check_skipped": True,
+                    "initial_verification_status": "unavailable_budget",
+                    "final_verification_status": "unavailable_budget",
+                    "repaired_claim_ids": [],
+                    "unresolved_claims": [],
+                    "check_time_ms": 0,
+                }
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
-                gs_model = gs_check["corrected_model"] or gs_model
                 print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
+
+            # Corrections can leave duplicated phrases or broken sentence
+            # joins even when their factual content is now safe. Review the
+            # whole final text, while sending only flagged passages to a
+            # grammar-only editor that must preserve numbers and citations.
+            from detailed_report import final_public_language_review
+            gs_language_budget = min(
+                25,
+                max(0, _gs_budget - int(time.time() - _gs_stage_start)),
+            )
+            gs_text, gs_language_quality = final_public_language_review(
+                gs_text,
+                time_budget_seconds=gs_language_budget,
+                label="General Summary",
+            )
+            pitch_language_quality = {"status": "not_present"}
+            if full_data.get("pitch_text"):
+                pitch_text, pitch_language_quality = final_public_language_review(
+                    str(full_data.get("pitch_text") or ""),
+                    time_budget_seconds=min(20, max(0, int(_scan_remaining()) - DETAILED_REPORT_MIN_FLOOR - FINAL_SAVE_MIN_FLOOR)),
+                    label="Strategic Pitch",
+                )
+                full_data["pitch_text"] = pitch_text
+            full_data.setdefault("public_language_quality", {}).update({
+                "general_summary": gs_language_quality,
+                "pitch": pitch_language_quality,
+            })
+            if pitch_language_quality.get("unresolved_defects"):
+                full_data.setdefault("quality_notes", []).append(
+                    "Strategic Pitch retains unresolved sentence or duplication defects after final language QA."
+                )
 
             full_data["general_summary"] = gs_text
             full_data["general_summary_model"] = gs_model
-            full_data["general_summary_verified"] = gs_check.get("verified", True)
+            full_data["general_summary_generation"] = {
+                "model": gs_generation_model,
+                "fallback_used": bool(
+                    gs_generation_model
+                    and gs_generation_model != str(policy_for("general_summary").get("primary") or CLAUDE_SONNET_MODEL)
+                ),
+                "generation_time_ms": gs_ms,
+            }
+            gs_language_clean = not bool(gs_language_quality.get("unresolved_defects"))
+            full_data["general_summary_verified"] = bool(
+                gs_check.get("verified", True) and gs_language_clean
+            )
+            full_data["general_summary_status"] = (
+                "generated_verified_after_resolution"
+                if gs_check.get("final_verification_status") == "verified_after_final_resolution" and gs_language_clean
+                else "generated_verified" if gs_check.get("verified") and gs_language_clean else "generated_unverified"
+            )
             full_data["general_summary_false_claims"] = [
-                fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
+                if isinstance(fc, dict) and fc.get("claim")
             ]
+            full_data["general_summary_verification"] = {
+                "initial_status": gs_check.get("initial_verification_status", "verified"),
+                "final_status": gs_check.get("final_verification_status", "verified" if gs_check.get("verified") else "unavailable"),
+                "repaired_claim_ids": gs_check.get("repaired_claim_ids", []),
+                "final_resolution_claim_ids": gs_check.get("final_resolution_claim_ids", []),
+                "final_removed_claim_ids": gs_check.get("final_removed_claim_ids", []),
+                "unresolved_claims": gs_check.get("unresolved_claims", []),
+                "model": gs_check.get("verification_model", ""),
+                "correction_model": gs_check.get("corrected_model", ""),
+                "time_ms": gs_check.get("check_time_ms", 0),
+            }
+            if not full_data.get("general_summary_verified"):
+                final_gs_status = str(gs_check.get("final_verification_status") or "unavailable")
+                if not gs_language_clean:
+                    note = "General Summary retains unresolved sentence or duplication defects after final language QA."
+                elif final_gs_status.startswith("unavailable"):
+                    note = "General Summary was generated, but independent verification was unavailable within its protected stage budget."
+                elif full_data["general_summary_false_claims"]:
+                    note = (
+                        "General Summary retains unresolved wording after bounded verification and final claim resolution; "
+                        "see the listed claim boundaries."
+                    )
+                else:
+                    note = "General Summary verification did not reach a conclusive final status."
+                full_data.setdefault("quality_notes", []).append(note)
+                if scan_quality == "complete":
+                    scan_quality = "unverified"
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+            full_data["general_summary_status"] = "unavailable"
+            full_data["general_summary_unavailable_reason"] = (
+                "generation_failed_or_stage_deadline" if _gs_budget >= 20 else "insufficient_stage_budget"
+            )
+            full_data.setdefault("quality_notes", []).append(
+                "General Summary was unavailable within its governed stage deadline."
+            )
+        _record_final_stage(
+            "general_summary",
+            _gs_stage_start,
+            "verified" if full_data.get("general_summary_verified") else ("generated_unverified" if gs_text else "skipped"),
+        )
 
         # --- STEP 3.6: DETAILED FORENSIC REPORT (meta-synthesis) ---
         # Runs AFTER General Summary so it can synthesize all
@@ -6536,7 +7825,55 @@ TEXT TO REPAIR:
         dr_text, dr_model = "", ""
         dr_ms = 0
         prior_summaries = {}
-        _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        _dr_stage_start = time.time()
+        _dr_remaining = _available_for_stage(
+            DETAILED_REPORT_BUDGET,
+            DETAILED_REPORT_MAX,
+            FINAL_SAVE_MIN_FLOOR,
+        )
+        _log_stage_allocation(
+            "Detailed Report",
+            DETAILED_REPORT_BUDGET,
+            DETAILED_REPORT_MAX,
+            _dr_remaining,
+            FINAL_SAVE_MIN_FLOOR,
+        )
+        final_stage_timing["detailed_report"]["allowed_seconds"] = _dr_remaining
+        _dr_deadline = time.time() + max(0, _dr_remaining)
+
+        def _dr_stage_remaining() -> int:
+            return max(0, int(_dr_deadline - time.time()))
+
+        def _extend_dr_recovery_deadline(max_recovery_seconds: int = 90) -> int:
+            """Guarantee a fresh local window while preserving the save floor."""
+            nonlocal _dr_deadline
+            globally_available = max(
+                0,
+                int(_scan_remaining()) - FINAL_SAVE_MIN_FLOOR - OPERATIONAL_OVERHEAD_RESERVE,
+            )
+            recovery_seconds = min(max(0, int(max_recovery_seconds)), globally_available)
+            if recovery_seconds <= 0:
+                return 0
+            prior_deadline = _dr_deadline
+            # A recovery operation needs its complete window from this point in
+            # time. Extending only when the old deadline had already expired
+            # allowed earlier work to consume the nominal recheck allocation.
+            now = time.time()
+            _dr_deadline = min(
+                now + globally_available,
+                max(_dr_deadline, now + recovery_seconds),
+            )
+            added_seconds = max(0, int(_dr_deadline - max(prior_deadline, now)))
+            timing = final_stage_timing.setdefault("detailed_report", {})
+            timing["conditional_recovery_seconds"] = int(
+                timing.get("conditional_recovery_seconds") or 0
+            ) + added_seconds
+            print(
+                f"   ⏱️ [Detailed Report Recovery] granted={recovery_seconds}s | "
+                f"deadline_extension={added_seconds}s | global_remaining={int(_scan_remaining())}s"
+            )
+            return recovery_seconds
+
         full_data["detailed_report_status"] = "pending"
         if _dr_remaining < DETAIL_REPORT_COMPACT_MIN:
             full_data["detailed_report_status"] = "skipped"
@@ -6550,18 +7887,29 @@ TEXT TO REPAIR:
         else:
             try:
                 from detailed_report import (
+                    build_detailed_report_claim_action_manifest,
                     complete_detailed_report_draft,
                     detailed_report_quality,
+                    detailed_report_publication_status,
+                    detailed_report_repair_impact,
+                    final_public_language_review,
+                    flagged_report_claims_remaining,
                     generate_detailed_report,
+                    polish_detailed_report_text,
+                    regenerate_detailed_report_after_claim_actions,
+                    repair_detailed_report_sections,
+                    remove_flagged_report_paragraphs,
+                    remove_flagged_report_sentences,
                 )
                 dr_start = time.time()
                 dr_compact = _dr_remaining < DETAIL_REPORT_FULL_MIN
                 if dr_compact:
-                    dr_time_budget = max(45, min(110, int(_dr_remaining) - 45))
+                    dr_time_budget = max(20, min(80, int(_dr_remaining) - 10))
                 else:
-                    # Full reports need room for Opus plus one GPT completion pass,
-                    # while preserving time for fact-check, save and job finalization.
-                    dr_time_budget = max(90, min(230, int(_dr_remaining) - 110))
+                    # Keep room inside this stage allocation for verification
+                    # and, when text is altered, the mandatory final recheck.
+                    # Save has its own downstream floor.
+                    dr_time_budget = max(75, min(115, int(_dr_remaining) - 45))
                 if dr_compact:
                     print(
                         f"   📝 [Detailed Report] Moderate budget ({int(_dr_remaining)}s) "
@@ -6602,49 +7950,17 @@ TEXT TO REPAIR:
                 print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
 
         if dr_text:
-            # The report verifier must see the exact bibliography used by the
-            # report generator and a claim graph that includes the report itself.
-            full_data["detailed_report"] = dr_text
-            attach_evidence_graph(full_data)
-            _dr_fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-            if _dr_fc_remaining >= 55:
-                print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({int(_dr_fc_remaining)}s remaining)...")
-                dr_check = ai_fact_check_summary(
-                    summary_text=dr_text,
-                    evidence_links=managed_evidence_links,
-                    company_name=companyName,
-                    scan_payload=_build_fact_check_scan_payload(full_data),
-                    document_label="Detailed Forensic Report",
-                    foresight_links=full_data.get("foresight_links", []),
-                    evidence_manifest=full_data.get("evidence_manifest", []),
-                    claim_graph=full_data.get("claim_graph", []),
-                )
-                if dr_check.get("corrected_summary"):
-                    dr_text = dr_check["corrected_summary"]
-                    full_data["detailed_report"] = dr_text
-                full_data["detailed_report_verification"] = {
-                    "verified": dr_check.get("verified", False),
-                    "verification_status": dr_check.get("verification_status", "unavailable"),
-                    "fact_check_skipped": dr_check.get("fact_check_skipped", False),
-                    "false_claims": dr_check.get("false_claims", []),
-                    "evidence_handoff_failures": dr_check.get("evidence_handoff_failures", []),
-                    "model": dr_check.get("fact_check_model", ""),
-                }
-            else:
-                full_data["detailed_report_verification"] = {
-                    "verified": False,
-                    "fact_check_skipped": True,
-                    "reason": "insufficient_budget",
-                }
-
+            # Completeness repair happens before verification. Nothing generative
+            # may alter the report after the verifier has inspected it.
             dr_quality = detailed_report_quality(dr_text, compact=dr_compact)
             if not dr_quality.get("complete"):
                 print(
-                    "   ⚠️ [Detailed Report] Post-check completeness failed: "
+                    "   ⚠️ [Detailed Report] Initial completeness failed: "
                     f"words={dr_quality.get('word_count')}, missing={dr_quality.get('missing')}"
                 )
-                _dr_repair_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                if _dr_repair_remaining >= 65:
+                _dr_repair_remaining = _dr_stage_remaining()
+                _dr_repair_budget = max(0, min(35, _dr_repair_remaining - 20))
+                if _dr_repair_budget >= 20:
                     try:
                         repaired_text, repair_model, repair_quality = complete_detailed_report_draft(
                             full_data,
@@ -6653,35 +7969,904 @@ TEXT TO REPAIR:
                             dr_text,
                             prior_summaries=prior_summaries if prior_summaries else None,
                             compact=dr_compact,
-                            time_budget_seconds=max(35, min(95, int(_dr_repair_remaining) - 35)),
+                            time_budget_seconds=_dr_repair_budget,
                         )
                         if repaired_text and repair_quality.get("complete"):
                             dr_text = repaired_text
                             dr_model = f"{dr_model}+{repair_model}" if dr_model else repair_model
                             dr_quality = repair_quality
-                            full_data["detailed_report"] = dr_text
                     except Exception as repair_err:
-                        print(f"   ⚠️ [Detailed Report] Post-check repair failed: {repair_err}")
+                        print(f"   ⚠️ [Detailed Report] Completeness repair failed: {repair_err}")
                 if not dr_quality.get("complete"):
-                    full_data.pop("detailed_report", None)
-                    full_data["detailed_report_model"] = dr_model
-                    full_data["detailed_report_status"] = "incomplete"
-                    full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_repair"
-                    full_data["detailed_report_quality"] = dr_quality
-                    if scan_quality == "complete":
-                        scan_quality = "partial_report"
-                    dr_text = ""
+                    condensed_quality = detailed_report_quality(
+                        dr_text,
+                        compact=dr_compact,
+                        allow_condensed=True,
+                    )
+                    if condensed_quality.get("complete"):
+                        dr_quality = condensed_quality
+                        print(
+                            "   ℹ️ [Detailed Report] Retaining complete condensed draft: "
+                            f"words={dr_quality.get('word_count')}"
+                        )
+                    else:
+                        full_data["detailed_report_model"] = dr_model
+                        full_data["detailed_report_status"] = "incomplete"
+                        full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_repair"
+                        full_data["detailed_report_quality"] = condensed_quality
+                        if scan_quality == "complete":
+                            scan_quality = "partial_report"
+                        dr_text = ""
 
-            if dr_text:
+        if dr_text:
+            # The verifier sees the exact final generative draft and bibliography.
+            full_data["detailed_report"] = dr_text
+            attach_evidence_graph(full_data)
+            _dr_fc_remaining = _dr_stage_remaining()
+            if _dr_fc_remaining >= 20 and _scan_remaining() >= 40:
+                # The verifier is section-batched and can borrow unused global
+                # time. Keep a final-save floor, but do not squeeze a 900-word
+                # report into one oversized 30-second request.
+                available_global_verifier_time = max(0, int(_scan_remaining()) - 20)
+                verifier_load = detailed_report_fact_check_budget(dr_text)
+                conditional_verifier_budget = min(
+                    verifier_load["recommended_seconds"],
+                    available_global_verifier_time,
+                )
+                if conditional_verifier_budget >= 70:
+                    required_stage_time = conditional_verifier_budget + 20
+                    if required_stage_time > _dr_fc_remaining:
+                        # The helper guarantees this much time remains from
+                        # now; passing only the difference underfunds the stage.
+                        _extend_dr_recovery_deadline(required_stage_time)
+                dr_fc_budget = min(
+                    conditional_verifier_budget,
+                    max(20, int(_dr_stage_remaining()) - 20),
+                )
+                print(
+                    "   🔍 [Detailed Report Fact-Check] Load-adaptive section verification "
+                    f"({dr_fc_budget}s budget, batches={verifier_load['batch_count']}, "
+                    f"candidate_claims={verifier_load['candidate_claim_count']}, "
+                    f"report_words={verifier_load['word_count']})..."
+                )
+                dr_check = ai_fact_check_detailed_report(
+                    report_text=dr_text,
+                    evidence_links=managed_evidence_links,
+                    company_name=companyName,
+                    scan_payload=_build_fact_check_scan_payload(full_data),
+                    foresight_links=full_data.get("foresight_links", []),
+                    evidence_manifest=full_data.get("evidence_manifest", []),
+                    claim_graph=full_data.get("claim_graph", []),
+                    time_budget_seconds=dr_fc_budget,
+                )
+                initial_dr_check = dr_check
+                original_dr_text = dr_text
+                verification_history = []
+                verifier_batch_history = [{
+                    "stage": "initial",
+                    "results": initial_dr_check.get("batch_results", []),
+                }]
+                total_replacements = 0
+                total_removals = 0
+                wording_calibrations_applied = 0
+                final_check = dr_check
+                final_verified = False
+                final_unresolved = []
+                final_recheck_status = "not_required"
+                recovery_mode = "none"
+                recovery_status = "not_needed"
+                recovery_model = ""
+                recovery_attempts = []
+                detailed_language_quality = {
+                    "status": "not_required",
+                    "flagged_paragraph_count": 0,
+                    "repaired_paragraph_count": 0,
+                    "unresolved_defects": [],
+                }
+                initial_verification_incomplete = bool(
+                    initial_dr_check.get("fact_check_skipped")
+                    or initial_dr_check.get("verification_partial")
+                )
+                recovery_impact = detailed_report_repair_impact(
+                    original_dr_text,
+                    dr_text,
+                    compact=dr_compact,
+                )
+                def _claim_text(item) -> str:
+                    return str(item.get("claim") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+
+                def _dedupe_claims(items) -> list:
+                    selected = []
+                    seen = set()
+                    for item in items or []:
+                        claim = re.sub(r"\s+", " ", _claim_text(item)).strip()
+                        key = claim.lower().rstrip(".?!")
+                        if not claim or key in seen:
+                            continue
+                        seen.add(key)
+                        selected.append(item)
+                    return selected
+
+                def _ensure_detailed_claim_ids(items: list) -> list:
+                    normalized = []
+                    for raw in items or []:
+                        item = dict(raw) if isinstance(raw, dict) else {"claim": str(raw or "").strip()}
+                        claim = re.sub(r"\s+", " ", _claim_text(item)).strip()
+                        if claim and not item.get("claim_id"):
+                            item["claim_id"] = "DR-" + uuid.uuid5(
+                                uuid.NAMESPACE_URL,
+                                claim.lower(),
+                            ).hex[:12].upper()
+                        normalized.append(item)
+                    return normalized
+
+                # Apply every material verifier action once. Overstrong
+                # interpretations are neutralized separately and never enter
+                # the blocking/removal or full-regeneration path.
+                detailed_issues = _ensure_detailed_claim_ids(
+                    _dedupe_claims(initial_dr_check.get("false_claims_detailed") or [])
+                )
+                calibration_issues = _ensure_detailed_claim_ids(
+                    _dedupe_claims(initial_dr_check.get("wording_adjustments_detailed") or [])
+                )
+                blocking_items = _ensure_detailed_claim_ids(
+                    _dedupe_claims(initial_dr_check.get("false_claims_detailed") or [])
+                )
+                claim_action_manifest = build_detailed_report_claim_action_manifest(
+                    original_dr_text,
+                    detailed_issues + calibration_issues,
+                )
+                initial_unavailable_sections = list(dict.fromkeys(
+                    str(value or "").strip()
+                    for value in (initial_dr_check.get("unavailable_sections") or [])
+                    if str(value or "").strip()
+                ))
+                changed_claim_ids = []
+                removed_claim_ids = []
+                for issue in detailed_issues + calibration_issues:
+                    claim = _claim_text(issue)
+                    correction = str(issue.get("correction") or "").strip()
+                    if not claim or not correction:
+                        continue
+                    repaired = _replace_flagged_claim(dr_text, claim, correction)
+                    if repaired != dr_text:
+                        dr_text = repaired
+                        total_replacements += 1
+                        if issue.get("issue_type") == "wording_calibration":
+                            wording_calibrations_applied += 1
+                        changed_claim_ids.append(issue.get("claim_id"))
+
+                remaining_before_removal = flagged_report_claims_remaining(dr_text, blocking_items)
+                if remaining_before_removal:
+                    removal_keys = {
+                        re.sub(r"\s+", " ", claim).strip().lower().rstrip(".?!")
+                        for claim in remaining_before_removal
+                    }
+                    removed_claim_ids.extend(
+                        item.get("claim_id")
+                        for item in blocking_items
+                        if re.sub(r"\s+", " ", _claim_text(item)).strip().lower().rstrip(".?!")
+                        in removal_keys
+                    )
+                    dr_text, removed = remove_flagged_report_sentences(
+                        dr_text,
+                        remaining_before_removal,
+                    )
+                    total_removals += removed
+                remaining_after_actions = flagged_report_claims_remaining(dr_text, blocking_items)
+                pending_calibration_claims = flagged_report_claims_remaining(
+                    dr_text,
+                    calibration_issues,
+                )
+                dr_text = polish_detailed_report_text(dr_text)
+                recovery_impact = detailed_report_repair_impact(
+                    original_dr_text,
+                    dr_text,
+                    compact=dr_compact,
+                )
+                if pending_calibration_claims:
+                    calibration_sections = [
+                        str(item.get("section") or "").strip()
+                        for item in calibration_issues
+                        if isinstance(item, dict)
+                        and _claim_text(item) in pending_calibration_claims
+                    ]
+                    recovery_impact["affected_sections"] = list(dict.fromkeys(
+                        list(recovery_impact.get("affected_sections") or [])
+                        + [value for value in calibration_sections if value]
+                    ))
+                recovery_impact["affected_sections"] = list(dict.fromkeys(
+                    list(recovery_impact.get("affected_sections") or [])
+                    + [
+                        str(item.get("section") or "").strip()
+                        for item in claim_action_manifest
+                        if str(item.get("section") or "").strip()
+                    ]
+                ))
+                print(
+                    "   🧭 [Detailed Report Recovery] "
+                    f"retained={recovery_impact.get('retained_ratio')} | "
+                    f"removed={recovery_impact.get('removed_word_ratio')} | "
+                    f"affected_sections={len(recovery_impact.get('affected_sections') or [])} | "
+                    f"mode={recovery_impact.get('repair_mode')}"
+                )
+                verification_history.append({
+                    "stage": "initial_consolidated_actions",
+                    "model": initial_dr_check.get("fact_check_model", ""),
+                    "status": initial_dr_check.get("verification_status", "unavailable"),
+                    "blocking_claim_count": len(blocking_items),
+                    "wording_calibration_count": len(calibration_issues),
+                    "changed_claim_ids": [value for value in changed_claim_ids if value],
+                    "deterministic_replacements": total_replacements,
+                    "deterministic_removals": total_removals,
+                    "remaining_after_actions": remaining_after_actions,
+                })
+
+                changed = bool(total_replacements or total_removals)
+                if initial_dr_check.get("fact_check_skipped"):
+                    final_recheck_status = "unavailable"
+                elif (
+                    not blocking_items
+                    and not calibration_issues
+                    and initial_dr_check.get("verified")
+                    and not initial_verification_incomplete
+                ):
+                    final_verified = True
+                    final_recheck_status = initial_dr_check.get("verification_status", "verified")
+
+                # A remaining claim is the reason to recover, never a reason to
+                # skip recovery. Targeted repair is mandatory below the damage
+                # threshold; failed local repair escalates to full regeneration.
+                recovery_required = bool(
+                    changed or remaining_after_actions or pending_calibration_claims
+                )
+                if recovery_required:
+                    recovery_mode = str(
+                        recovery_impact.get("repair_mode") or "targeted_paragraph_repair"
+                    )
+                    _extend_dr_recovery_deadline(120)
+                    verifier_floor = 30
+                    available_for_repair = max(0, _dr_stage_remaining() - verifier_floor)
+                    if recovery_mode == "targeted_paragraph_repair" and available_for_repair >= 20:
+                        try:
+                            repair_budget = min(45, available_for_repair)
+                            candidate, candidate_model = repair_detailed_report_sections(
+                                dr_text,
+                                affected_sections=recovery_impact.get("affected_sections") or [],
+                                claim_issues=detailed_issues + calibration_issues,
+                                claim_action_manifest=claim_action_manifest,
+                                time_budget_seconds=repair_budget,
+                            )
+                            candidate_quality = detailed_report_quality(
+                                candidate,
+                                compact=dr_compact,
+                                allow_condensed=True,
+                            )
+                            candidate_remaining = flagged_report_claims_remaining(
+                                candidate,
+                                detailed_issues + calibration_issues,
+                            )
+                            candidate_accepted = bool(
+                                candidate and candidate_quality.get("complete") and not candidate_remaining
+                            )
+                            recovery_attempts.append({
+                                "stage": "targeted_paragraph_repair",
+                                "model": candidate_model,
+                                "status": "accepted" if candidate_accepted else "rejected_quality",
+                                "applied": candidate_accepted,
+                                "complete": bool(candidate_quality.get("complete")),
+                                "prohibited_claim_recurrence_count": len(candidate_remaining),
+                            })
+                            if candidate_accepted:
+                                dr_text = candidate
+                                recovery_model = candidate_model
+                                recovery_status = "succeeded"
+                                dr_model = f"{dr_model}+{candidate_model}-targeted" if dr_model else candidate_model
+                            else:
+                                recovery_status = "failed_quality"
+                        except Exception as recovery_err:
+                            recovery_status = "failed"
+                            print(f"   ⚠️ [Detailed Report Recovery] targeted repair failed: {recovery_err}")
+
+                    remaining_after_targeted = flagged_report_claims_remaining(
+                        dr_text,
+                        blocking_items,
+                    )
+                    should_regenerate = bool(
+                        recovery_mode == "full_regeneration"
+                        or recovery_status in {"failed", "failed_quality"}
+                        or remaining_after_targeted
+                    )
+                    if should_regenerate:
+                        recovery_mode = "full_regeneration"
+                        _extend_dr_recovery_deadline(120)
+                        available_for_regeneration = max(0, _dr_stage_remaining() - verifier_floor)
+                        if available_for_regeneration >= 30:
+                            try:
+                                repair_budget = min(120, available_for_regeneration)
+                                candidate, candidate_model, candidate_quality = regenerate_detailed_report_after_claim_actions(
+                                    full_data,
+                                    companyName,
+                                    foresight_data,
+                                    dr_text,
+                                    prior_summaries=prior_summaries if prior_summaries else None,
+                                    compact=dr_compact,
+                                    time_budget_seconds=repair_budget,
+                                    claim_action_manifest=claim_action_manifest,
+                                )
+                                candidate_remaining = flagged_report_claims_remaining(
+                                    candidate,
+                                    detailed_issues + calibration_issues,
+                                )
+                                candidate_accepted = bool(
+                                    candidate and candidate_quality.get("complete") and not candidate_remaining
+                                )
+                                recovery_attempts.append({
+                                    "stage": "full_regeneration",
+                                    "model": candidate_model,
+                                    "status": "accepted" if candidate_accepted else "rejected_quality",
+                                    "applied": candidate_accepted,
+                                    "complete": bool(candidate_quality.get("complete")),
+                                    "prohibited_claim_recurrence_count": len(candidate_remaining),
+                                })
+                                if candidate_accepted:
+                                    dr_text = candidate
+                                    recovery_model = candidate_model
+                                    recovery_status = "succeeded"
+                                    dr_model = f"{dr_model}+{candidate_model}" if dr_model else candidate_model
+                                else:
+                                    recovery_status = "failed_quality"
+                            except Exception as recovery_err:
+                                recovery_status = "failed"
+                                print(f"   ⚠️ [Detailed Report Recovery] full regeneration failed: {recovery_err}")
+                        else:
+                            recovery_status = "skipped_budget"
+
+                    # Last safe fallback removes the complete affected paragraph
+                    # only when sentence-level correction and both model recovery
+                    # branches could not clear a known material proposition.
+                    remaining_after_recovery = flagged_report_claims_remaining(
+                        dr_text,
+                        blocking_items,
+                    )
+                    if remaining_after_recovery:
+                        condensed, removed_sentences = remove_flagged_report_sentences(
+                            dr_text,
+                            remaining_after_recovery,
+                        )
+                        total_removals += removed_sentences
+                        still_remaining = flagged_report_claims_remaining(condensed, blocking_items)
+                        removed_paragraphs = 0
+                        if still_remaining:
+                            condensed, removed_paragraphs = remove_flagged_report_paragraphs(
+                                condensed,
+                                still_remaining,
+                            )
+                        condensed_quality = detailed_report_quality(
+                            condensed,
+                            compact=dr_compact,
+                            allow_condensed=True,
+                        )
+                        still_remaining = flagged_report_claims_remaining(condensed, blocking_items)
+                        if condensed_quality.get("complete") and not still_remaining:
+                            dr_text = condensed
+                            recovery_mode = "safe_condensation"
+                            recovery_status = "succeeded"
+                            total_removals += removed_paragraphs
+                        else:
+                            recovery_status = "failed_material_claims"
+                    dr_text = polish_detailed_report_text(dr_text)
+
+                    # Review the assembled reader-facing report after all
+                    # replacements/regeneration. The entire report is scanned;
+                    # only paragraphs with deterministic language defects are
+                    # sent to the bounded grammar-only editor.
+                    _extend_dr_recovery_deadline(75)
+                    language_budget = min(35, max(0, _dr_stage_remaining() - 35))
+                    dr_text, detailed_language_quality = final_public_language_review(
+                        dr_text,
+                        time_budget_seconds=language_budget,
+                        label="Detailed Report",
+                    )
+                    verification_history.append({
+                        "stage": "final_language_review",
+                        **detailed_language_quality,
+                    })
+
+                final_unresolved = flagged_report_claims_remaining(dr_text, blocking_items)
+                if final_unresolved:
+                    final_recheck_status = "unresolved_blocking_claims"
+
+                # One final decision pass verifies the complete reader-facing
+                # report. If it finds a narrow issue, resolve that issue once;
+                # do not restart a broad rewrite/recheck loop.
+                needs_final_check = bool(
+                    initial_verification_incomplete
+                    or changed
+                    or recovery_required
+                    or not initial_dr_check.get("verified")
+                )
+                coverage_repaired = not initial_verification_incomplete
+                recheck_sections = []
+                if needs_final_check and not final_unresolved:
+                    if _dr_stage_remaining() >= 20:
+                        full_data["detailed_report"] = dr_text
+                        recheck_sections = [] if recovery_mode == "full_regeneration" else list(dict.fromkeys(
+                            initial_unavailable_sections
+                            + list(recovery_impact.get("affected_sections") or [])
+                        ))
+                        recheck_load = detailed_report_fact_check_budget(
+                            dr_text,
+                            only_section_names=recheck_sections,
+                            minimum_seconds=75 if not recheck_sections else 60,
+                            maximum_seconds=190 if not recheck_sections else 160,
+                        )
+                        available_recheck_time = max(0, int(_scan_remaining()) - 20)
+                        target_recheck_budget = min(
+                            recheck_load["recommended_seconds"],
+                            available_recheck_time,
+                        )
+                        # Give the final verifier a fresh complete window. The
+                        # helper borrows only globally unused time and always
+                        # preserves the save floor.
+                        _extend_dr_recovery_deadline(target_recheck_budget)
+                        recheck_budget = min(
+                            target_recheck_budget,
+                            max(0, int(_dr_stage_remaining())),
+                        )
+                        print(
+                            "   🔁 [Detailed Report Fact-Check] Load-adaptive final recheck "
+                            f"({recheck_budget}s, batches={recheck_load['batch_count']}, "
+                            f"candidate_claims={recheck_load['candidate_claim_count']})..."
+                        )
+                        if recheck_budget < 25:
+                            final_check = {
+                                "verified": False,
+                                "verification_status": "unavailable",
+                                "fact_check_skipped": True,
+                                "verification_partial": False,
+                                "false_claims": [],
+                                "false_claims_detailed": [],
+                                "wording_adjustments": [],
+                                "wording_adjustments_detailed": [],
+                                "fact_check_model": "skipped_budget",
+                            }
+                        else:
+                            final_check = ai_fact_check_detailed_report(
+                                report_text=dr_text,
+                                evidence_links=managed_evidence_links,
+                                company_name=companyName,
+                                scan_payload=_build_fact_check_scan_payload(full_data),
+                                foresight_links=full_data.get("foresight_links", []),
+                                evidence_manifest=full_data.get("evidence_manifest", []),
+                                claim_graph=full_data.get("claim_graph", []),
+                                time_budget_seconds=recheck_budget,
+                                only_section_names=recheck_sections,
+                            )
+                        final_recheck_status = final_check.get("verification_status", "unavailable")
+                        verifier_batch_history.append({
+                            "stage": "final_recheck",
+                            "results": final_check.get("batch_results", []),
+                        })
+                        final_blocking = _ensure_detailed_claim_ids(
+                            _dedupe_claims(final_check.get("false_claims_detailed") or [])
+                        )
+                        final_calibrations = _ensure_detailed_claim_ids(
+                            _dedupe_claims(final_check.get("wording_adjustments_detailed") or [])
+                        )
+                        coverage_repaired = bool(
+                            not final_check.get("fact_check_skipped")
+                            and not final_check.get("verification_partial")
+                            and not final_check.get("unavailable_sections")
+                        )
+                        if (
+                            final_check.get("verified")
+                            and not final_check.get("fact_check_skipped")
+                            and not final_check.get("verification_partial")
+                            and coverage_repaired
+                            and not final_blocking
+                        ):
+                            final_verified = True
+                            final_unresolved = []
+                        elif (
+                            (final_check.get("fact_check_skipped") or final_check.get("verification_partial"))
+                            and not final_blocking
+                            and not final_calibrations
+                        ):
+                            final_verified = False
+                            final_unresolved = []
+                            final_recheck_status = (
+                                "partially_unavailable"
+                                if final_check.get("verification_partial")
+                                else "unavailable"
+                            )
+                        else:
+                            final_issues = _ensure_detailed_claim_ids(
+                                _dedupe_claims(
+                                    list(final_check.get("false_claims_detailed") or [])
+                                    + list(final_check.get("wording_adjustments_detailed") or [])
+                                )
+                            )
+                            final_replacements = 0
+                            final_removals = 0
+                            for issue in final_issues:
+                                claim = _claim_text(issue)
+                                correction = str(issue.get("correction") or "").strip()
+                                if not claim or not correction:
+                                    continue
+                                repaired = _replace_flagged_claim(dr_text, claim, correction)
+                                if repaired != dr_text:
+                                    dr_text = repaired
+                                    final_replacements += 1
+                                    if issue.get("issue_type") == "wording_calibration":
+                                        wording_calibrations_applied += 1
+                                    changed_claim_ids.append(issue.get("claim_id"))
+                            final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
+                            if final_remaining:
+                                final_removal_keys = {
+                                    re.sub(r"\s+", " ", claim).strip().lower().rstrip(".?!")
+                                    for claim in final_remaining
+                                }
+                                removed_claim_ids.extend(
+                                    item.get("claim_id")
+                                    for item in final_blocking
+                                    if re.sub(r"\s+", " ", _claim_text(item)).strip().lower().rstrip(".?!")
+                                    in final_removal_keys
+                                )
+                                dr_text, final_removals = remove_flagged_report_sentences(
+                                    dr_text,
+                                    final_remaining,
+                                )
+                            final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
+                            if final_remaining:
+                                dr_text, removed_paragraphs = remove_flagged_report_paragraphs(
+                                    dr_text,
+                                    final_remaining,
+                                )
+                                final_removals += removed_paragraphs
+                                final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
+                            total_replacements += final_replacements
+                            total_removals += final_removals
+                            dr_text = polish_detailed_report_text(dr_text)
+                            final_unresolved = final_remaining
+                            final_verified = False
+                            final_recheck_status = (
+                                "focused_recheck_required"
+                                if not final_remaining
+                                else "unresolved_blocking_claims"
+                            )
+                            verification_history.append({
+                                "stage": "final_focused_resolution",
+                                "model": final_check.get("fact_check_model", ""),
+                                "status": final_check.get("verification_status", "unavailable"),
+                                "blocking_claim_count": len(final_blocking),
+                                "wording_calibration_count": len(final_calibrations),
+                                "deterministic_replacements": final_replacements,
+                                "deterministic_removals": final_removals,
+                                "remaining_after_actions": final_remaining,
+                            })
+
+                            # Corrections found by the final decision pass need
+                            # one changed-section verification before the report
+                            # can be called verified.
+                            if not final_remaining and _dr_stage_remaining() >= 25:
+                                resolution_manifest = build_detailed_report_claim_action_manifest(
+                                    dr_text,
+                                    final_issues,
+                                )
+                                resolution_sections = list(dict.fromkeys(
+                                    str(item.get("section") or "").strip()
+                                    for item in resolution_manifest
+                                    if str(item.get("section") or "").strip()
+                                ))
+                                resolution_budget = min(40, max(25, _dr_stage_remaining()))
+                                resolution_check = ai_fact_check_detailed_report(
+                                    report_text=dr_text,
+                                    evidence_links=managed_evidence_links,
+                                    company_name=companyName,
+                                    scan_payload=_build_fact_check_scan_payload(full_data),
+                                    foresight_links=full_data.get("foresight_links", []),
+                                    evidence_manifest=full_data.get("evidence_manifest", []),
+                                    claim_graph=full_data.get("claim_graph", []),
+                                    time_budget_seconds=resolution_budget,
+                                    only_section_names=resolution_sections,
+                                )
+                                verifier_batch_history.append({
+                                    "stage": "resolution_recheck",
+                                    "results": resolution_check.get("batch_results", []),
+                                })
+                                final_check = resolution_check
+                                resolution_blocking = _dedupe_claims(
+                                    resolution_check.get("false_claims_detailed") or []
+                                )
+                                resolution_calibrations = _dedupe_claims(
+                                    resolution_check.get("wording_adjustments_detailed") or []
+                                )
+                                resolution_issues = _ensure_detailed_claim_ids(
+                                    resolution_blocking + resolution_calibrations
+                                )
+                                resolution_replacements = 0
+                                resolution_removals = 0
+                                for issue in resolution_issues:
+                                    claim = _claim_text(issue)
+                                    correction = str(issue.get("correction") or "").strip()
+                                    if not claim or not correction:
+                                        continue
+                                    repaired = _replace_flagged_claim(dr_text, claim, correction)
+                                    if repaired != dr_text:
+                                        dr_text = repaired
+                                        resolution_replacements += 1
+                                        changed_claim_ids.append(issue.get("claim_id"))
+                                resolution_remaining = flagged_report_claims_remaining(
+                                    dr_text,
+                                    resolution_blocking,
+                                )
+                                if resolution_remaining:
+                                    dr_text, resolution_removals = remove_flagged_report_sentences(
+                                        dr_text,
+                                        resolution_remaining,
+                                    )
+                                resolution_remaining = flagged_report_claims_remaining(
+                                    dr_text,
+                                    resolution_blocking,
+                                )
+                                total_replacements += resolution_replacements
+                                total_removals += resolution_removals
+                                dr_text = polish_detailed_report_text(dr_text)
+                                resolution_actions_applied = bool(
+                                    resolution_replacements or resolution_removals
+                                )
+                                resolution_decision_complete = (
+                                    resolution_check.get("verified")
+                                    or resolution_check.get("verification_status")
+                                    in {"wording_calibration_required", "verified_with_audit_notes"}
+                                )
+                                final_verified = bool(
+                                    resolution_decision_complete
+                                    and not resolution_check.get("fact_check_skipped")
+                                    and not resolution_check.get("verification_partial")
+                                    and not resolution_blocking
+                                    and coverage_repaired
+                                )
+                                final_recheck_status = (
+                                    "verified_after_final_resolution"
+                                    if final_verified
+                                    else "corrected_pending_recheck"
+                                    if resolution_actions_applied and not resolution_remaining
+                                    else "unavailable"
+                                    if resolution_check.get("fact_check_skipped")
+                                    else "unresolved_blocking_claims"
+                                )
+                                final_unresolved = resolution_remaining
+                                verification_history.append({
+                                    "stage": "resolution_actions",
+                                    "model": resolution_check.get("fact_check_model", ""),
+                                    "status": final_recheck_status,
+                                    "deterministic_replacements": resolution_replacements,
+                                    "deterministic_removals": resolution_removals,
+                                    "remaining_after_actions": resolution_remaining,
+                                })
+                    else:
+                        final_verified = False
+                        final_unresolved = []
+                        final_recheck_status = "skipped_budget"
+
+                # Corrections made by the final verifier can create new prose
+                # seams. Language quality is recorded independently and never
+                # reverses a completed factual verification decision.
+                _extend_dr_recovery_deadline(50)
+                post_language_budget = min(
+                    30,
+                    max(0, int(_dr_stage_remaining())),
+                    max(0, int(_scan_remaining()) - 20),
+                )
+                dr_text, post_resolution_language = final_public_language_review(
+                    dr_text,
+                    time_budget_seconds=post_language_budget,
+                    label="Detailed Report",
+                )
+                if post_resolution_language.get("flagged_paragraph_count"):
+                    detailed_language_quality = post_resolution_language
+                    verification_history.append({
+                        "stage": "post_resolution_language_scan",
+                        **post_resolution_language,
+                    })
+
+                incomplete_fact_coverage = bool(
+                    final_check.get("fact_check_skipped")
+                    or final_check.get("verification_partial")
+                    or final_check.get("unavailable_sections")
+                    or final_check.get("evidence_handoff_failures")
+                )
+                semantic_items = list(dict.fromkeys(
+                    str(item) for item in (
+                        list(final_check.get("wording_adjustments", []) or [])
+                        + list(initial_dr_check.get("wording_adjustments", []) or [])
+                    ) if str(item or "")
+                ))
+                unresolved_material_claims = [
+                    _claim_text(item) for item in _dedupe_claims(final_unresolved) if _claim_text(item)
+                ]
+                full_data["detailed_report_verification"] = {
+                    "verified": final_verified,
+                    "verification_status": (
+                        "verified_after_final_resolution"
+                        if final_verified and final_recheck_status == "verified_after_final_resolution"
+                        else "verified_after_removals"
+                        if final_verified and (total_removals or total_replacements)
+                        else final_recheck_status
+                    ),
+                    "fact_check_skipped": bool(final_check.get("fact_check_skipped")),
+                    "verification_partial": bool(final_check.get("verification_partial")),
+                    "unavailable_sections": list(dict.fromkeys(
+                        list(final_check.get("unavailable_sections", []) or [])
+                    )),
+                    "batch_results": initial_dr_check.get("batch_results", []),
+                    "final_batch_results": final_check.get("batch_results", []),
+                    "verifier_batch_history": verifier_batch_history,
+                    "false_claims": initial_dr_check.get("false_claims", []),
+                    "wording_adjustments": initial_dr_check.get("wording_adjustments", []),
+                    "wording_calibrations_applied": wording_calibrations_applied,
+                    "evidence_handoff_failures": initial_dr_check.get("evidence_handoff_failures", []),
+                    "packet_omission_repaired": list(dict.fromkeys(
+                        str(item.get("claim_id") or item.get("claim") or "")
+                        for check in (initial_dr_check, final_check)
+                        for item in (check.get("packet_omission_repaired") or [])
+                        if isinstance(item, dict) and (item.get("claim_id") or item.get("claim"))
+                    )),
+                    "financial_fact_ids": list(dict.fromkeys(
+                        str(value)
+                        for check in (initial_dr_check, final_check)
+                        for value in (check.get("financial_fact_ids") or [])
+                        if str(value or "")
+                    )),
+                    "support_groups": list(initial_dr_check.get("support_groups") or [])
+                    + list(final_check.get("support_groups") or []),
+                    "model": initial_dr_check.get("fact_check_model", ""),
+                    "final_recheck_model": final_check.get("fact_check_model", ""),
+                    "final_recheck_status": final_recheck_status,
+                    "final_recheck_false_claims": final_check.get("false_claims", []),
+                    "model_correction_applied": recovery_status == "succeeded",
+                    "deterministic_replacements": total_replacements,
+                    "deterministic_removals": total_removals,
+                    "blocking_claim_count": len(initial_dr_check.get("false_claims_detailed", []) or []),
+                    "unresolved_blocking_claims": unresolved_material_claims,
+                    "initial_verification_status": initial_dr_check.get("verification_status", "unavailable"),
+                    "repair_cycles": verification_history,
+                    "changed_claim_ids": list(dict.fromkeys(value for value in changed_claim_ids if value)),
+                    "removed_claim_ids": list(dict.fromkeys(value for value in removed_claim_ids if value)),
+                    "claim_action_manifest": claim_action_manifest,
+                    "verification_coverage": {
+                        "initially_unavailable_sections": initial_unavailable_sections,
+                        "recheck_sections": recheck_sections if needs_final_check else [],
+                        "coverage_repaired": coverage_repaired,
+                    },
+                    "language_quality": detailed_language_quality,
+                    "factual_verification": {
+                        "status": (
+                            "material_claims_unresolved"
+                            if unresolved_material_claims
+                            else "coverage_incomplete"
+                            if incomplete_fact_coverage
+                            else "verified"
+                            if final_verified
+                            else "decision_pending"
+                        ),
+                        "complete": bool(final_verified and not incomplete_fact_coverage),
+                        "known_false_claim_remaining": bool(unresolved_material_claims),
+                        "unavailable_sections": list(final_check.get("unavailable_sections", []) or []),
+                        "handoff_failure_count": len(final_check.get("evidence_handoff_failures", []) or []),
+                    },
+                    "semantic_calibration": {
+                        "status": (
+                            "applied" if wording_calibrations_applied
+                            else "recommended" if semantic_items
+                            else "not_needed"
+                        ),
+                        "item_count": len(semantic_items),
+                        "items": semantic_items,
+                    },
+                    "publication_reasons": {
+                        "material_claims": unresolved_material_claims,
+                        "incomplete_verification": incomplete_fact_coverage,
+                        "semantic_calibration": semantic_items,
+                        "language_hygiene": post_resolution_language.get("unresolved_defects", []),
+                    },
+                }
+                full_data["detailed_report_recovery"] = {
+                    **recovery_impact,
+                    "repair_mode": recovery_mode,
+                    "recovery_status": recovery_status,
+                    "recovery_model": recovery_model,
+                    "recovery_attempts": recovery_attempts,
+                    "language_quality": detailed_language_quality,
+                    "final_word_count": len(dr_text.split()),
+                }
+            else:
+                full_data["detailed_report_verification"] = {
+                    "verified": False,
+                    "verification_status": "unavailable",
+                    "fact_check_skipped": True,
+                    "reason": "insufficient_budget",
+                }
+
+            # A report shortened by governed claim correction may fall modestly
+            # below the preferred 800-word target without becoming incomplete.
+            # Structural checks and the 760-word condensed floor remain hard.
+            dr_quality = detailed_report_quality(
+                dr_text,
+                compact=dr_compact,
+                allow_condensed=True,
+            )
+            dr_verification = full_data.get("detailed_report_verification") or {}
+            unresolved_blocking = bool(dr_verification.get("unresolved_blocking_claims"))
+            recovery_meta = full_data.get("detailed_report_recovery") or {}
+            if not dr_quality.get("complete"):
+                full_data.pop("detailed_report", None)
+                full_data["detailed_report_model"] = dr_model
+                full_data["detailed_report_status"] = "incomplete"
+                full_data["detailed_report_skip_reason"] = "detailed_report_structurally_incomplete_after_recovery"
+                full_data["detailed_report_quality"] = dr_quality
+                dr_text = ""
+            elif unresolved_blocking:
+                full_data.pop("detailed_report", None)
+                full_data["detailed_report_model"] = dr_model
+                full_data["detailed_report_status"] = "withheld_material_claims"
+                full_data["detailed_report_skip_reason"] = "unresolved_material_claims"
+                full_data["detailed_report_quality"] = dr_quality
+                dr_text = ""
+            elif not dr_verification.get("verified"):
+                # Deterministic controls already removed any known blocking
+                # wording. Keep the useful analysis as an explicit internal
+                # draft when the final semantic verifier itself is unavailable.
                 full_data["detailed_report"] = dr_text
                 full_data["detailed_report_model"] = dr_model
-                full_data["detailed_report_status"] = "generated"
+                full_data["detailed_report_status"] = "internal_draft_verification_pending"
                 full_data["detailed_report_quality"] = dr_quality
+                unavailable_sections = list(dr_verification.get("unavailable_sections") or [])
+                section_detail = (
+                    f" Unverified sections: {', '.join(unavailable_sections)}."
+                    if unavailable_sections else ""
+                )
+                full_data["detailed_report_publication_boundary"] = (
+                    "Internal analysis only. Factual verification coverage is incomplete; "
+                    "this does not mean a known false claim remains."
+                    + section_detail
+                )
+                full_data.pop("detailed_report_skip_reason", None)
+
+            if not dr_text:
+                full_data.setdefault("report_quality", {})["detailed_report"] = {
+                    "status": full_data.get("detailed_report_status"),
+                    "verification": dr_verification,
+                    "quality": dr_quality,
+                }
+                if scan_quality == "complete":
+                    scan_quality = "partial_report"
+                print("   ⚠️ [Detailed Report] Final safety gate withheld the report")
+            else:
+                full_data["detailed_report"] = dr_text
+                full_data["detailed_report_model"] = dr_model
+                full_data["detailed_report_status"] = detailed_report_publication_status(
+                    dr_quality,
+                    dr_verification,
+                    recovery_meta,
+                )
+                if full_data["detailed_report_status"] != "internal_draft_verification_pending":
+                    full_data.pop("detailed_report_publication_boundary", None)
+                full_data["detailed_report_quality"] = dr_quality
+                full_data.setdefault("report_quality", {})["detailed_report"] = {
+                    "status": full_data["detailed_report_status"],
+                    "verification": dr_verification,
+                    "quality": dr_quality,
+                }
                 full_data.pop("detailed_report_skip_reason", None)
                 wc = len(dr_text.split())
-                print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
-            else:
-                print("   ⚠️ [Detailed Report] Incomplete after repair — not rendering as generated")
+                report_status_icon = "✅" if dr_verification.get("verified") else "⚠️"
+                print(
+                    f"   {report_status_icon} [Detailed Report] {wc} words, model={dr_model}, "
+                    f"status={full_data['detailed_report_status']} ({dr_ms}ms)"
+                )
         else:
             if full_data.get("detailed_report_status") == "pending":
                 full_data["detailed_report_status"] = "empty"
@@ -6690,12 +8875,73 @@ TEXT TO REPAIR:
                     scan_quality = "partial_report"
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
 
+        if full_data.get("detailed_report_status") in {
+            "incomplete", "withheld_unverified", "withheld_material_claims", "failed", "skipped", "empty"
+        }:
+            detailed_reason = full_data.get("detailed_report_skip_reason") or "unavailable"
+            detailed_note = {
+                "detailed_report_incomplete_after_repair": (
+                    "Detailed Report was not published because it remained structurally incomplete after bounded repair."
+                ),
+                "detailed_report_structurally_incomplete_after_recovery": (
+                    "Detailed Report was not published because its structure or retained content remained incomplete after bounded recovery."
+                ),
+                "verification_unavailable": (
+                    "Detailed Report was generated, but its final verifier was unavailable; the report was withheld."
+                ),
+                "unresolved_material_claims": (
+                    "Detailed Report was withheld because material claims remained unresolved after bounded correction and recovery."
+                ),
+                "verification_not_approved": (
+                    "Detailed Report was withheld because the completed verifier did not approve the final text."
+                ),
+            }.get(detailed_reason, f"Detailed Report was not published ({detailed_reason}).")
+            full_data.setdefault("quality_notes", []).append(detailed_note)
+        elif full_data.get("detailed_report_status") == "internal_draft_verification_pending":
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report is retained as an internal draft because factual verification coverage is incomplete for one or more sections. No known unresolved material claim remains, but those sections were not fully checked. Semantic calibration and language hygiene are tracked separately."
+            )
+            if scan_quality == "complete":
+                scan_quality = "unverified"
+        elif full_data.get("detailed_report_status") in {
+            "published_with_semantic_calibration", "published_with_language_warnings"
+        }:
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report was published because no unresolved material factual claim remains. Any remaining issue is limited to semantic calibration or language hygiene and is recorded separately."
+            )
+
+        detailed_verification_meta = full_data.get("detailed_report_verification") or {}
+        semantic_meta = detailed_verification_meta.get("semantic_calibration") or {}
+        language_meta = detailed_verification_meta.get("language_quality") or {}
+        if semantic_meta.get("item_count") and semantic_meta.get("status") in {"applied", "recommended"}:
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report semantic review found interpretation wording that required calibration. "
+                "This is separate from factual verification and is not, by itself, evidence of a false claim."
+            )
+        if language_meta.get("unresolved_defects"):
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report has remaining language-hygiene notes. These concern fluency or grammar, "
+                "not factual support, and did not block publication."
+            )
+
+        _record_final_stage(
+            "detailed_report",
+            _dr_stage_start,
+            full_data.get("detailed_report_status", "unavailable"),
+        )
+
         # Sync final scan quality before save.
         full_data["scan_quality"] = scan_quality
         # Refresh the graph after General Summary and Detailed Report are added.
         attach_evidence_graph(full_data)
 
         # --- STEP 4: SAVE ---
+        _save_stage_start = time.time()
+        final_stage_timing["save_finalize"].update({
+            "status": "in_progress" if saveToDatabase else "not_requested",
+            "used_seconds": 0.0,
+            "remaining_seconds": round(_scan_remaining(), 2),
+        })
         if saveToDatabase:
             print(f"   🔄 [Storage] Saving report to Vercel Blob...")
             save_start = time.time()
@@ -6720,6 +8966,9 @@ TEXT TO REPAIR:
                 "confidence_score": confidence,
                 "intent_score": intent_results["score"],
                 "reality_score": reality_results["score"],
+                "reality_score_valid": not _s2_unavailable,
+                "classification_valid": not _s2_unavailable,
+                "current_reality_unavailable": _s2_unavailable,
                 "reality_gap": gap,
                 "lastUpdated": new_timestamp,
                 "detailsUrl": saved_url,
@@ -6732,6 +8981,18 @@ TEXT TO REPAIR:
             # Update index
             storage.update_global_index(summary_entry)
 
+        _record_final_stage(
+            "save_finalize",
+            _save_stage_start,
+            "saved" if saveToDatabase else "not_requested",
+        )
+        # _make_json_safe_payload creates a detached JSON-safe copy before the
+        # upload. Refresh the returned in-memory timing view after save; the
+        # stored artifact still contains the allocation and pre-save stages.
+        full_data.setdefault("scan_timing", {})["final_stages"] = {
+            key: dict(value) for key, value in final_stage_timing.items()
+        }
+
         if job_id:
             _update_scan_job(job_id, phase="finalizing", progress=95)
             _append_scan_log(job_id, "Finalizing scan result")
@@ -6739,7 +9000,9 @@ TEXT TO REPAIR:
         total_ms = int((time.time() - scan_start) * 1000)
         total_sec = round(total_ms / 1000, 1)
         _quality_label = f" | Quality: {scan_quality}" if scan_quality != "complete" else ""
-        print(f"✅ --- SCAN COMPLETE: {companyName} --- Total: {total_sec}s | Intent: {intent_results['score']}/100 | Reality: {reality_results['score']}/100 | Gap: {gap} | Archetype: {archetype} | Confidence: {confidence}/100{_quality_label} ---")
+        _final_reality_label = "unavailable" if _s2_unavailable else f"{reality_results['score']}/100"
+        _final_archetype_label = archetype or "unavailable"
+        print(f"✅ --- SCAN COMPLETE: {companyName} --- Total: {total_sec}s | Intent: {intent_results['score']}/100 | Reality: {_final_reality_label} | Gap: {gap} | Archetype: {_final_archetype_label} | Confidence: {confidence}/100{_quality_label} ---")
 
         return {"success": True, "data": full_data}
 

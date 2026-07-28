@@ -18,6 +18,7 @@ import re
 import time
 
 from llm_clients import call_anthropic_text, call_openai_text
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
 
 
 def _extract_json(text: str) -> dict | None:
@@ -75,8 +76,8 @@ def _extract_json(text: str) -> dict | None:
 def _run_stakeholder_search(prompt: str, label: str, max_tokens: int, timeout: int) -> tuple[str, str]:
     """Run stakeholder web research with GPT as evidence scout, Claude fallback."""
     models = (
-        ("gpt-5.5", "openai", timeout),
-        ("claude-sonnet-4-6", "anthropic", min(timeout, 75)),
+        (GPT_REASONING_MODEL, "openai", timeout),
+        (CLAUDE_SONNET_MODEL, "anthropic", min(timeout, 75)),
     )
     last_error = None
     for model_name, provider, model_timeout in models:

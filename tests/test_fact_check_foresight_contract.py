@@ -13,6 +13,174 @@ if _BACKEND not in sys.path:
 import reality_check  # noqa: E402
 
 
+def test_fact_check_record_projection_caps_excerpts_and_drops_large_internal_fields():
+    projected = reality_check._project_fact_check_record({
+        "evidence_id": "EVD-EXPLICIT",
+        "report_ref": 7,
+        "source_quote": "x" * 5000,
+        "normalized_content": "y" * 100000,
+        "generation_eligible": True,
+    })
+
+    assert projected["evidence_id"] == "EVD-EXPLICIT"
+    assert projected["report_ref"] == 7
+    assert len(projected["source_quote"]) == 1200
+    assert "normalized_content" not in projected
+
+
+def _profinder_financial_payload(*, margin_period="2025", margin_entity="Oy Sisu Auto Ab"):
+    url = "https://b2b.profinder.fi/haku/oy-sisu-auto-ab/17495599"
+    return {
+        "financial_payload": {
+            "financial_fact_manifest": [
+                {
+                    "fact_id": "FINFACT-REVENUE",
+                    "assessment": "FY2025 revenue was €91.6M, up 82.4% year on year.",
+                    "evidence_snippet": "Liikevaihto 91,6 milj. €, muutos 82,4 %.",
+                    "periods": ["2025"],
+                    "metric": "Revenue",
+                    "value": "€91.6M",
+                    "source_url": url,
+                    "legal_entity": "Oy Sisu Auto Ab",
+                },
+                {
+                    "fact_id": "FINFACT-MARGIN",
+                    "assessment": f"FY{margin_period} operating margin was 13.2%.",
+                    "evidence_snippet": "Liikevoitto 13,2 %.",
+                    "periods": [margin_period],
+                    "metric": "Operating margin",
+                    "value": "13.2%",
+                    "source_url": url,
+                    "legal_entity": margin_entity,
+                },
+            ]
+        }
+    }
+
+
+def test_financial_support_groups_split_metrics_by_source_entity_and_period():
+    claim = (
+        "For fiscal year 2025, Oy Sisu Auto Ab reported revenue of €91.6 million, "
+        "growth of 82.4%, and an operating margin of 13.2%."
+    )
+
+    support = reality_check._structured_financial_claim_support(
+        claim,
+        _profinder_financial_payload(),
+    )
+
+    assert support["supported"] is True
+    assert support["financial_fact_ids"] == ["FINFACT-REVENUE", "FINFACT-MARGIN"]
+    assert support["support_group"]["reporting_periods"] == ["2025"]
+
+
+def test_financial_support_rejects_cross_period_and_cross_entity_combinations():
+    claim = (
+        "For fiscal year 2025, Oy Sisu Auto Ab reported revenue of €91.6 million, "
+        "growth of 82.4%, and an operating margin of 13.2%."
+    )
+
+    assert reality_check._structured_financial_claim_support(
+        claim,
+        _profinder_financial_payload(margin_period="2024"),
+    )["supported"] is False
+    assert reality_check._structured_financial_claim_support(
+        claim,
+        _profinder_financial_payload(margin_entity="Sisu Group Oy"),
+    )["supported"] is False
+
+
+def test_financial_projection_preserves_governed_fact_fields():
+    record = _profinder_financial_payload()["financial_payload"]["financial_fact_manifest"][0]
+    projected = reality_check._project_fact_check_record(record)
+
+    assert projected["fact_id"] == "FINFACT-REVENUE"
+    assert projected["assessment"].startswith("FY2025 revenue")
+    assert projected["evidence_snippet"].startswith("Liikevaihto")
+    assert projected["periods"] == ["2025"]
+    assert projected["metric"] == "Revenue"
+    assert projected["value"] == "€91.6M"
+    assert projected["source_url"].endswith("17495599")
+    assert projected["legal_entity"] == "Oy Sisu Auto Ab"
+
+
+def test_claim_first_packet_reserves_distinct_support_for_distinct_claims():
+    records = [
+        {
+            "evidence_id": "EVD-CONSULTING",
+            "exact_passage": "Vehicle technology consulting, design and project management are key services.",
+        },
+        {
+            "evidence_id": "EVD-CAPACITY",
+            "exact_passage": "The manufacturing cooperation is intended to increase production capacity.",
+        },
+    ]
+    text = (
+        "Vehicle technology consulting is part of the stated service portfolio. "
+        "A manufacturing cooperation is intended to increase production capacity."
+    )
+
+    selected, coverage = reality_check._claim_first_fact_check_records(records, text, 4)
+
+    assert {item["evidence_id"] for item in selected} == {"EVD-CONSULTING", "EVD-CAPACITY"}
+    assert coverage["candidate_claim_count"] == 2
+    assert coverage["claims_with_reserved_support"] == 2
+
+
+def test_compact_fact_check_records_prioritize_explicit_report_reference():
+    records = [
+        {"evidence_id": "EVD-GENERIC", "report_ref": 1, "source_quote": "generic context"},
+        {"evidence_id": "EVD-CITED", "report_ref": 7, "source_quote": "otherwise unrelated"},
+    ]
+
+    selected = reality_check._compact_fact_check_records(records, "The material claim cites [7].", 1)
+
+    assert selected[0]["evidence_id"] == "EVD-CITED"
+
+
+def test_detailed_report_verifier_uses_bounded_packet_and_current_manifest(monkeypatch):
+    packets = []
+
+    def fake_check(*_args, **kwargs):
+        packets.append(kwargs)
+        return {
+            "verified": True,
+            "verification_status": "verified",
+            "fact_check_skipped": False,
+            "false_claims": [],
+            "false_claims_detailed": [],
+            "wording_adjustments": [],
+            "wording_adjustments_detailed": [],
+            "audit_notes": [],
+            "audit_notes_detailed": [],
+            "evidence_handoff_failures": [],
+            "premise_reference_failures": [],
+            "fact_check_model": "test-verifier",
+        }
+
+    monkeypatch.setattr(reality_check, "ai_fact_check_summary", fake_check)
+    result = reality_check.ai_fact_check_detailed_report(
+        "## Key Findings\n\nThe cited current-run record reports a supported movement [7].",
+        evidence_links=[],
+        company_name="Example Oy",
+        evidence_manifest=[{
+            "evidence_id": "EVD-CURRENT",
+            "report_ref": 7,
+            "source_quote": "The current-run record reports a supported movement.",
+            "normalized_content": "x" * 150000,
+            "generation_eligible": True,
+        }],
+        scan_payload={"prohibited_reasoning": {"large": "y" * 150000}},
+        time_budget_seconds=70,
+    )
+
+    assert result["verified"] is True
+    assert result["batch_results"][0]["estimated_input_tokens"] < 25000
+    manifest = packets[0]["evidence_manifest"]
+    assert manifest[0]["evidence_id"] == "EVD-CURRENT"
+    assert "normalized_content" not in manifest[0]
+
+
 def _foresight_source():
     return {
         "title": "Industrial automation outlook",
@@ -86,6 +254,125 @@ def test_supported_strategic_inference_is_filtered_before_correction(monkeypatch
 
     assert result["false_claims"] == []
     assert len(calls) == 1, "A supported inference must be filtered before Stage 2 correction"
+
+
+def test_valid_abs_premise_is_not_reported_as_source_handoff(monkeypatch):
+    premise_id = "ABS-AI-READINESS-1234"
+
+    def fake_call(_prompt, **_kwargs):
+        return json.dumps({
+            "false_claims": [{
+                "section": "Strategic Synthesis",
+                "claim": "The promoted evidence set does not currently verify enterprise AI maturity.",
+                "claim_class": "strategic_inference",
+                "error_type": "Evidence Handoff Failure",
+                "support_level": "context_only",
+                "missing_or_contradicted_premise": premise_id,
+                "reasoning": "The ABS identifier was treated as a missing source.",
+                "correction": "",
+                "source_ids": [premise_id],
+            }],
+            "summary_accurate": False,
+        })
+
+    monkeypatch.setattr(reality_check, "_call_openai_text", fake_call)
+    result = reality_check._provider_fact_check(
+        "The promoted evidence set does not currently verify enterprise AI maturity.",
+        "ExampleCo",
+        scan_payload={
+            "evidence_absence_signals": [{
+                "signal_id": premise_id,
+                "dimension": "AI Readiness",
+                "gap_status": "not_verified",
+                "safe_wording": "The promoted evidence set does not currently verify enterprise AI maturity.",
+            }],
+        },
+    )
+
+    assert result["false_claims"] == []
+
+
+def test_unresolved_abs_reference_is_premise_mismatch_not_handoff(monkeypatch):
+    calls = []
+
+    def fake_call(_prompt, **_kwargs):
+        calls.append(1)
+        return json.dumps({
+            "false_claims": [{
+                "section": "Strategic Synthesis",
+                "claim": "A proof gap remains unresolved.",
+                "claim_class": "strategic_inference",
+                "error_type": "Evidence Handoff Failure",
+                "support_level": "unsupported",
+                "missing_or_contradicted_premise": "ABS-NOT-IN-MANIFEST",
+                "reasoning": "The premise identifier cannot be resolved.",
+                "correction": "",
+                "source_ids": ["ABS-NOT-IN-MANIFEST"],
+            }],
+            "summary_accurate": False,
+        })
+
+    monkeypatch.setattr(reality_check, "_call_openai_text", fake_call)
+    result = reality_check._provider_fact_check(
+        "A proof gap remains unresolved.",
+        "ExampleCo",
+        scan_payload={"evidence_absence_signals": []},
+    )
+
+    assert len(calls) == 1, "Premise mismatch must not trigger wording correction"
+    assert result["false_claims"][0]["error_type"] == "Premise Reference Mismatch"
+    assert result["evidence_handoff_failure"] is False
+
+
+def test_mixed_handoff_and_correction_preserves_correction_status(monkeypatch):
+    blocked_claim = "ExampleCo has deployed enterprise AI across all operations."
+
+    monkeypatch.setattr(reality_check, "_provider_fact_check", lambda *_args, **_kwargs: {
+        "false_claims": [
+            {
+                "claim": blocked_claim,
+                "section": "AI Diagnosis",
+                "error_type": "Fabrication",
+                "claim_class": "external_company_fact",
+                "support_level": "unsupported",
+                "reasoning": "No source supports this deployment claim.",
+                "correction": "The available evidence does not establish enterprise-wide AI deployment.",
+                "source_ids": [],
+                "source_indices": [],
+                "source_urls": [],
+                "claim_id": "FC-BLOCKED",
+            },
+            {
+                "claim": "A separate cited source was not present in the handoff.",
+                "section": "Evidence-Based Risks",
+                "error_type": "Evidence Handoff Failure",
+                "claim_class": "external_company_fact",
+                "support_level": "unsupported",
+                "missing_or_contradicted_premise": "EVD-MISSING",
+                "reasoning": "The source record was absent.",
+                "source_ids": ["EVD-MISSING"],
+                "source_indices": [],
+                "source_urls": [],
+                "claim_id": "FC-HANDOFF",
+            },
+        ],
+        "corrected_summary": "The available evidence does not establish enterprise-wide AI deployment.",
+        "corrected_pitch": "",
+        "corrected_sections": {},
+        "model": "test-verifier+test-corrector",
+        "time_ms": 1,
+    })
+
+    result = reality_check.ai_fact_check_summary(
+        blocked_claim,
+        [],
+        "ExampleCo",
+    )
+
+    assert result["verification_status"] == "corrected_with_handoff_warnings"
+    assert result["corrected_summary"].startswith("The available evidence")
+    assert result["corrected_claim_ids"] == ["FC-BLOCKED"]
+    assert result["unresolved_handoff_ids"] == ["EVD-MISSING"]
 
 
 def test_foresight_cannot_prove_present_company_deployment(monkeypatch):
@@ -177,7 +464,7 @@ def test_unsafe_proof_gap_wording_is_rewritten_locally():
     ) in cleaned
 
 
-def test_unsafe_proof_gap_wording_is_non_blocking_audit_note():
+def test_unsafe_proof_gap_wording_requires_non_blocking_calibration():
     issue_type, blocking = reality_check._classify_fact_check_issue({
         "claim": (
             "The gap is proof that global digital and AI signals translate "
@@ -189,5 +476,271 @@ def test_unsafe_proof_gap_wording_is_non_blocking_audit_note():
         "reasoning": "The sentence overstates a proof gap as proof of company action.",
     }, scan_payload={})
 
-    assert issue_type == "unsafe_inference_wording"
+    assert issue_type == "wording_calibration"
     assert blocking is False
+
+
+def test_generation_time_absence_manifest_remains_resolvable():
+    premises = reality_check._build_fact_check_premise_pack({
+        "generation_premise_manifest": [{
+            "signal_id": "ABS-GENERATION",
+            "dimension": "AI readiness",
+            "gap_status": "proof_gap",
+            "safe_wording": "The promoted evidence does not currently confirm deployed AI capability.",
+        }],
+        "evidence_absence_signals": [],
+    })
+
+    assert [item["premise_id"] for item in premises] == ["ABS-GENERATION"]
+
+
+def test_unsupported_causal_attribution_is_wording_calibration():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "Profitability was driven by military demand.",
+        "claim_class": "strategic_inference",
+        "error_type": "Misattribution",
+        "support_level": "unsupported",
+        "reasoning": "The causal driver is not established by the available evidence.",
+        "correction": "The available evidence records profitability and military demand separately.",
+    }, scan_payload={})
+
+    assert issue_type == "wording_calibration"
+    assert blocking is False
+
+
+def test_unsupported_present_company_capability_remains_blocking():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "The company has deployed enterprise AI across its factories.",
+        "claim_class": "external_company_fact",
+        "error_type": "Fabrication",
+        "support_level": "unsupported",
+        "reasoning": "No eligible source supports a current deployment.",
+        "correction": "The promoted evidence does not currently verify an enterprise AI deployment.",
+    }, scan_payload={})
+
+    assert issue_type == "blocking_false_claim"
+    assert blocking is True
+
+
+def test_concrete_false_event_blocks_even_if_model_calls_it_inference():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "The company has signed a 2026 acquisition agreement.",
+        "claim_class": "strategic_inference",
+        "error_type": "Misattribution",
+        "support_level": "unsupported",
+        "reasoning": "The cited sources do not contain that agreement and the event did not happen.",
+        "correction": "",
+    }, scan_payload={})
+
+    assert issue_type == "blocking_false_claim"
+    assert blocking is True
+
+
+def test_detailed_report_fact_check_preserves_successful_batches(monkeypatch):
+    calls = []
+
+    def fake_check(*_args, **kwargs):
+        text = kwargs["summary_text"]
+        calls.append(text)
+        if "## Verdict" in text:
+            return {
+                "verified": False,
+                "verification_status": "unavailable",
+                "fact_check_skipped": True,
+                "fact_check_model": "all_models_failed",
+            }
+        return {
+            "verified": True,
+            "verification_status": "verified",
+            "fact_check_skipped": False,
+            "fact_check_model": "gpt-5.4",
+        }
+
+    monkeypatch.setattr(reality_check, "ai_fact_check_summary", fake_check)
+    report = "\n\n".join(
+        f"## {heading}\n\nSupported {heading.lower()} analysis."
+        for heading in ("Key Findings", "Operating Model", "Strategy", "AI Readiness", "Verdict")
+    )
+
+    result = reality_check.ai_fact_check_detailed_report(
+        report,
+        [],
+        "Example Oy",
+        time_budget_seconds=85,
+    )
+
+    assert len(calls) == 3
+    assert result["verification_status"] == "partially_unavailable"
+    assert result["verification_partial"] is True
+    assert result["verified"] is False
+    assert result["batch_results"][0]["status"] == "verified"
+    assert result["unavailable_sections"] == ["AI Readiness", "Verdict"]
+
+
+def test_detailed_report_fact_check_keeps_calibration_out_of_false_claims(monkeypatch):
+    calibration = {
+        "claim": "Growth was driven by one customer segment.",
+        "issue_type": "wording_calibration",
+        "correction": "Growth coincided with reported demand in that customer segment.",
+    }
+
+    monkeypatch.setattr(
+        reality_check,
+        "ai_fact_check_summary",
+        lambda *_args, **_kwargs: {
+            "verified": False,
+            "verification_status": "wording_calibration_required",
+            "fact_check_skipped": False,
+            "fact_check_model": "gpt-5.4",
+            "false_claims": [],
+            "false_claims_detailed": [],
+            "wording_adjustments": [calibration["claim"]],
+            "wording_adjustments_detailed": [calibration],
+        },
+    )
+
+    result = reality_check.ai_fact_check_detailed_report(
+        "## Key Findings\n\nGrowth was driven by one customer segment.",
+        [],
+        "Example Oy",
+        time_budget_seconds=45,
+    )
+
+    assert result["verification_status"] == "wording_calibration_required"
+    assert result["false_claims"] == []
+    assert result["wording_adjustments"] == [calibration["claim"]]
+
+
+def test_detailed_report_fact_check_gives_fallback_independent_time(monkeypatch):
+    attempts = []
+
+    def fake_check(*_args, **kwargs):
+        attempts.append({
+            "provider_chain": kwargs.get("provider_chain"),
+            "time_budget_seconds": kwargs.get("time_budget_seconds"),
+            "provider_timeout_seconds": kwargs.get("provider_timeout_seconds"),
+        })
+        provider = (kwargs.get("provider_chain") or ("",))[0]
+        if provider == reality_check.GPT_VERIFIER_MODEL:
+            return {
+                "verified": False,
+                "verification_status": "unavailable",
+                "fact_check_skipped": True,
+                "fact_check_model": "all_models_failed",
+            }
+        return {
+            "verified": True,
+            "verification_status": "verified",
+            "fact_check_skipped": False,
+            "fact_check_model": reality_check.CLAUDE_SONNET_MODEL,
+        }
+
+    monkeypatch.setattr(reality_check, "ai_fact_check_summary", fake_check)
+    result = reality_check.ai_fact_check_detailed_report(
+        "## Key Findings\n\nThe company reported revenue growth and a new agreement.",
+        [],
+        "Example Oy",
+        time_budget_seconds=85,
+    )
+
+    assert result["verified"] is True
+    assert len(attempts) == 2
+    assert attempts[0]["provider_chain"] == (reality_check.GPT_VERIFIER_MODEL,)
+    assert attempts[1]["provider_chain"] == (reality_check.CLAUDE_SONNET_MODEL,)
+    assert attempts[0]["time_budget_seconds"] >= 35
+    assert attempts[1]["time_budget_seconds"] >= 30
+    assert result["batch_results"][0]["attempts"][1]["allocated_seconds"] >= 30
+
+
+def test_detailed_report_fact_check_budget_scales_with_claim_load():
+    short_report = "## Key Findings\n\nThe company reported growth."
+    long_report = "\n\n".join(
+        f"## Section {section}\n\n" + " ".join(
+            f"The company reported event {index} in 2025, and the report connects it to operational capacity."
+            for index in range(12)
+        )
+        for section in range(1, 6)
+    )
+
+    short_budget = reality_check.detailed_report_fact_check_budget(short_report)
+    long_budget = reality_check.detailed_report_fact_check_budget(long_report)
+
+    assert short_budget["recommended_seconds"] == 90
+    assert long_budget["recommended_seconds"] > short_budget["recommended_seconds"]
+    assert long_budget["recommended_seconds"] <= 150
+    assert long_budget["batch_count"] > short_budget["batch_count"]
+    assert long_budget["candidate_claim_count"] > short_budget["candidate_claim_count"]
+
+
+def test_dense_detailed_report_sections_are_not_forced_into_three_section_batches():
+    sections = [
+        {
+            "heading": f"Section {index}",
+            "text": f"## Section {index}\n\n" + " ".join(
+                f"Supported analytical claim {claim} has a documented premise and a bounded implication."
+                for claim in range(12)
+            ),
+        }
+        for index in range(1, 5)
+    ]
+
+    batches = reality_check._plan_detailed_fact_check_batches(sections)
+
+    assert len(batches) >= 2
+    assert all(len(batch) <= 2 for batch in batches)
+
+
+def test_compact_packet_omission_is_repaired_from_current_run_manifest():
+    fact_id = "FINFACT-123e4567-e89b-12d3-a456-426614174000"
+    result = {
+        "evidence_handoff_failures": [{
+            "claim_id": "DR-CLAIM-01",
+            "claim": "The company reported EUR 91.6 million revenue in 2025.",
+            "missing_evidence_ids": fact_id,
+        }],
+    }
+    full_records = [{
+        "fact_id": fact_id,
+        "source_url": "https://b2b.profinder.fi/haku/oy-sisu-auto-ab/17495599",
+        "legal_entity": "Oy Sisu Auto Ab",
+        "period": "2025",
+        "metric": "Revenue",
+        "value": "EUR 91.6 million",
+    }]
+
+    repaired = reality_check._repair_explicit_packet_omissions(
+        result,
+        full_records=full_records,
+        compact_records=[],
+    )
+
+    assert repaired[0]["status"] == "packet_omission_repaired"
+    assert repaired[0]["recovered_source_ids"] == [fact_id]
+    assert result["evidence_handoff_failures"] == []
+    assert result["audit_notes_detailed"][0]["issue_type"] == "packet_omission_repaired"
+
+
+def test_semantic_handoff_recovery_builds_recheck_packet_without_approving_claim():
+    failure = {
+        "claim_id": "DR-CLAIM-02",
+        "claim": "The company has expanded production capacity through a manufacturing cooperation agreement.",
+        "reasoning": "The compact packet did not include the cooperation source.",
+    }
+    full_records = [{
+        "evidence_id": "EVD-B02F3CECF9F3",
+        "generation_eligible": True,
+        "content_verified": True,
+        "entity_match_status": "matched",
+        "claim": "Sisu Auto and Valmet Automotive signed a manufacturing cooperation agreement to expand production capacity.",
+        "source_quote": "The agreement covers manufacturing cooperation and additional production capacity for Sisu vehicles.",
+    }]
+
+    records, failures = reality_check._semantic_packet_omission_records(
+        [failure],
+        full_records=full_records,
+        compact_records=[],
+    )
+
+    assert records[0]["evidence_id"] == "EVD-B02F3CECF9F3"
+    assert failures[0]["recovery_method"] == "semantic_current_run_match"
+    assert failures[0]["claim_id"] == "DR-CLAIM-02"

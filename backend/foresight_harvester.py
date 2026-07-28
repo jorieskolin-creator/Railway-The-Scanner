@@ -26,7 +26,7 @@ import concurrent.futures
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from llm_clients import call_anthropic_text, call_openai_text
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, call_anthropic_text, call_openai_text
 from gemini_client import GEMINI_HARVEST_MODEL, call_gemini_harvest_text, gemini_api_key
 from source_quality import (
     HIGH_CREDIBILITY_DOMAINS,
@@ -1510,7 +1510,7 @@ RESPONSE TO REPAIR:
             "anthropic", f"{theme} {batch_label} Sonnet JSON repair", repair_timeout,
             lambda: call_anthropic_text(
                 repair_prompt,
-                model="claude-sonnet-4-6",
+                model=CLAUDE_SONNET_MODEL,
                 max_tokens=7000,
                 timeout=min(HARVEST_SONNET_REPAIR_NATIVE_TIMEOUT_SEC, repair_timeout),
                 web_search=False,
@@ -1518,7 +1518,7 @@ RESPONSE TO REPAIR:
         )
         attempts.append({
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": CLAUDE_SONNET_MODEL,
             "purpose": "json_repair",
             "status": call.get("status"),
             "elapsed_ms": call.get("elapsed_ms"),
@@ -1538,27 +1538,30 @@ RESPONSE TO REPAIR:
         }
 
     print(
-        f"   🌐 [Harvest] {theme} {batch_label} → gpt-5.5 "
+        f"   🌐 [Harvest] {theme} {batch_label} → {GPT_REASONING_MODEL} "
         f"(discovery, timeout={gpt_outer}s, queries={len(search_queries)})..."
     )
     call_runner = run_context.call if run_context else (
         lambda provider, label, timeout, fn: _call_harvest_model_with_deadline(label, timeout, fn)
     )
     gpt = call_runner(
-        "openai", f"{theme} {batch_label} gpt-5.5", gpt_outer,
+        "openai", f"{theme} {batch_label} {GPT_REASONING_MODEL}", gpt_outer,
         lambda: call_openai_text(
             prompt,
-            model="gpt-5.5",
+            model=GPT_REASONING_MODEL,
             max_output_tokens=7000,
             timeout=min(HARVEST_GPT_NATIVE_TIMEOUT_SEC, gpt_outer),
             web_search=True,
             search_context_size="medium",
             max_retries=0,
+            reasoning_effort="low",
+            text_verbosity="low",
+            log_label=f"Foresight Harvest {theme}",
         ),
     )
     attempts.append({
         "provider": "openai",
-        "model": "gpt-5.5",
+        "model": GPT_REASONING_MODEL,
         "purpose": "discovery",
         "status": gpt.get("status"),
         "elapsed_ms": gpt.get("elapsed_ms"),
@@ -1570,7 +1573,7 @@ RESPONSE TO REPAIR:
     if data is None and parse_status == "invalid_json":
         data, parse_status = repair_json(gpt_text, "GPT")
     if data is not None:
-        model_name = "gpt-5.5"
+        model_name = GPT_REASONING_MODEL
     else:
         fallback_queries = search_queries[: max(1, min(2, (len(search_queries) + 1) // 2))]
         if not gemini_api_key():

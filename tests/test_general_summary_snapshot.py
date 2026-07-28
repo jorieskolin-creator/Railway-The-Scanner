@@ -6,6 +6,7 @@ Run with: python -m pytest tests/test_general_summary_snapshot.py -v
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -70,6 +71,8 @@ def test_general_summary_payload_excludes_key_people(monkeypatch):
     assert "Jane Example" not in str(payload)
     assert len(payload["evidence_links"]) == 1
     assert payload["financial_findings"][0]["dimension"] == "profitability"
+    assert "assessment" not in payload["financial_findings"][0]
+    assert "model-interpreted" not in str(payload)
 
 
 def test_general_summary_prompt_defines_business_snapshot_not_diagnosis(monkeypatch):
@@ -130,3 +133,131 @@ def test_general_summary_rejects_scanner_process_language():
     assert "supplied payload" in phrases
     assert "zero promoted" in phrases
     assert "key_findings" in phrases
+
+
+def test_general_summary_strict_repair_is_rechecked_and_verified(monkeypatch):
+    monkeypatch.setattr(
+        general_summary,
+        "_build_input_payload",
+        lambda *_args, **_kwargs: {"evidence_links": [], "financial_findings": []},
+    )
+    calls = []
+
+    def fake_sonnet(_prompt, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return json.dumps({
+                "unsupported_claims": [{
+                    "claim": "ExampleCo has deployed enterprise AI globally.",
+                    "reason": "The payload does not establish deployment.",
+                }],
+            })
+        if len(calls) == 2:
+            claim_id = general_summary._gs_claim_id("ExampleCo has deployed enterprise AI globally.")
+            return json.dumps({
+                "replacements": [{
+                    "claim_id": claim_id,
+                    "original_claim": "ExampleCo has deployed enterprise AI globally.",
+                    "replacement": "The available payload does not establish enterprise-wide AI deployment.",
+                }],
+            })
+        return json.dumps({"unsupported_claims": []})
+
+    monkeypatch.setattr(general_summary, "call_anthropic_text", fake_sonnet)
+    result = general_summary.fact_check_general_summary(
+        "ExampleCo has deployed enterprise AI globally.\n\nIts products serve industrial customers.\n\nThe record is limited.",
+        {},
+        "ExampleCo",
+        time_budget_seconds=60,
+    )
+
+    assert result["verified"] is True
+    assert result["initial_verification_status"] == "failed"
+    assert result["final_verification_status"] == "verified_after_repair"
+    assert "does not establish" in result["corrected_summary"]
+    assert len(result["repaired_claim_ids"]) == 1
+    assert all(call.get("json_schema") for call in calls)
+
+
+def test_sonnet_generated_summary_uses_gpt_verifier(monkeypatch):
+    monkeypatch.setattr(
+        general_summary,
+        "_build_input_payload",
+        lambda *_args, **_kwargs: {"evidence_links": [], "financial_findings": []},
+    )
+    calls = []
+
+    def fake_openai(_prompt, **kwargs):
+        calls.append(kwargs.get("model"))
+        return json.dumps({"unsupported_claims": []})
+
+    def fail_sonnet(*_args, **_kwargs):
+        raise AssertionError("Sonnet must not verify its own generated summary")
+
+    monkeypatch.setattr(general_summary, "call_openai_text", fake_openai)
+    monkeypatch.setattr(general_summary, "call_anthropic_text", fail_sonnet)
+    result = general_summary.fact_check_general_summary(
+        "ExampleCo makes industrial products from its Finnish operations.",
+        {},
+        "ExampleCo",
+        time_budget_seconds=30,
+        generator_model=general_summary.CLAUDE_SONNET_MODEL,
+    )
+
+    assert result["verified"] is True
+    assert calls == [general_summary.GPT_VERIFIER_MODEL]
+
+
+def test_general_summary_final_recheck_actions_are_resolved(monkeypatch):
+    monkeypatch.setattr(
+        general_summary,
+        "_build_input_payload",
+        lambda *_args, **_kwargs: {"evidence_links": [], "financial_findings": []},
+    )
+    calls = []
+
+    def fake_sonnet(_prompt, **_kwargs):
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            return json.dumps({
+                "unsupported_claims": [{
+                    "claim": "ExampleCo's growth proves operational resilience.",
+                    "reason": "The payload supports growth, not resilience.",
+                    "replacement": "ExampleCo has reported growth.",
+                }],
+            })
+        if len(calls) == 2:
+            claim_id = general_summary._gs_claim_id(
+                "ExampleCo's growth proves operational resilience."
+            )
+            return json.dumps({
+                "replacements": [{
+                    "claim_id": claim_id,
+                    "original_claim": "ExampleCo's growth proves operational resilience.",
+                    "replacement": "ExampleCo's growth confirms strong execution.",
+                }],
+            })
+        return json.dumps({
+            "unsupported_claims": [{
+                "claim": "confirms strong execution",
+                "reason": "Execution is not established by the payload.",
+                "replacement": "is documented in available financial material",
+            }],
+        })
+
+    monkeypatch.setattr(general_summary, "call_anthropic_text", fake_sonnet)
+    result = general_summary.fact_check_general_summary(
+        "ExampleCo's growth proves operational resilience.\n\n"
+        "Its industrial products are documented.\n\n"
+        "The company operates in Finland.",
+        {},
+        "ExampleCo",
+        time_budget_seconds=60,
+    )
+
+    assert result["verified"] is True
+    assert result["final_verification_status"] == "verified_after_final_resolution"
+    assert result["unresolved_claims"] == []
+    assert "confirms strong execution" not in result["corrected_summary"]
+    assert "documented in available financial material" in result["corrected_summary"]
+    assert result["final_resolution_claim_ids"]

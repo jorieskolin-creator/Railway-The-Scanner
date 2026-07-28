@@ -24,6 +24,36 @@ from bs4 import BeautifulSoup
 
 from entity_identity import assess_entity_match
 from llm_clients import call_json_model_chain
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, source_claim_chain
+
+
+RELEVANCE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "integer"},
+        "claim_supported": {"type": "boolean"},
+        "entity_match_status": {"type": "string", "enum": ["exact", "scoped", "weak", "wrong", "unknown"]},
+        "entity_name_found": {"type": "string"},
+        "supporting_quote": {"type": "string"},
+        "unsupported_reason": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["score", "claim_supported", "entity_match_status", "entity_name_found", "supporting_quote", "unsupported_reason", "reason"],
+    "additionalProperties": False,
+}
+
+CLAIM_REWRITE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "classification": {"type": "string", "enum": ["narrow_supported_claim", "question_only_premise", "context_only", "blocked"]},
+        "rewritten_claim": {"type": "string"},
+        "question_premise": {"type": "string"},
+        "supporting_quote": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["classification", "rewritten_claim", "question_premise", "supporting_quote", "reason"],
+    "additionalProperties": False,
+}
 
 
 # ── Page content extraction ─────────────────────────────────────────────────
@@ -36,8 +66,8 @@ _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
 _DEFAULT_FETCH_TIMEOUT = 12
 _ANALYSIS_SUPPORT_THRESHOLD = 55
 _PARTIAL_SUPPORT_THRESHOLD = 40
-DEFAULT_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6")
-CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6", "gpt-5.5")
+DEFAULT_MODEL_CHAIN = source_claim_chain()
+CLEAN_EVIDENCE_MODEL_CHAIN = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL)
 
 
 def _fetch_page_text(url: str, timeout: int = _DEFAULT_FETCH_TIMEOUT) -> str:
@@ -435,7 +465,18 @@ def _rewrite_overstrong_claim(
         unsupported_reason=unsupported_reason,
         entity_scope=entity_scope,
     )
-    raw, model_used = call_json_model_chain(prompt, ("gpt-5.5", "claude-sonnet-4-6"), max_tokens=520, timeout=timeout)
+    raw, model_used = call_json_model_chain(
+        prompt,
+        (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
+        max_tokens=3000,
+        timeout=timeout,
+        reasoning_effort="medium",
+        text_verbosity="low",
+        json_schema=CLAIM_REWRITE_JSON_SCHEMA,
+        json_schema_name="source_claim_rewrite",
+        log_label="Source Claim Rewrite",
+        validate_json=True,
+    )
     parsed = _parse_claim_rewrite_json(raw)
     parsed["rewrite_model"] = model_used
     quote = parsed.get("supporting_quote") or source_excerpt
@@ -680,7 +721,18 @@ def _check_relevance(
     primary_result = None
     for model in model_chain or DEFAULT_MODEL_CHAIN:
         try:
-            raw, model_used = call_json_model_chain(prompt, (model,), max_tokens=320, timeout=timeout)
+            raw, model_used = call_json_model_chain(
+                prompt,
+                (model,),
+                max_tokens=3000,
+                timeout=timeout,
+                reasoning_effort="low",
+                text_verbosity="low",
+                json_schema=RELEVANCE_JSON_SCHEMA,
+                json_schema_name="source_claim_validation",
+                log_label="Source Claim Validation",
+                validate_json=True,
+            )
 
             parsed = _parse_relevance_json(raw)
             primary_result = _evaluate_parsed_relevance(
@@ -700,13 +752,15 @@ def _check_relevance(
                 company_domain=company_domain,
                 context_only=context_only,
             )
-            if review_needed and model_used != "claude-sonnet-4-6":
+            if review_needed and model_used != CLAUDE_SONNET_MODEL:
                 try:
                     raw2, model_used2 = call_json_model_chain(
                         prompt,
-                        ("claude-sonnet-4-6",),
-                        max_tokens=320,
+                        (CLAUDE_SONNET_MODEL,),
+                        max_tokens=3000,
                         timeout=timeout,
+                        reasoning_effort="low",
+                        validate_json=True,
                     )
                     parsed2 = _parse_relevance_json(raw2)
                     secondary_result = _evaluate_parsed_relevance(

@@ -19,6 +19,7 @@ from reality_check import validate_summary, validate_pitch, ai_fact_check_summar
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources, is_foresight_context_eligible_source
 from prompts import PROMPT_VERSION, build_shared_guardrails
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
 import anthropic
 
 
@@ -125,27 +126,27 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
 
                 Output plain text only.
                 """
-        # Sonnet 4.6 fallback for AI context retrieval
+        # Sonnet 5 fallback for AI context retrieval
         try:
             anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
             if anthropic_key:
                 import anthropic
                 claude_client = anthropic.Anthropic(api_key=anthropic_key)
                 resp = claude_client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model=CLAUDE_SONNET_MODEL,
                     max_tokens=2048,
                     messages=[{"role": "user", "content": fallback_prompt}]
                 )
                 text = resp.content[0].text if resp.content else ""
                 if text:
-                    print(f"   [Scanner 1] ✅ AI Context via Sonnet 4.6 for {company_name}.")
+                    print(f"   [Scanner 1] ✅ AI Context via {CLAUDE_SONNET_MODEL} for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SONNET FALLBACK) ---\n{text}"
         except Exception as e2:
             print(f"   [Scanner 1] ❌ Sonnet fallback failed: {e2}")
         try:
-            text = _call_openai_text(fallback_prompt, model="gpt-5.5", max_output_tokens=2048, timeout=45)
+            text = _call_openai_text(fallback_prompt, model=GPT_REASONING_MODEL, max_output_tokens=2048, timeout=45)
             if text:
-                print(f"   [Scanner 1] ✅ AI Context via GPT 5.5 for {company_name}.")
+                print(f"   [Scanner 1] ✅ AI Context via {GPT_REASONING_MODEL} for {company_name}.")
                 return f"--- AI GENERATED CONTEXT FOR {company_name} (GPT FALLBACK — NOT VERIFIED EVIDENCE) ---\n{text}"
         except Exception as e3:
             print(f"   [Scanner 1] ❌ GPT fallback also failed: {e3}")
@@ -648,7 +649,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \\n\\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). The pitch value must also contain \\n\\n between its 3 paragraphs. The archetype field is audit-only and must not appear in summary, pitch, why_proposals, or what_proposals.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                    # --- Synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
+                    # --- Synthesis with fallback chain: Opus 4.8 → GPT frontier → Sonnet 5 ---
                     response_text = ""
                     _seed_elapsed = time.time() - company_start
                     _seed_synth_remaining = COMPANY_BUDGET - _seed_elapsed
@@ -681,28 +682,28 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             except Exception as opus_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
 
-                        # Fallback 1: GPT 5.5
+                        # Fallback 1: configured GPT frontier model
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to GPT 5.5...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to {GPT_REASONING_MODEL}...")
                                 m_start = time.time()
                                 response_text = _call_openai_text(
                                     synthesis_prompt,
-                                    model="gpt-5.5",
+                                    model=GPT_REASONING_MODEL,
                                     max_output_tokens=4000,
                                     timeout=_SEED_SYNTH_TIMEOUT,
                                 )
-                                print(f"   [{company_name}] ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] {GPT_REASONING_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except Exception as gpt_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                        # Fallback 2: Claude Sonnet 4.6
+                        # Fallback 2: Claude Sonnet 5
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Claude Sonnet 4.6...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")
                                 m_start = time.time()
                                 sonnet_resp = claude_client.messages.create(
-                                    model="claude-sonnet-4-6",
+                                    model=CLAUDE_SONNET_MODEL,
                                     max_tokens=4000,
                                     messages=[{"role": "user", "content": synthesis_prompt}],
                                 )
@@ -710,7 +711,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                     if getattr(block, 'type', None) == 'text':
                                         response_text = block.text
                                         break
-                                print(f"   [{company_name}] ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] {CLAUDE_SONNET_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except Exception as sonnet_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
                     if response_text:
@@ -1123,23 +1124,23 @@ re-introduce any of the false claims listed above."""
                     resynth_model_used = ""
                     resynth_ms = 0
 
-                    # Primary: GPT 5.5
+                    # Primary: configured GPT frontier model
                     try:
-                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gpt-5.5...")
-                        resynth_text = _call_openai_text(resynth_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
-                        resynth_model_used = "gpt-5.5"
+                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting {GPT_REASONING_MODEL}...")
+                        resynth_text = _call_openai_text(resynth_prompt, model=GPT_REASONING_MODEL, max_output_tokens=12000, timeout=120)
+                        resynth_model_used = GPT_REASONING_MODEL
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   [{company_name}] ✅ [Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
+                        print(f"   [{company_name}] ✅ [Re-Synthesis] {GPT_REASONING_MODEL} complete ({resynth_ms}ms)")
                     except Exception as gpt_err:
-                        print(f"   [{company_name}] ❌ [Re-Synthesis] GPT 5.5 failed: {gpt_err}")
+                        print(f"   [{company_name}] ❌ [Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                    # Fallback: Claude Sonnet 4.6
+                    # Fallback: Claude Sonnet 5
                     if not resynth_text:
                         try:
-                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Falling back to Claude Sonnet 4.6...")
+                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")
                             m_start = time.time()
                             sonnet_resp = claude_client.messages.create(
-                                model="claude-sonnet-4-6",
+                                model=CLAUDE_SONNET_MODEL,
                                 max_tokens=4000,
                                 messages=[{"role": "user", "content": resynth_prompt}],
                             )
@@ -1147,12 +1148,12 @@ re-introduce any of the false claims listed above."""
                                 if getattr(block, 'type', None) == 'text':
                                     resynth_text = block.text
                                     break
-                            resynth_model_used = "claude-sonnet-4-6"
+                            resynth_model_used = CLAUDE_SONNET_MODEL
                             resynth_ms = int((time.time() - m_start) * 1000)
-                            print(f"   [{company_name}] ✅ [Re-Synthesis] Claude Sonnet 4.6 complete ({resynth_ms}ms)")
+                            print(f"   [{company_name}] ✅ [Re-Synthesis] {CLAUDE_SONNET_MODEL} complete ({resynth_ms}ms)")
                         except Exception as sonnet_err:
                             resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   [{company_name}] ❌ [Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
+                            print(f"   [{company_name}] ❌ [Re-Synthesis] {CLAUDE_SONNET_MODEL} failed: {sonnet_err} ({resynth_ms}ms)")
 
                     if not resynth_text:
                         resynth_ms = int((time.time() - resynth_start) * 1000)
@@ -1206,7 +1207,7 @@ re-introduce any of the false claims listed above."""
                             "was_resynthesized": True,
                             "false_claims_found": fact_check["false_claims"],
                             "evidence_purged": purge_result,
-                            "resynth_model": resynth_model_used or "gpt-5.5",
+                            "resynth_model": resynth_model_used or GPT_REASONING_MODEL,
                             "resynth_time_ms": resynth_ms,
                             "method": "separate_re_synthesis_fallback",
                         }
@@ -1244,7 +1245,9 @@ re-introduce any of the false claims listed above."""
                         print(f"   [{company_name}] ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
 
                         # Fact-check General Summary against its own input payload
-                        gs_check = fact_check_general_summary(gs_text, full_data, company_name)
+                        gs_check = fact_check_general_summary(
+                            gs_text, full_data, company_name, generator_model=gs_model
+                        )
                         if gs_check.get("corrected_summary"):
                             gs_text = gs_check["corrected_summary"]
                             gs_model = gs_check["corrected_model"] or gs_model

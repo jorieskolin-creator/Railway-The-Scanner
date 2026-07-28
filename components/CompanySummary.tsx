@@ -410,6 +410,7 @@ const isForesightContext = (link) => {
     .map((link) => `${link.title || link.source || link.url || 'Evidence source'}: ${String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ')}`);
   const previousScanCarriedForward = (data.evidence_links || []).some((link) => String(link?.source_type || '').toLowerCase() === 'historical')
     || (data.reality_checklist || []).some((item) => String(item?.source_type || '').toLowerCase() === 'historical');
+  const currentRealityAvailable = data.current_reality_unavailable !== true && data.reality_score_valid !== false;
 
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
   // Prefer the stored archetype from the backend (single source of truth).
@@ -422,7 +423,9 @@ const isForesightContext = (link) => {
   };
 
   let gapKey: string;
-  if (data.archetype && ARCHETYPE_COLORS[data.archetype]) {
+  if (!currentRealityAvailable) {
+      gapKey = "Unavailable";
+  } else if (data.archetype && ARCHETYPE_COLORS[data.archetype]) {
       gapKey = data.archetype;
   } else {
       const fin = data.financial_index ?? data.intent_score ?? 0;
@@ -432,7 +435,7 @@ const isForesightContext = (link) => {
           gapKey = fin >= 50 ? "Cash Cow" : "At Risk";
       }
   }
-  const gapLabel = gapKey;
+  const gapLabel = currentRealityAvailable ? gapKey : "Current reality unavailable";
   const gapColor = ARCHETYPE_COLORS[gapKey] || '#94a3b8';
 
   const ARCHETYPE_DESCRIPTIONS = {
@@ -442,7 +445,9 @@ const isForesightContext = (link) => {
     "At Risk": "Low Reality + Weak Financials. Both operations and finances under pressure."
   };
   
-  let gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`;
+  let gapValueDisplay = currentRealityAvailable
+    ? (data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`)
+    : 'N/A';
 
   const radarData = data.intent_breakdown.map(item => ({
     subject: item.name,
@@ -564,7 +569,7 @@ const isForesightContext = (link) => {
                 var trimmed = block.trim();
                 if (trimmed.length < 900) return [trimmed];
                 var chunks = trimmed
-                    .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                    .split(/\s+(?=(?:This creates the first strategic tension|The (?:first|second|third|fourth) tension is|A second tension|The second tension|A third tension|The third tension|Layered onto this|Separately,|Given the (?:profitability|financial)|In the next \d|Over \d|Over a \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would be invalidated|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
                     .map(function(part) { return part.trim(); })
                     .filter(Boolean);
                 return chunks.length > 1 ? chunks : [trimmed];
@@ -769,7 +774,10 @@ const isForesightContext = (link) => {
         var wrongEntityWarnings = companyEvidencePool.filter(isWrongEntity).map(function(link) {
             return (link.title || link.source || link.url || 'Evidence source') + ': ' + String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ');
         });
-        var gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        var realityAvailable = exportData.current_reality_unavailable !== true && exportData.reality_score_valid !== false;
+        var gap = realityAvailable
+            ? Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0)
+            : null;
         var acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
             ? exportData.forensic_acquisition_health
             : {};
@@ -781,8 +789,8 @@ const isForesightContext = (link) => {
         ].join('/');
         var metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
-            renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
-            renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
+            renderMetric('Reality Score', realityAvailable ? formatScore(exportData.reality_score, '/100') : 'N/A', realityAvailable ? 'Evidence check' : 'Current result unavailable'),
+            renderMetric('Integrity Delta', gap !== null ? ((gap > 0 ? '+' : '') + Math.round(gap)) : 'N/A', 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('Acq Fresh', formatScore(acquisitionHealth.fresh_packets_accepted, '') + '/' + formatScore(acquisitionHealth.fresh_packets_acquired, ''), 'accepted / acquired'),
@@ -840,14 +848,16 @@ const isForesightContext = (link) => {
             + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
             + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
             + renderMetric('Contradictions', contradictionWarnings.length || 'None', 'stored warnings')
-            + renderMetric('Blocking Issues', blockingWarnings.length || 'None', 'material false claims')
+            + renderMetric('Claims Excluded From Analysis', blockingWarnings.length || 'None', 'governed claim exclusions')
             + renderMetric('Audit Notes', hallucinationWarnings.length || 'None', 'inference and methodology checks')
             + renderMetric('Quality Notes', qualityNotes.length || 'None', 'format/style checks')
             + '</div>'
             + (isLowEvidenceMode ? '<div class="callout amber"><h3>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h3><p>Promoted source-register evidence is limited. The report may still use verified structured financial findings and internal scanner observations, but precise external company claims require source-backed support.</p></div>' : '')
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
-            + (blockingWarnings.length ? '<div class="callout rose"><h3>Blocking Issues</h3>' + renderList(blockingWarnings) + '</div>' : '<p class="muted">No blocking false claims detected.</p>')
+            + '<div class="callout rose"><h3>Claims Excluded From Analysis</h3>'
+            + (blockingWarnings.length ? renderList(blockingWarnings) : '<p>N/A - no excluded claims.</p>')
+            + '</div>'
             + (hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); }).length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); })) + '</div>' : '<p class="muted">Inference and methodology audit details are retained in the raw payload.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Source Context</th><th>Claim Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
@@ -1006,21 +1016,36 @@ const isForesightContext = (link) => {
             return '<div class="callout cyan"><h3>Copied From Buying Insight</h3><p>This stakeholder list is copied from the stored Admin Buying Insight report. Treat it as sales-prep and discovery guidance, not as core Scanner diagnostic evidence or confirmed buying intent.</p></div>'
                 + '<div class="stakeholders">' + cards + '</div>';
         };
+        var pitchIsAvailable = Boolean(exportData.pitch_text && exportData.pitch_text !== 'Pitch Unavailable');
+        var activationHasPairs = Boolean(
+            Array.isArray(exportData.why_proposals) && exportData.why_proposals.length
+            && Array.isArray(exportData.what_proposals) && exportData.what_proposals.length
+        );
         var activationProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
             ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
             : '';
-        var activationHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>'
-            + activationProgressHTML
-            + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
+        var activationHTML = activationHasPairs || pitchIsAvailable
+            ? (activationHasPairs
+                ? '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>' + activationProgressHTML
+                : '')
+                + (pitchIsAvailable ? renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested') : '')
+            : '<div class="callout amber"><h3>Strategic Activation unavailable</h3><p>This analytical section did not complete within its governed stage deadline.</p></div>';
         var strategicForesightData = exportData.strategic_foresight || {};
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
         var buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(buyingInsightReport);
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var detailedReportStatus = exportData.detailed_report_status || '';
+        var detailedReportBoundaryHTML = detailedReportStatus === 'internal_draft_verification_pending'
+            ? '<div class="callout amber"><h3>Internal draft</h3><p>Factual verification coverage is incomplete for one or more sections. This does not mean a known false claim remains, but the unchecked sections should not be used externally until verification completes.</p></div>'
+            : detailedReportStatus === 'published_with_semantic_calibration'
+                ? '<div class="callout cyan"><h3>Published with semantic calibration</h3><p>No unresolved material factual claim remains. Interpretation wording was narrowed or qualified separately from fact-checking.</p></div>'
+                : detailedReportStatus === 'published_with_language_warnings'
+                    ? '<div class="callout amber"><h3>Published with language notes</h3><p>Factual verification did not identify an unresolved material claim. Minor fluency or grammar notes remain and did not block publication.</p></div>'
+                    : '';
         var detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
-            ? renderReportBlocks(exportData.detailed_report)
+            ? detailedReportBoundaryHTML + renderReportBlocks(exportData.detailed_report)
             : (detailedReportStatus && detailedReportStatus !== 'generated'
-                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The report remained structurally incomplete or retained unresolved material claims after bounded recovery. Open Scanner to inspect its quality metadata and source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
                 : '');
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -1032,7 +1057,9 @@ const isForesightContext = (link) => {
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Master Data HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Complete uploadable evidence and analysis package. This file includes collected sources, trust metadata, diagnosis, activation context, foresight analysis, detailed forensic report, and the raw JSON payload.</p><div class="meta">' + headerMeta + '</div></header>\n'
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
-            + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('AI Diagnosis', 'Interpretation and risks', exportData.ai_diagnosis_status === 'unavailable'
+                ? '<div class="callout amber"><h3>AI Diagnosis unavailable</h3><p>Downstream synthesis may still use the governed evidence directly.</p></div>'
+                : diagnosisHTML)
             + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderStrategicSynthesisParagraphs(exportData.strategic_synthesis))
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
@@ -1134,7 +1161,7 @@ const isForesightContext = (link) => {
             const trimmed = block.trim();
             if (trimmed.length < 900) return [trimmed];
             const chunks = trimmed
-                .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                .split(/\s+(?=(?:This creates the first strategic tension|The (?:first|second|third|fourth) tension is|A second tension|The second tension|A third tension|The third tension|Layered onto this|Separately,|Given the (?:profitability|financial)|In the next \d|Over \d|Over a \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would be invalidated|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
                 .map(function(part) { return part.trim(); })
                 .filter(Boolean);
             return chunks.length > 1 ? chunks : [trimmed];
@@ -1189,7 +1216,10 @@ const isForesightContext = (link) => {
     const buildAndDownloadExecutive = function(exportData) {
         const companyName = exportData.companyName || exportData.company_name || exportData.name || 'Company';
         const generatedDate = new Date().toISOString().split('T')[0];
-        const gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        const realityAvailable = exportData.current_reality_unavailable !== true && exportData.reality_score_valid !== false;
+        const gap = realityAvailable
+            ? Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0)
+            : null;
         const evidenceManifest = Array.isArray(exportData.evidence_manifest) ? exportData.evidence_manifest : [];
         executiveEvidenceById = evidenceManifest.reduce(function(acc, item) {
             if (item && item.evidence_id) acc[item.evidence_id] = item;
@@ -1294,8 +1324,8 @@ const isForesightContext = (link) => {
         ].join('/');
         const metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
-            renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
-            renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
+            renderMetric('Reality Score', realityAvailable ? formatScore(exportData.reality_score, '/100') : 'N/A', realityAvailable ? 'Evidence check' : 'Current result unavailable'),
+            renderMetric('Integrity Delta', gap !== null ? ((gap > 0 ? '+' : '') + Math.round(gap)) : 'N/A', 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('Claim Rewrite', claimRewriteLabel, 'narrow/question/context/blocked'),
@@ -1309,7 +1339,7 @@ const isForesightContext = (link) => {
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
             renderMetric('Company Evidence', companyEvidencePool.length, 'Company-specific sources'),
             renderMetric('Foresight Context', foresightContextEligible + '/' + foresightEvidencePool.length, 'Eligible macro context'),
-            renderMetric('Blocking Issues', blockingIssueCount, 'Material false claims'),
+            renderMetric('Claims Excluded From Analysis', blockingIssueCount, 'Governed claim exclusions'),
             renderMetric('Audit Notes', auditNoteCount, 'Inference and methodology checks'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
@@ -1372,10 +1402,17 @@ const isForesightContext = (link) => {
         };
         const buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(exportData.buying_insight_report);
         const detailedReportStatus = exportData.detailed_report_status || '';
+        const detailedReportBoundaryHTML = detailedReportStatus === 'internal_draft_verification_pending'
+            ? '<div class="callout amber"><h3>Internal draft</h3><p>Factual verification coverage is incomplete for one or more sections. This does not mean a known false claim remains, but the unchecked sections should not be used externally until verification completes.</p></div>'
+            : detailedReportStatus === 'published_with_semantic_calibration'
+                ? '<div class="callout cyan"><h3>Published with semantic calibration</h3><p>No unresolved material factual claim remains. Interpretation wording was narrowed or qualified separately from fact-checking.</p></div>'
+                : detailedReportStatus === 'published_with_language_warnings'
+                    ? '<div class="callout amber"><h3>Published with language notes</h3><p>Factual verification did not identify an unresolved material claim. Minor fluency or grammar notes remain and did not block publication.</p></div>'
+                    : '';
         const detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
-            ? renderReportBlocks(exportData.detailed_report)
+            ? detailedReportBoundaryHTML + renderReportBlocks(exportData.detailed_report)
             : (detailedReportStatus && detailedReportStatus !== 'generated'
-                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The report remained structurally incomplete or retained unresolved material claims after bounded recovery. Open Scanner to inspect its quality metadata and source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
                 : '');
 
         const htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
@@ -1460,6 +1497,11 @@ const isForesightContext = (link) => {
   const detailedReportStatus = data?.detailed_report_status || '';
   const showDetailedReport = Boolean(data?.detailed_report && detailedReportStatus !== 'incomplete');
   const showDetailedReportUnavailable = Boolean(detailedReportStatus && detailedReportStatus !== 'generated' && !showDetailedReport);
+  const aiDiagnosisAvailable = Boolean(data?.summary_text && data?.ai_diagnosis_status !== 'unavailable' && data?.summary_text !== 'AI Summary Unavailable');
+  const strategicPitchAvailable = Boolean(data?.pitch_text && data?.pitch_text !== 'Pitch Unavailable');
+  const strategicActivationAvailable = Boolean(
+    (data?.why_proposals?.length && data?.what_proposals?.length) || strategicPitchAvailable
+  );
 
   return (
     <div className="space-y-4">
@@ -1543,8 +1585,8 @@ const isForesightContext = (link) => {
             <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
             <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
             <span className="text-emerald-200 font-medium mb-1 text-sm tracking-widest uppercase">Reality Score</span>
-            <span className="text-6xl font-black text-white tracking-tighter drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]">{data.reality_score}</span>
-            <span className="text-xs text-slate-400 mt-2 font-mono">Evidence Check</span>
+            <span className="text-6xl font-black text-white tracking-tighter drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]">{currentRealityAvailable ? data.reality_score : 'N/A'}</span>
+            <span className="text-xs text-slate-400 mt-2 font-mono">{currentRealityAvailable ? 'Evidence Check' : 'Current result unavailable'}</span>
             </div>
             
             <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative overflow-hidden group/tooltip">
@@ -1570,7 +1612,7 @@ const isForesightContext = (link) => {
 
         {/* WASHING WARNING BANNER */}
         {/* LOGIC FIX: Ensure Washing only displays if Intent > Reality. */}
-        {data.washing_flag && data.intent_score > data.reality_score && (
+        {currentRealityAvailable && data.washing_flag && data.intent_score > data.reality_score && (
             <div className="animate-in slide-in-from-top-4 bg-rose-500/10 border-l-4 border-rose-500 p-4 rounded-r-xl flex items-start gap-4 shadow-lg shadow-rose-900/20">
                 <AlertOctagon className="text-rose-500 shrink-0 mt-0.5" size={24} />
                 <div>
@@ -1917,7 +1959,7 @@ const isForesightContext = (link) => {
                 <div className={`p-4 rounded-xl border ${blockingFlags.length > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-black/20 border-white/5'}`}>
                     <div className="flex items-center gap-2 mb-2">
                         <AlertOctagon size={14} className={blockingFlags.length > 0 ? 'text-rose-400' : 'text-slate-500'} />
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Blocking Issues</span>
+                        <span className="text-[10px] leading-tight text-slate-400 uppercase tracking-wider font-bold">Claims Excluded From Analysis</span>
                     </div>
                     {blockingFlags.length > 0 ? (
                         <div className="space-y-1.5">
@@ -1926,7 +1968,7 @@ const isForesightContext = (link) => {
                             ))}
                         </div>
                     ) : (
-                        <p className="text-xs text-slate-500">No blocking false claims reported.</p>
+                        <p className="text-xs text-slate-500">N/A - no excluded claims.</p>
                     )}
                 </div>
                 <div className={`p-4 rounded-xl border ${hallucinationFlags.length > 0 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>
@@ -1970,7 +2012,11 @@ const isForesightContext = (link) => {
                     General Summary
                     {data.general_summary_verified === false && (
                         <span className="ml-2 text-xs font-normal text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
-                            unverified claims removed
+                            {Array.isArray(data.general_summary_false_claims) && data.general_summary_false_claims.length > 0
+                                ? 'unverified wording remains'
+                                : String(data.general_summary_verification?.final_status || '').startsWith('unavailable')
+                                    ? 'verification unavailable'
+                                    : 'verification incomplete'}
                         </span>
                     )}
                 </h3>
@@ -1995,10 +2041,14 @@ const isForesightContext = (link) => {
             <ShieldCheck className="text-indigo-400" />
             AI Diagnosis
             </h3>
-            <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
-                <EvidenceCitedText text={data.summary_text} evidenceManifest={data.evidence_manifest} />
-            </p>
-            {data.evidence_based_risks && data.evidence_based_risks.length > 0 && (
+            {aiDiagnosisAvailable ? (
+              <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
+                  <EvidenceCitedText text={data.summary_text} evidenceManifest={data.evidence_manifest} />
+              </p>
+            ) : (
+              <p className="text-amber-200/90 text-sm">AI Diagnosis was unavailable. Strategic Synthesis may still be generated directly from governed evidence.</p>
+            )}
+            {aiDiagnosisAvailable && data.evidence_based_risks && data.evidence_based_risks.length > 0 && (
                 <div className="mt-5">
                     <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider mb-2">Evidence-Based Risks</p>
                     <ul className="space-y-2">
@@ -2258,7 +2308,7 @@ const isForesightContext = (link) => {
 
         {activeTab === "activation" && (<>
         {/* STRATEGIC PITCH SECTION */}
-        {data.pitch_text && (
+        {strategicPitchAvailable && (
             <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
                 <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
                     <Sparkles className="text-cyan-400" size={20} />
@@ -2349,6 +2399,11 @@ const isForesightContext = (link) => {
                     <Info size={12} />
                     Proposals derived from the weakest Knowledge Base dimensions — intended as conversation starters, not promises.
                 </p>
+            </div>
+        )}
+        {!strategicActivationAvailable && (
+            <div className="bg-amber-500/5 p-6 rounded-2xl border border-amber-400/20 text-sm text-amber-100/90">
+                Strategic Activation was unavailable within its governed stage deadline.
             </div>
         )}
 
@@ -2624,6 +2679,27 @@ const isForesightContext = (link) => {
                         Deep diagnostic with current evidence and reasoning trace
                     </p>
                     {showDetailedReport ? <div>
+                        {detailedReportStatus === 'internal_draft_verification_pending' && (
+                            <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4 mb-5">
+                                <p className="text-amber-100 text-sm leading-relaxed">
+                                    Internal draft: factual verification coverage is incomplete for one or more sections. No known material false claim remains, but use externally only after coverage is complete.
+                                </p>
+                            </div>
+                        )}
+                        {detailedReportStatus === 'published_with_semantic_calibration' && (
+                            <div className="bg-cyan-500/10 border border-cyan-400/20 rounded-lg p-4 mb-5">
+                                <p className="text-cyan-100 text-sm leading-relaxed">
+                                    Published with semantic calibration: no unresolved material factual claim remains. Interpretation wording was narrowed or qualified separately from fact-checking.
+                                </p>
+                            </div>
+                        )}
+                        {detailedReportStatus === 'published_with_language_warnings' && (
+                            <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4 mb-5">
+                                <p className="text-amber-100 text-sm leading-relaxed">
+                                    Published with language notes: factual verification did not identify an unresolved material claim. Minor fluency or grammar notes remain.
+                                </p>
+                            </div>
+                        )}
                         {data.detailed_report.split(/\n\n+/).map((block, pi) => {
                             const headingMatch = block.match(/^##\s+(.+)/);
                             if (headingMatch) {
@@ -2642,7 +2718,7 @@ const isForesightContext = (link) => {
                     </div> : (
                         <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4">
                             <p className="text-amber-100 text-sm leading-relaxed">
-                                Detailed Report unavailable: generation was incomplete or did not pass the completeness gate.
+                                Detailed Report unavailable: the report remained structurally incomplete or retained unresolved material claims after bounded recovery.
                                 Status: {detailedReportStatus || 'unavailable'}.
                             </p>
                         </div>

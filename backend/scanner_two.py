@@ -8,6 +8,7 @@ import unicodedata
 import requests as http_requests
 import concurrent.futures
 import threading
+import traceback
 from datetime import date, datetime
 from urllib.parse import quote, urljoin, urlparse, urldefrag
 import anthropic
@@ -31,7 +32,8 @@ from entity_identity import (
     ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
     ENTITY_SCOPE_UNKNOWN,
 )
-from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL
 from gemini_client import call_gemini_forensic_text, gemini_api_key
 from evidence_contracts import (
     VERIFIED_COMPANY_EVIDENCE,
@@ -45,6 +47,78 @@ from evidence_packaging import (
     build_subdimension_coverage,
     render_packages_for_prompt,
 )
+
+
+_FORENSIC_JURY_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "jury": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "category": {"type": "string"},
+                    "supported_claim": {"type": "string"},
+                    "found": {"type": "boolean"},
+                    "sentiment": {"type": "string", "enum": ["positive", "neutral", "negative"]},
+                    "source_quote": {"type": "string"},
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                    "is_recent": {"type": "boolean"},
+                    "source_type": {"type": "string"},
+                    "evidence_package_id": {"type": "string"},
+                    "proposition_ids": {"type": "array", "items": {"type": "string"}},
+                    "support_passage_ids": {"type": "array", "items": {"type": "string"}},
+                    "subdimensions": {"type": "array", "items": {"type": "string"}},
+                    "entity_scope": {"type": "string"},
+                    "source_verdict": {"type": "string"},
+                    "support_level": {"type": "string", "enum": ["exact", "partial", "context_only"]},
+                    "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": [
+                    "category", "supported_claim", "found", "sentiment", "source_quote", "title",
+                    "url", "is_recent", "source_type", "evidence_package_id", "proposition_ids",
+                    "support_passage_ids", "subdimensions", "entity_scope", "source_verdict",
+                    "support_level", "confidence",
+                ],
+            },
+        },
+        "rejected_evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"url": {"type": "string"}, "reason": {"type": "string"}},
+                "required": ["url", "reason"],
+            },
+        },
+        "contradictions": {"type": "array", "items": {"type": "string"}},
+        "missing_coverage": {"type": "array", "items": {"type": "string"}},
+        "confidence_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "reality_score_adjustment": {"type": "integer", "minimum": -100, "maximum": 100},
+    },
+    "required": [
+        "jury", "findings", "rejected_evidence", "contradictions", "missing_coverage",
+        "confidence_score", "reality_score_adjustment",
+    ],
+}
+
+
+def _dict_items(value, boundary: str = "") -> list[dict]:
+    """Normalize model/storage arrays before any item-level dictionary access."""
+    if not isinstance(value, (list, tuple)):
+        if value not in (None, ""):
+            print(f"   ⚠️ [Scanner 2 Boundary] {boundary or 'array'} was not an array; ignored.")
+        return []
+    valid = [item for item in value if isinstance(item, dict)]
+    dropped = len(value) - len(valid)
+    if dropped:
+        print(f"   ⚠️ [Scanner 2 Boundary] {boundary or 'array'} dropped {dropped} malformed item(s).")
+    return valid
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -263,7 +337,7 @@ FORENSIC_PROVIDER_SEQUENCE_SECONDS = (
     + FORENSIC_GEMINI_FLASH_SCOUT_SECONDS
 )
 FORENSIC_PROVIDER_SEQUENCE_OVERHEAD_SECONDS = 5
-FORENSIC_GEMINI_FAST_FALLBACK_MODEL = "gemini-3.5-flash"
+FORENSIC_GEMINI_FAST_FALLBACK_MODEL = GEMINI_FAST_FALLBACK_MODEL
 FORENSIC_LANE_REPLACEMENT_MIN_SECONDS = 30
 FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS = 42
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
@@ -1524,7 +1598,7 @@ def _split_jury_packets(jury_name: str, packets: list) -> list[tuple[str, list]]
 
 
 def _merge_jury_payloads(jury_name: str, payloads: list[dict]) -> dict | None:
-    payloads = [payload for payload in payloads if isinstance(payload, dict)]
+    payloads = _dict_items(payloads, f"{jury_name}.payloads")
     if not payloads:
         return None
     merged = {
@@ -1540,10 +1614,16 @@ def _merge_jury_payloads(jury_name: str, payloads: list[dict]) -> dict | None:
     confidences = []
     adjustments = []
     for payload in payloads:
-        merged["findings"].extend(payload.get("findings", []) or [])
-        merged["rejected_evidence"].extend(payload.get("rejected_evidence", []) or [])
-        merged["contradictions"].extend(payload.get("contradictions", []) or [])
-        merged["missing_coverage"].extend(payload.get("missing_coverage", []) or [])
+        merged["findings"].extend(_dict_items(payload.get("findings"), f"{jury_name}.findings"))
+        merged["rejected_evidence"].extend(_dict_items(payload.get("rejected_evidence"), f"{jury_name}.rejected"))
+        merged["contradictions"].extend([
+            str(item).strip() for item in (payload.get("contradictions") or [])
+            if isinstance(item, str) and item.strip()
+        ])
+        merged["missing_coverage"].extend([
+            str(item).strip() for item in (payload.get("missing_coverage") or [])
+            if isinstance(item, str) and item.strip()
+        ])
         if payload.get("confidence_score") is not None:
             confidences.append(payload.get("confidence_score") or 0)
         if payload.get("reality_score_adjustment") is not None:
@@ -1916,7 +1996,9 @@ def _combine_pre_jury_stats(*stats_items: dict) -> dict:
 
 def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seeds: dict) -> dict:
     """Merge judged findings; retain only revalidated seeds when a jury fails."""
-    result = {key: value for key, value in (baseline or {}).items() if key != "findings"}
+    baseline = baseline if isinstance(baseline, dict) else {}
+    routed_seeds = routed_seeds if isinstance(routed_seeds, dict) else {}
+    result = {key: value for key, value in baseline.items() if key != "findings"}
     findings = []
     statuses = []
     confidences = []
@@ -1925,16 +2007,16 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     seed_urls = {
         _canonical_evidence_url(item.get("url"))
         for items in (routed_seeds or {}).values()
-        for item in (items or [])
+        for item in _dict_items(items, "routed_seeds")
         if item.get("url")
     }
     revalidated_seed_urls = {
         _canonical_evidence_url(item.get("url"))
         for items in (routed_seeds or {}).values()
-        for item in (items or [])
+        for item in _dict_items(items, "revalidated_seeds")
         if item.get("url") and item.get("seed_url_verified") is True
     }
-    for lane in jury_results or []:
+    for lane in _dict_items(jury_results, "jury_results"):
         jury = lane.get("jury")
         payload = lane.get("data") if isinstance(lane.get("data"), dict) else None
         packet_urls = {
@@ -1945,17 +2027,20 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
         if not packet_urls:
             packet_urls = {
                 _canonical_evidence_url(item.get("url"))
-                for item in routed_seeds.get(jury, []) or []
+                for item in _dict_items(routed_seeds.get(jury), f"{jury}.routed_seeds")
                 if item.get("url")
             }
         packet_by_url = {
             _canonical_evidence_url(item.get("url")): item
-            for item in lane.get("packets", []) or [] if item.get("url")
+            for item in _dict_items(lane.get("packets"), f"{jury}.packets") if item.get("url")
         }
         package_by_id = {}
         package_by_url = {}
         try:
-            for package in build_jury_evidence_packages(jury, lane.get("packets", []) or [], max_packages=20):
+            for package in _dict_items(
+                build_jury_evidence_packages(jury, _dict_items(lane.get("packets"), f"{jury}.package_packets"), max_packages=20),
+                f"{jury}.evidence_packages",
+            ):
                 package_id = package.get("package_id")
                 package_url = _canonical_evidence_url(package.get("source_url"))
                 if package_id:
@@ -1966,8 +2051,8 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
             print(f"   ⚠️ [Jury Evidence Package] lineage rebuild failed for {jury}: {type(error).__name__}: {error}")
         accepted = []
         if payload:
-            for item in payload.get("findings", []) or []:
-                if not isinstance(item, dict) or not item.get("url"):
+            for item in _dict_items(payload.get("findings"), f"{jury}.payload_findings"):
+                if not item.get("url"):
                     continue
                 if _canonical_evidence_url(item.get("url")) not in packet_urls:
                     rejected.append({
@@ -2196,12 +2281,12 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                     normalized["analysis_verified"] = False
                     normalized["generation_eligible"] = False
                 accepted.append(mark_verified_company_evidence(mark_jury_finding(normalized)))
-            rejected.extend(payload.get("rejected_evidence", []) or [])
+            rejected.extend(_dict_items(payload.get("rejected_evidence"), f"{jury}.payload_rejected"))
             if accepted:
                 confidences.append(payload.get("confidence_score", 0) or 0)
                 adjustments.append(payload.get("reality_score_adjustment", 0) or 0)
         else:
-            for item in routed_seeds.get(jury, []) or []:
+            for item in _dict_items(routed_seeds.get(jury), f"{jury}.fallback_seeds"):
                 if item.get("seed_url_verified") and item.get("seed_entity_mentioned") is not False:
                     fallback = dict(item)
                     fallback["category"] = jury
@@ -2347,7 +2432,10 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     }
     result["scanner_evidence_quarantine"] = seed_quarantine_records
     result["_parallel_jury_forensic"] = True
-    result["_seeded_forensic_fallback"] = not any(lane.get("data") for lane in jury_results or [])
+    normalized_jury_results = _dict_items(jury_results, "jury_results.fallback_status")
+    result["_seeded_forensic_fallback"] = not any(
+        lane.get("data") for lane in normalized_jury_results
+    )
     return result
 
 
@@ -4077,7 +4165,7 @@ TEXT TO PARSE:
 Return ONLY valid JSON, no explanation."""
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=CLAUDE_SONNET_MODEL,
             max_tokens=12000,
             messages=[{"role": "user", "content": structuring_prompt}]
         )
@@ -4115,7 +4203,7 @@ Return ONLY valid JSON, no explanation."""
         return None
 
 
-def _structure_with_model(raw_text, company_name, model_name="gpt-5.4"):
+def _structure_with_model(raw_text, company_name, model_name=GPT_VERIFIER_MODEL):
     """Structure free-form forensic evidence text into JSON using GPT/Claude."""
     structuring_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated.
 
@@ -4140,9 +4228,10 @@ Return ONLY valid JSON, no explanation."""
     try:
         text, used_model = call_json_model_chain(
             structuring_prompt,
-            (model_name, "claude-sonnet-4-6") if model_name.startswith("gpt-") else (model_name, "gpt-5.4"),
+            (model_name, CLAUDE_SONNET_MODEL) if model_name.startswith("gpt-") else (model_name, GPT_VERIFIER_MODEL),
             max_tokens=8000,
             timeout=90,
+            validate_json=True,
         )
         json_payload = extract_json_from_text(text)
         if not json_payload:
@@ -5122,7 +5211,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         search_context_size: str = "medium",
         allow_repair: bool = False,
     ):
-        """Primary web-search path using GPT-5.5 Responses web_search."""
+        """Fallback web-search path using the configured GPT frontier model."""
         elapsed_total = time.time() - _fn_start
         if elapsed_total > _guard_anthropic:
             print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
@@ -5133,7 +5222,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ⏭️ [Forensic Scan] Skipping GPT web search — only {local_timeout}s available before phase guard")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting {purpose} gpt-5.5 + web_search for {company_name} (timeout={local_timeout}s)...")
+            print(f"   🔄 [Forensic Scan] Attempting {purpose} {GPT_REASONING_MODEL} + web_search for {company_name} (timeout={local_timeout}s)...")
             start = time.time()
             relaxed_prompt = re.sub(
                 r'RETURN STRICT JSON[^:]*:',
@@ -5141,15 +5230,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 active_prompt,
             )
             text_content = _hard_timeout_call(
-                "gpt-5.5 web search",
+                f"{GPT_REASONING_MODEL} web search",
                 local_timeout,
                 lambda: call_openai_text(
                     relaxed_prompt,
-                    model="gpt-5.5",
+                    model=GPT_REASONING_MODEL,
                     max_output_tokens=7000,
                     timeout=local_timeout,
                     web_search=True,
                     search_context_size=search_context_size,
+                    reasoning_effort="low",
+                    text_verbosity="low",
+                    log_label="Forensic Web Repair",
                 ),
             )
             if text_content is None:
@@ -5207,6 +5299,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if official_prefetch:
         coverage = _compute_forensic_coverage(baseline.get("findings", []), domain_hint)
         baseline["_baseline_coverage"] = coverage
+    baseline = baseline if isinstance(baseline, dict) else {}
+    baseline["findings"] = _dict_items(baseline.get("findings"), "baseline.findings")
     routed_seeds = _route_seed_findings(baseline.get("findings", []))
     baseline_missing_juries = set(coverage.get("missing_juries") or [])
     strong_seed_baseline = (
@@ -5341,7 +5435,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     def _run_acquisition_provider_sequence(prompt: str, jury_name: str) -> tuple[dict | None, str, str]:
         """Run the first acquisition scout. Retries happen after deterministic precheck."""
         payload = None
-        provider = "gemini-3.1-pro-preview"
+        provider = GEMINI_FORENSIC_MODEL
         status = "provider_unavailable"
 
         if gemini_api_key():
@@ -5405,7 +5499,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             and _seeded_coverage_can_skip_live_search(jury_name, jury_seeds, req)
         )
         target_valid = 0 if seeded_sufficient else _lane_fresh_target(jury_name, focus_key)
-        provider = "governed-seed" if seeded_sufficient else "gemini-3.1-pro-preview"
+        provider = "governed-seed" if seeded_sufficient else GEMINI_FORENSIC_MODEL
         status = "seeded_sufficient_live_search_skipped" if seeded_sufficient else "provider_unavailable"
         sources = []
         if not seeded_sufficient:
@@ -5542,7 +5636,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             replacement_payload = None
             replacement_status = f"{label}_unavailable"
             if retry_provider == "gpt":
-                replacement_provider = "gpt-5.5-web-survival-retry"
+                replacement_provider = f"{GPT_REASONING_MODEL}-web-survival-retry"
                 try:
                     replacement_payload = execute_with_openai_web(
                         replacement_prompt,
@@ -5609,7 +5703,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Gemini remains the first acquisition scout. If its structurally valid
         # candidates fail deterministic URL/entity/page-type checks, spend a
         # bounded lane-local retry on GPT, then Gemini Flash as the last resort.
-        if _needs_survival_retry() and "gpt-5.5" not in str(lane.get("provider") or ""):
+        if _needs_survival_retry() and GPT_REASONING_MODEL not in str(lane.get("provider") or ""):
             _run_survival_retry(
                 retry_provider="gpt",
                 label="gpt_round_2",
@@ -5676,20 +5770,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "error": repr(error),
                 })
         pool.shutdown(wait=False, cancel_futures=True)
-        acquisition_results = _combine_acquisition_lanes(acquisition_results)
+        acquisition_results = _combine_acquisition_lanes(
+            _dict_items(acquisition_results, "acquisition_results.concurrent")
+        )
     else:
         acquisition_results = [
             {"jury": jury, "provider": None, "status": "budget_skipped", "sources": []}
             for jury in FORENSIC_JURIES
         ]
-    acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
+    acquisition_results = _dict_items(acquisition_results, "acquisition_results.raw")
+    acquisition_by_jury = {
+        item.get("jury"): item for item in acquisition_results if item.get("jury")
+    }
 
     acquisition_results, pre_jury_stats_initial = _prevalidate_acquisition_results(
         acquisition_results,
         company_name,
         official_domain=domain_hint,
     )
-    acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
+    acquisition_results = _dict_items(acquisition_results, "acquisition_results.prevalidated")
+    acquisition_by_jury = {
+        item.get("jury"): item for item in acquisition_results if item.get("jury")
+    }
     readiness = _assess_jury_acquisition_readiness(acquisition_results, routed_seeds)
     weak_juries = [jury for jury, status in readiness.items() if status.get("weak")]
     repair_candidate_juries = [jury for jury in weak_juries if readiness.get(jury, {}).get("repair_needed")]
@@ -5746,7 +5848,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             rejected_count = int(status.get("rejected") or 0)
             lane_status = str((lane or {}).get("status") or "").lower()
             lane_provider = str((lane or {}).get("provider") or "").lower()
-            if "gpt-5.5-web-survival-retry" in lane_provider or int((lane or {}).get("survival_retry_attempts") or 0) > 0:
+            if f"{GPT_REASONING_MODEL}-web-survival-retry" in lane_provider or int((lane or {}).get("survival_retry_attempts") or 0) > 0:
                 return True
             if "provider_error" in lane_status or "provider_timeout" in lane_status:
                 return True
@@ -5829,13 +5931,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     gemini_sources = _normalize_acquisition_payload(
                         gemini_payload or {},
                         jury_name,
-                        "gemini-3.1-pro-preview-repair",
+                        f"{GEMINI_FORENSIC_MODEL}-repair",
                     )
                     if gemini_sources:
                         gemini_lane, _gemini_stats = _validate_repair_candidate(
                             {
                                 "jury": jury_name,
-                                "provider": "gemini-3.1-pro-preview-repair",
+                                "provider": f"{GEMINI_FORENSIC_MODEL}-repair",
                                 "status": gemini_status,
                                 "sources": gemini_sources,
                             },
@@ -5843,7 +5945,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         )
                         gemini_sources = list(gemini_lane.get("sources", []) or [])
                     sources.extend(gemini_sources)
-                    providers.append("gemini-3.1-pro-preview-repair")
+                    providers.append(f"{GEMINI_FORENSIC_MODEL}-repair")
                     statuses.append(gemini_status)
                     print(
                         f"   {'✅' if gemini_sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
@@ -5876,13 +5978,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 gpt_sources = _normalize_acquisition_payload(
                     gpt_payload or {},
                     jury_name,
-                    "gpt-5.5-web-repair",
+                    f"{GPT_REASONING_MODEL}-web-repair",
                 )
                 if gpt_sources:
                     gpt_lane, _gpt_stats = _validate_repair_candidate(
                         {
                             "jury": jury_name,
-                            "provider": "gpt-5.5-web-repair",
+                            "provider": f"{GPT_REASONING_MODEL}-web-repair",
                             "status": gpt_status,
                             "sources": gpt_sources,
                         },
@@ -5890,7 +5992,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     )
                     gpt_sources = list(gpt_lane.get("sources", []) or [])
                 sources.extend(gpt_sources)
-                providers.append("gpt-5.5-web-repair")
+                providers.append(f"{GPT_REASONING_MODEL}-web-repair")
                 statuses.append(gpt_status)
                 print(
                     f"   {'✅' if gpt_sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
@@ -6005,7 +6107,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         def _run_jury_prompt(chunk_packets: list, chunk_label: str = "") -> tuple[dict | None, str]:
             prompt = _build_jury_analysis_prompt(search_name, jury_name, chunk_packets)
-            provider_name = "gpt-5.5"
+            provider_name = GPT_REASONING_MODEL
             chunk_payload = None
             remaining = max(1, int(analysis_deadline - time.time()))
             try:
@@ -6020,11 +6122,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 gpt_timeout = min(base_timeout, remaining)
                 if gpt_timeout >= 15:
                     text = _hard_timeout_call(
-                        f"{jury_name} {chunk_label or 'full'} gpt-5.5 no-web jury analysis",
+                        f"{jury_name} {chunk_label or 'full'} {GPT_REASONING_MODEL} no-web jury analysis",
                         gpt_timeout,
                         lambda: call_openai_text(
-                            prompt, model="gpt-5.5", max_output_tokens=6500,
+                            prompt, model=GPT_REASONING_MODEL, max_output_tokens=6500,
                             timeout=max(1, min(gpt_timeout - 5, gpt_timeout)), web_search=False,
+                            reasoning_effort="medium", text_verbosity="medium",
+                            max_retries=0,
+                            json_schema=_FORENSIC_JURY_JSON_SCHEMA,
+                            json_schema_name="forensic_jury",
+                            log_label=f"Forensic Jury {jury_name}",
                         ),
                     )
                     if text:
@@ -6039,7 +6146,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         "using GPT rescue path for compact conservative findings."
                     )
                 elif remaining >= 20:
-                    provider_name = "claude-sonnet-4-6"
+                    provider_name = CLAUDE_SONNET_MODEL
                     try:
                         sonnet_base = FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS)
                         if chunk_label and chunk_label != "full":
@@ -6049,11 +6156,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                                 sonnet_base = min(sonnet_base, 45)
                         sonnet_timeout = min(sonnet_base, remaining)
                         text = _hard_timeout_call(
-                            f"{jury_name} {chunk_label or 'full'} claude-sonnet-4-6 no-web jury analysis",
+                            f"{jury_name} {chunk_label or 'full'} {CLAUDE_SONNET_MODEL} no-web jury analysis",
                             sonnet_timeout,
                             lambda: call_anthropic_text(
-                                prompt, model="claude-sonnet-4-6", max_tokens=6500,
+                                prompt, model=CLAUDE_SONNET_MODEL, max_tokens=6500,
                                 timeout=max(1, min(sonnet_timeout - 5, sonnet_timeout)), web_search=False,
+                                max_retries=0,
+                                reasoning_effort="medium",
+                                json_schema=_FORENSIC_JURY_JSON_SCHEMA,
+                                json_schema_name="forensic_jury",
+                                log_label=f"Forensic Jury {jury_name}",
                             ),
                         )
                         if text:
@@ -6066,33 +6178,39 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             postprocess_guard = FORENSIC_POSTPROCESS_RESERVE_SECONDS + 8
             remaining_phase = _phase_remaining(buffer=postprocess_guard)
             if remaining_phase < 18:
-                return None, "gpt-5.5-rescue-skipped-low-budget"
+                return None, f"{GPT_REASONING_MODEL}-rescue-skipped-low-budget"
             rescue_timeout = min(FORENSIC_JURY_RESCUE_TIMEOUT_SECONDS, remaining_phase)
             prompt = _build_jury_rescue_prompt(search_name, jury_name, packets)
             try:
                 text = _hard_timeout_call(
-                    f"{jury_name} compact gpt-5.5 no-web rescue jury analysis",
+                    f"{jury_name} compact {GPT_REASONING_MODEL} no-web rescue jury analysis",
                     rescue_timeout,
                     lambda: call_openai_text(
                         prompt,
-                        model="gpt-5.5",
+                        model=GPT_REASONING_MODEL,
                         max_output_tokens=3500,
                         timeout=max(1, rescue_timeout - 5),
                         web_search=False,
+                        reasoning_effort="medium",
+                        text_verbosity="low",
+                        max_retries=0,
+                        json_schema=_FORENSIC_JURY_JSON_SCHEMA,
+                        json_schema_name="forensic_jury_rescue",
+                        log_label=f"Forensic Jury Rescue {jury_name}",
                     ),
                 )
                 if text:
                     rescue_payload = _parse_provider_payload(text)
                     if rescue_payload:
                         rescue_payload["jury_rescue"] = True
-                        return rescue_payload, "gpt-5.5-rescue"
+                        return rescue_payload, f"{GPT_REASONING_MODEL}-rescue"
             except Exception as error:
                 print(f"   ⚠️ [Forensic Analysis Rescue] {jury_name} GPT rescue failed: {type(error).__name__}: {error}")
-            return None, "gpt-5.5-rescue-failed"
+            return None, f"{GPT_REASONING_MODEL}-rescue-failed"
 
         lane_started = time.time()
         payload = None
-        provider = "gpt-5.5"
+        provider = GPT_REASONING_MODEL
         split_labels = []
         split_chunks = _split_jury_packets(jury_name, packets)
         if len(split_chunks) > 1:
@@ -6118,7 +6236,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     f"   🛟 [Forensic Analysis Rescue] {jury_name}: "
                     f"{len(rescue_payload.get('findings', []) or [])} compact finding(s), provider={rescue_provider}."
                 )
-            elif rescue_provider != "gpt-5.5-rescue-skipped-low-budget":
+            elif rescue_provider != f"{GPT_REASONING_MODEL}-rescue-skipped-low-budget":
                 provider = f"{provider}+{rescue_provider}" if provider else rescue_provider
         accepted = len((payload or {}).get("findings", []) or [])
         print(
@@ -6131,28 +6249,38 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "provider": provider,
             "status": "completed_split" if payload and split_labels else "completed" if payload else "analysis_failed",
             "data": payload,
-            "packet_urls": [item.get("url") for item in packets if item.get("url")],
-            "packets": packets,
+            "packet_urls": [item.get("url") for item in _dict_items(packets, f"{jury_name}.return_packets") if item.get("url")],
+            "packets": _dict_items(packets, f"{jury_name}.return_packets"),
         }
 
     jury_results = []
     if analysis_ceiling >= 15:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        try:
             futures = {pool.submit(_analyze_one_jury, jury): jury for jury in FORENSIC_JURIES}
             done, pending = concurrent.futures.wait(futures, timeout=analysis_ceiling)
             if pending:
                 print(
                     f"   ⚠️ [Forensic Analysis] {len(pending)} jury call(s) still in flight at group ceiling; "
-                    "waiting for lane hard deadlines before merge."
+                    "preserving completed lanes and ending the group stage."
                 )
-                concurrent.futures.wait(pending)
-                done = set(futures.keys())
+                for future in pending:
+                    jury_results.append({
+                        "jury": futures[future],
+                        "provider": None,
+                        "status": "group_deadline_exceeded",
+                        "data": None,
+                    })
+                    future.cancel()
             for future in done:
                 jury = futures[future]
                 try:
                     jury_results.append(future.result())
                 except Exception as error:
                     jury_results.append({"jury": jury, "provider": None, "status": "lane_error", "data": None, "error": repr(error)})
+        finally:
+            # Never wait for a provider thread after the shared group deadline.
+            pool.shutdown(wait=False, cancel_futures=True)
     else:
         jury_results = [
             {"jury": jury, "provider": None, "status": "budget_skipped", "data": None}
@@ -6162,8 +6290,33 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     # --- PHASE 3: DETERMINISTIC MERGE, NORMALIZATION, AND DIAGNOSTICS ---
     postprocess_started = time.time()
     postprocess_deadline = postprocess_started + FORENSIC_POSTPROCESS_RESERVE_SECONDS
-    data = _merge_forensic_jury_results(baseline, jury_results, routed_seeds)
+    try:
+        data = _merge_forensic_jury_results(baseline, jury_results, routed_seeds)
+    except Exception as error:
+        print(
+            f"   ❌ [Forensic Merge] normalization failed; preserving governed partial lanes: "
+            f"{type(error).__name__}: {error}\n{traceback.format_exc()}"
+        )
+        partial_lanes = []
+        for lane in _dict_items(jury_results, "jury_results.partial_recovery"):
+            try:
+                partial = _merge_forensic_jury_results(baseline, [lane], routed_seeds)
+                partial_lanes.extend(_dict_items(partial.get("findings"), f"{lane.get('jury')}.partial_findings"))
+            except Exception as lane_error:
+                print(
+                    f"   ⚠️ [Forensic Merge] Lane {lane.get('jury') or 'unknown'} discarded after "
+                    f"{type(lane_error).__name__}: {lane_error}"
+                )
+        data = dict(baseline) if isinstance(baseline, dict) else {}
+        data["findings"] = partial_lanes
+        data["confidence_score"] = 0
+        data["current_reality_unavailable"] = not bool(partial_lanes)
+        data["forensic_partial_recovery"] = True
+        data["forensic_partial_recovery_error"] = f"{type(error).__name__}: {error}"[:500]
     data["_search_provider"] = "paced-gemini-acquisition+parallel-jury-analysis"
+    acquisition_results = _dict_items(acquisition_results, "acquisition_results.postprocess")
+    jury_results = _dict_items(jury_results, "jury_results.postprocess")
+    data["findings"] = _dict_items(data.get("findings"), "data.findings.postprocess")
     data["forensic_acquisition_status"] = [
         {
             "jury": item.get("jury"),
@@ -6177,25 +6330,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     fresh_url_provenance = {
         _canonical_evidence_url(source.get("url")): lane.get("provider")
         for lane in acquisition_results
-        for source in lane.get("sources", [])
+        for source in _dict_items(lane.get("sources"), f"{lane.get('jury')}.sources")
         if source.get("url")
     }
-    for finding in data.get("findings", []):
+    for finding in _dict_items(data.get("findings"), "data.findings.provenance"):
         provider = fresh_url_provenance.get(_canonical_evidence_url(finding.get("url")))
         if provider:
             finding["source_status"] = "fresh_discovery"
             finding["acquisition_provider"] = provider
             finding["forensic_provenance"] = "fresh_acquisition_jury_accepted"
-    fresh_packets = sum(len(item.get("sources", [])) for item in acquisition_results)
+    fresh_packets = sum(len(_dict_items(item.get("sources"), f"{item.get('jury')}.fresh_sources")) for item in acquisition_results)
     completed_juries = len([item for item in jury_results if item.get("data")])
     accepted_fresh = len([
-        finding for finding in data.get("findings", [])
+        finding for finding in _dict_items(data.get("findings"), "data.findings.accepted_fresh")
         if finding.get("source_status") == "fresh_discovery"
     ])
-    source_coverage = _compute_forensic_coverage(data.get("findings", []), domain_hint)
+    source_coverage = _compute_forensic_coverage(_dict_items(data.get("findings"), "data.findings.coverage"), domain_hint)
     data["_source_forensic_coverage"] = source_coverage
     jury_counts = {
-        jury: len([finding for finding in data.get("findings", []) if _finding_jury(finding) == jury])
+        jury: len([finding for finding in _dict_items(data.get("findings"), "data.findings.jury_counts") if _finding_jury(finding) == jury])
         for jury in FORENSIC_JURIES
     }
     resolution_metrics = data.get("forensic_resolution_metrics") or {}
@@ -6213,7 +6366,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     fresh_supported_targets = {}
     for jury in FORENSIC_JURIES:
         supported = [
-            finding for finding in data.get("findings", [])
+            finding for finding in _dict_items(data.get("findings"), f"data.findings.{jury}.targets")
             if _finding_jury(finding) == jury
             and finding.get("source_status") == "fresh_discovery"
             and finding.get("claim_support_status") == "supported"
@@ -6370,12 +6523,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")
                     break
 
-                new_findings = research_data.get("findings", [])
+                new_findings = _dict_items(research_data.get("findings"), "research_data.findings")
                 all_findings, new_unique_count = _merge_findings(all_findings, new_findings)
 
                 # Merge any new key people
                 existing_names = {p.get("name", "").lower() for p in all_key_people}
-                for person in research_data.get("key_people", []):
+                for person in _dict_items(research_data.get("key_people"), "research_data.key_people"):
                     if person.get("name", "").lower() not in existing_names:
                         all_key_people.append(person)
                         existing_names.add(person.get("name", "").lower())
@@ -6414,7 +6567,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     base_score = 50
 
     if data:
-        findings = data.get("findings", [])
+        findings = _dict_items(data.get("findings"), "data.findings.process_results")
         for f in findings:
             _finding_text = " ".join(
                 str(f.get(key) or "")
@@ -6764,6 +6917,9 @@ def _execute_financial_search(model_name, prompt, company_name, timeout=120):
                 timeout=timeout,
                 web_search=True,
                 search_context_size="medium",
+                reasoning_effort="low",
+                text_verbosity="low",
+                log_label="Financial Web Repair",
             )
         json_payload = extract_json_from_text(text_content)
         elapsed = int((time.time() - start) * 1000)
@@ -6849,7 +7005,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Uses Claude/OpenAI web search to find financial data.
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
-    primary_model = model_id or "claude-sonnet-4-6"
+    primary_model = model_id or CLAUDE_SONNET_MODEL
     _fh_start = time.time()
     _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 
@@ -6996,10 +7152,10 @@ CONFIDENCE GUIDE:
             print(f"   ⏭ [Financial Health] Budget exceeded before fallback. Aborting.")
         else:
             print(f"   [Financial Health] Primary exhausted. Falling back to GPT-5.5 web search...")
-            data = _execute_financial_search("gpt-5.5", prompt, company_name, timeout=120)
+            data = _execute_financial_search(GPT_REASONING_MODEL, prompt, company_name, timeout=120)
     if not data and (time.time() - _fh_start) <= _FH_BUDGET:
         time.sleep(2)
-        data = _execute_financial_search("gpt-5.5", prompt, company_name, timeout=120)
+        data = _execute_financial_search(GPT_REASONING_MODEL, prompt, company_name, timeout=120)
 
     # Abort: all attempts exhausted — return explicit no-data result
     if not data:

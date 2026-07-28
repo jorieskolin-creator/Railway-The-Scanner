@@ -28,6 +28,7 @@ import anthropic
 import requests
 from source_quality import assess_source_credibility
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
 from evidence_contracts import mark_company_foresight_interpretation
 
@@ -1686,8 +1687,8 @@ Curated theme domains for this scan: {", ".join(theme_domains[:24]) or "N/A"}
     )
 
     models = (
-        ("gpt-5.5", "openai", 75),
-        ("claude-sonnet-4-6", "anthropic", 60),
+        (GPT_REASONING_MODEL, "openai", 75),
+        (CLAUDE_SONNET_MODEL, "anthropic", 60),
     )
 
     for model_name, provider, timeout_sec in models:
@@ -1838,7 +1839,7 @@ def _generate_foresight_from_kb(
 
     # Synthesis only from pre-validated evidence.  GPT-5.5 is primary for
     # reasoning over the KB payload; Sonnet is the independent-provider fallback.
-    models = [("gpt-5.5", 120), ("claude-sonnet-4-6", 120)]
+    models = [(GPT_REASONING_MODEL, 120), (CLAUDE_SONNET_MODEL, 120)]
 
     for model_name, timeout_sec in models:
         try:
@@ -2227,10 +2228,10 @@ RULES:
 
 Output only the prose text. Nothing else."""
 
-    # --- Attempt 1: Claude Sonnet 4.6 (primary) ---
+    # --- Attempt 1: Claude Sonnet (primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if anthropic_key:
-        SONNET_MODEL = "claude-sonnet-4-6"
+        SONNET_MODEL = CLAUDE_SONNET_MODEL
         try:
             print(f"   🔮 [Future Insight] Attempting {SONNET_MODEL}...")
             t0 = time.time()
@@ -2238,8 +2239,6 @@ Output only the prose text. Nothing else."""
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=4000,
-                thinking={"type": "adaptive"},
-                extra_body={"output_config": {"effort": "medium"}},
                 messages=[{"role": "user", "content": prompt}],
             )
             text_parts = []
@@ -2257,26 +2256,26 @@ Output only the prose text. Nothing else."""
                     text += "\n\n" + _basis_line
                 return text, SONNET_MODEL
 
-            print(f"   ⚠️ [Future Insight] Sonnet too short ({wc} words) — falling back to GPT-5.5")
+            print(f"   ⚠️ [Future Insight] Sonnet too short ({wc} words) — falling back to {GPT_REASONING_MODEL}")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Future Insight] {SONNET_MODEL} failed ({elapsed}ms): {e}")
 
-    # --- Attempt 2: GPT-5.5 fallback ---
+    # --- Attempt 2: GPT frontier fallback ---
     try:
         t0 = time.time()
-        text = call_openai_text(prompt, model="gpt-5.5", max_output_tokens=4000, timeout=90)
+        text = call_openai_text(prompt, model=GPT_REASONING_MODEL, max_output_tokens=4000, timeout=90)
         text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text).strip()
         wc = len(text.split())
         elapsed = int((time.time() - t0) * 1000)
-        print(f"   [Future Insight] gpt-5.5: {wc} words ({elapsed}ms)")
+        print(f"   [Future Insight] {GPT_REASONING_MODEL}: {wc} words ({elapsed}ms)")
         if text and wc >= 100:
             if _basis_line:
                 text += "\n\n" + _basis_line
-            return text, "gpt-5.5"
+            return text, GPT_REASONING_MODEL
     except Exception as e:
         elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-        print(f"   ❌ [Future Insight] gpt-5.5 failed ({elapsed}ms): {e}")
+        print(f"   ❌ [Future Insight] {GPT_REASONING_MODEL} failed ({elapsed}ms): {e}")
 
     return "", ""
 
@@ -2303,7 +2302,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1, company_name="")
     print(f"   🔄 [Source Retry] {len(failed_forces)}/{len(forces)} forces have unverified sources — attempting re-search...")
     prompt = _build_source_retry_prompt(failed_forces, domain)
     retry_data = None
-    for model_name, provider, timeout_sec in (("gpt-5.5", "openai", 90), ("claude-sonnet-4-6", "anthropic", 75)):
+    for model_name, provider, timeout_sec in ((GPT_REASONING_MODEL, "openai", 90), (CLAUDE_SONNET_MODEL, "anthropic", 75)):
         try:
             t0 = time.time()
             if provider == "anthropic":

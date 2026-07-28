@@ -8,6 +8,7 @@ imports (main imports seed_manager; seed_manager must not import main).
 import time
 
 from llm_clients import call_json_model_chain
+from model_policy import CLAUDE_SONNET_MODEL, GPT_VERIFIER_MODEL
 
 
 KNOWN_DOMAINS = [
@@ -216,7 +217,7 @@ def infer_domain(company_name: str, company_url: str, reality_results: dict, fin
     If cached_domain is a valid known domain (not 'Other'), returns it
     immediately — saves one model call per re-scan.
 
-    Uses GPT-5.4 for deterministic classification and Sonnet 4.6 fallback.
+    Uses the Scanner verifier model for deterministic classification and Sonnet fallback.
     Non-fatal: returns 'Other' on any failure.
     """
     if cached_domain and cached_domain in KNOWN_DOMAINS and cached_domain != "Other":
@@ -260,13 +261,13 @@ Rules:
 - Do not invent a domain not in the list."""
 
         # Attempt 1: GPT verifier model
-        domain = _call_classifier("gpt-5.4", prompt, company_name, timeout=20)
+        domain = _call_classifier(GPT_VERIFIER_MODEL, prompt, company_name, timeout=20)
         if domain:
             return domain
 
         # Attempt 2: independent provider fallback
         time.sleep(1)
-        domain = _call_classifier("claude-sonnet-4-6", prompt, company_name, timeout=30)
+        domain = _call_classifier(CLAUDE_SONNET_MODEL, prompt, company_name, timeout=30)
         if domain:
             return domain
 
