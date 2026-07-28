@@ -1317,6 +1317,142 @@ def test_need_hypothesis_preserves_explicit_same_signal_future_pressure(monkeypa
 
     assert need["future_pressure"].startswith("Industrial AI is moving")
     assert need["market_context"].startswith("Industrial AI adoption")
+    assert need["account_unknown"] == "Current account condition requires validation."
+
+
+def test_proactive_external_trend_is_not_labeled_as_account_condition(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    need = bp._need_hypothesis_from_signal(
+        {
+            "id": "SIG-03",
+            "play_type": "proactive_opportunity",
+            "theme": "Selective automation and agentic AI",
+            "why": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+            "external_pressure": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+            "what_to_do": "Identify one bounded workflow whose relevance can be tested with the accountable owner.",
+            "what_progress_shows": "Priority workflows and measurable success criteria are agreed.",
+        }
+    )
+
+    assert need["account_fact"] == ""
+    assert need["account_unknown"].startswith("No account-specific condition is established")
+    assert need["external_pressure"].startswith("Agentic AI is increasingly capable")
+    assert need["causal_bridge_status"] == "not_established"
+    assert need["validation_outcome"].startswith("Priority workflows")
+    assert "Account condition: Agentic AI" not in need["combined_activation_hypothesis"]
+    assert "Account boundary:" in need["combined_activation_hypothesis"]
+    assert "Response direction to validate—not delivery scope:" in need["combined_activation_hypothesis"]
+
+
+def test_current_status_statement_splits_fact_unknown_and_consequence(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    need = bp._need_hypothesis_from_signal(
+        {
+            "id": "SIG-01",
+            "play_type": "current_status",
+            "theme": "Omnichannel operating foundation",
+            "why": (
+                "Customers already interact with Tokmanni through online and store-availability features, "
+                "but whether the supporting architecture is sufficiently interoperable is not substantiated. "
+                "Leaving this unclarified risks duplicated investment or difficult-to-measure change."
+            ),
+            "what_to_do": "Could we validate the current ownership, dependencies, and decision criteria?",
+            "what_progress_shows": "The accountable owner and evidence needed for a decision are clear.",
+        }
+    )
+
+    assert need["account_fact"].startswith("Customers already interact with Tokmanni")
+    assert need["account_unknown"].startswith("whether the supporting architecture")
+    assert need["potential_consequence"].startswith("Leaving this unclarified")
+    assert need["causal_bridge_status"] == "not_required"
+    assert "External pressure:" not in need["combined_activation_hypothesis"]
+
+
+def test_activation_mapping_keeps_validation_outcome_out_of_business_consequence(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    progress = "Priority workflows and measurable success criteria are agreed."
+    payload = {
+        "scanner_outputs": {
+            "activation_pairs": [
+                {
+                    "id": "SIG-03",
+                    "theme_type": "foresight_driven",
+                    "theme": "Selective automation and agentic AI",
+                    "why": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+                    "external_pressure": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+                    "what_to_do": "Test one bounded workflow with the accountable owner.",
+                    "what_progress_shows": progress,
+                }
+            ]
+        },
+        "verified_evidence": [],
+        "financial_sources": [],
+        "foresight_forces": [],
+    }
+
+    signal_map = bp._build_account_signal_map(payload, [])
+    signal = next(item for item in signal_map if item.get("source") == "scanner_activation_pair")
+
+    assert signal["validation_outcome"] == progress
+    assert signal["business_consequence"] != progress
+    assert signal["need_hypothesis"]["validation_outcome"] == progress
+
+
+def test_renderer_exposes_semantic_roles_and_discovery_timing_boundary(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    need = bp._need_hypothesis_from_signal(
+        {
+            "id": "SIG-03",
+            "play_type": "proactive_opportunity",
+            "theme": "Selective automation and agentic AI",
+            "why": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+            "external_pressure": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+            "what_to_do": "Could we validate one bounded workflow with the accountable owner?",
+            "what_progress_shows": "Priority workflows and measurable success criteria are agreed.",
+        }
+    )
+    report = {
+        "companyName": "Tokmanni Group",
+        "sales_spine": {
+            "executive_thesis": "A conditional discovery hypothesis.",
+            "why_now": "Validate relevance before assuming strength or weakness.",
+            "recommended_entry_wedge": "A bounded discovery conversation.",
+        },
+        "recommended_sales_plays": [
+            {
+                "signal_id": "SIG-03",
+                "title": "Selective automation and agentic AI",
+                "play_type": "proactive_opportunity",
+                "why": "Agentic AI is increasingly capable of supporting selected retail workflows.",
+                "what_to_do": "Could we validate one bounded workflow with the accountable owner?",
+                "what_progress_shows": "Priority workflows and measurable success criteria are agreed.",
+                "need_hypothesis": need,
+            }
+        ],
+        "pressure_signals": [
+            {
+                "signal_id": "SIG-03",
+                "title": "Selective automation and agentic AI",
+                "play_type": "proactive_opportunity",
+                "account_unknown": need["account_unknown"],
+                "external_pressure": need["external_pressure"],
+                "causal_bridge": need["causal_bridge"],
+                "potential_consequence": need["potential_consequence"],
+                "validation_outcome": need["validation_outcome"],
+            }
+        ],
+    }
+
+    html = bp.render_buying_potential_html(report)
+
+    assert "Account condition: Agentic AI" not in html
+    assert "Account boundary" in html
+    assert "External pressure" in html
+    assert "Potential consequence if confirmed" in html
+    assert "priority and sequencing of discovery" in html
+    assert "confirmed budget" in html
 
 
 def test_hypothesis_registry_keeps_activation_pressure_authoritative(monkeypatch):

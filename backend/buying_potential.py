@@ -1651,6 +1651,69 @@ def _activation_pair_text(pair: dict) -> str:
     )
 
 
+def _split_current_status_roles(value: Any) -> tuple[str, str, str]:
+    """Conservatively split a current-status WHY into fact, unknown, and consequence.
+
+    Activation prose is intentionally cautious, but it often carries more than one
+    semantic role. Only promote the clause before an explicit contrast (for example
+    ``but`` or ``while``) as an account fact. When the split is not clear, keep the
+    whole statement as a condition to validate rather than accidentally asserting it.
+    """
+    text = _clip(value, 700)
+    if not text:
+        return "", "", ""
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    first = sentences[0]
+    account_fact = ""
+    account_unknown = first
+    for separator in (", but ", "; but ", " while ", "; while "):
+        index = first.lower().find(separator)
+        if index <= 0:
+            continue
+        account_fact = first[:index].strip(" ,;.")
+        account_unknown = first[index + len(separator):].strip(" ,;.")
+        break
+
+    consequence_parts: list[str] = []
+    boundary_parts: list[str] = [account_unknown] if account_unknown else []
+    for sentence in sentences[1:]:
+        if re.match(r"^(?:if\b|leaving\b|without\b|this (?:could|may|risks?)\b|that (?:could|may|risks?)\b)", sentence, re.I):
+            consequence_parts.append(sentence)
+        else:
+            boundary_parts.append(sentence)
+    return (
+        _clip(account_fact, 420),
+        _clip(" ".join(boundary_parts), 520),
+        _clip(" ".join(consequence_parts), 520),
+    )
+
+
+def _compose_semantic_activation(need: dict, play_type: Any) -> str:
+    normalized_play_type = _normalize_play_type(play_type)
+    parts: list[str] = []
+    account_fact = _clip(need.get("account_fact"), 320)
+    account_unknown = _clip(need.get("account_unknown"), 360)
+    external_pressure = _clip(need.get("external_pressure") or need.get("future_pressure"), 360)
+    causal_bridge = _clip(need.get("causal_bridge"), 360)
+    consequence = _clip(need.get("potential_consequence") or need.get("likely_business_consequence"), 360)
+    response = _clip(need.get("what_to_propose"), 360)
+
+    if account_fact:
+        parts.append(f"Account fact: {account_fact}.")
+    if account_unknown:
+        label = "Account condition to validate" if normalized_play_type == "current_status" else "Account boundary"
+        parts.append(f"{label}: {account_unknown}.")
+    if normalized_play_type != "current_status" and external_pressure:
+        parts.append(f"External pressure: {external_pressure}.")
+    if causal_bridge:
+        parts.append(f"Causal bridge: {causal_bridge}.")
+    if consequence:
+        parts.append(f"Potential consequence if confirmed: {consequence}.")
+    if response:
+        parts.append(f"Response direction to validate—not delivery scope: {response}.")
+    return _clip(_clean_generated_text(" ".join(parts)), 1000)
+
+
 def _need_hypothesis_from_signal(signal: dict) -> dict:
     text = _clip(
         " | ".join(
@@ -1662,7 +1725,7 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     )
     pressure_label, pressure, consequence = _infer_pressure(text)
     play_type = _normalize_play_type(signal.get("sales_play_type") or signal.get("play_type") or signal.get("theme_type"))
-    current_condition = _clip(signal.get("why") or signal.get("account_movement") or text, 420)
+    raw_current_condition = _clip(signal.get("why") or signal.get("account_movement") or text, 700)
     explicit_need = _dict(signal.get("need_hypothesis"))
     explicit_pressure = _first_nonempty(
         explicit_need.get("future_pressure"),
@@ -1675,54 +1738,104 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     else:
         future_pressure = _clip(explicit_pressure or pressure, 520)
     structural_exposure = _clip(signal.get("theme") or pressure_label, 260)
-    likely_business_consequence = _clip(signal.get("business_consequence") or consequence, 420)
+    account_fact = _clip(explicit_need.get("account_fact") or signal.get("account_fact"), 420)
+    account_unknown = _clip(explicit_need.get("account_unknown") or signal.get("account_unknown"), 520)
+    explicit_current_condition = _clip(explicit_need.get("current_condition"), 520)
+    parsed_consequence = ""
+    if play_type == "current_status" and not account_fact and not account_unknown:
+        account_fact, account_unknown, parsed_consequence = _split_current_status_roles(
+            explicit_current_condition or raw_current_condition
+        )
+    elif play_type != "current_status" and not account_unknown:
+        candidate_current_condition = explicit_current_condition or raw_current_condition
+        current_l = candidate_current_condition.lower()
+        pressure_l = str(explicit_pressure or future_pressure or "").strip().lower()
+        current_is_external_pressure = bool(
+            current_l
+            and pressure_l
+            and (current_l in pressure_l or pressure_l in current_l)
+        ) or bool(re.search(
+            r"\b(?:external signals?|market pressure|increasingly capable|becoming (?:a|the)|moving toward)\b",
+            current_l,
+        ))
+        account_unknown = (
+            candidate_current_condition
+            if candidate_current_condition and not current_is_external_pressure
+            else (
+                "No account-specific condition is established by the current evidence; validate relevance, "
+                "owner, timing, and business consequence in discovery."
+            )
+        )
+    current_condition = _clip(
+        " ".join(part for part in (account_fact, account_unknown) if part)
+        or raw_current_condition,
+        520,
+    )
+    likely_business_consequence = _clip(
+        explicit_need.get("potential_consequence")
+        or signal.get("potential_consequence")
+        or parsed_consequence
+        or signal.get("business_consequence")
+        or consequence,
+        520,
+    )
     what_to_propose = _clip(
         signal.get("what_to_do")
         or signal.get("what")
         or "Validate whether the pressure is real, owned, and commercially relevant before proposing a service path.",
         420,
     )
-    progress_signal = _clip(signal.get("what_progress_shows"), 420)
+    progress_signal = _clip(signal.get("validation_outcome") or signal.get("what_progress_shows"), 420)
     why_now_or_soon = _clip(signal.get("timing_relevance") or _infer_timing(text), 360)
     context_type = _normalize_context_type(signal.get("context_type"), play_type)
-    company_context = _clip(current_condition, 520)
+    company_context = _clip(
+        current_condition
+        if play_type == "current_status"
+        else account_unknown,
+        520,
+    )
     market_context = _clip(
         explicit_need.get("market_context")
         or future_pressure,
         520,
     )
-    if play_type == "current_status":
-        combined_activation = (
-            f"Account signal: {current_condition}. Sales hypothesis: validate the response direction "
-            f"before this becomes an operating or financial constraint. Potential response to validate: {what_to_propose}."
-        )
-    elif play_type == "foresight_driven":
-        combined_activation = (
-            f"External pressure: {market_context}. Account-specific question: whether this connects to "
-            f"the current condition: {current_condition}. Potential response to validate: {what_to_propose}."
-        )
-    else:
-        combined_activation = (
-            f"Proactive opportunity: test whether this account condition becomes more commercially relevant "
-            f"as the market pressure develops. Account condition: {current_condition}. Market pressure: "
-            f"{market_context}. Potential response to validate: {what_to_propose}."
-        )
-    return {
+    causal_bridge = _clip(
+        explicit_need.get("causal_bridge")
+        or signal.get("causal_bridge")
+        or (
+            "No separate market-to-account bridge is required; discovery should validate whether the current "
+            "account signal has an owner, timing, and material consequence."
+            if play_type == "current_status"
+            else "Whether this external pressure connects to a defined account priority, use case, current "
+            "condition, owner, or timing is not established and must be validated."
+        ),
+        520,
+    )
+    semantic_need = {
         "future_pressure": future_pressure,
+        "external_pressure": future_pressure,
         "current_condition": current_condition,
+        "account_fact": account_fact,
+        "account_unknown": account_unknown,
+        "causal_bridge": causal_bridge,
+        "causal_bridge_status": "not_required" if play_type == "current_status" else "not_established",
         "structural_exposure": structural_exposure,
         "likely_business_consequence": likely_business_consequence,
+        "potential_consequence": likely_business_consequence,
         "why_now_or_soon": why_now_or_soon,
+        "discovery_priority": why_now_or_soon,
         "what_to_propose": what_to_propose,
         "what_progress_shows": progress_signal,
+        "validation_outcome": progress_signal,
         "discovery_question": "Where would this pressure become most visible if it starts affecting priorities, operating capacity, or investment choices?",
         "disqualifier": "Do not advance this as a sales play if the customer confirms no owner, pressure, timing, or business consequence.",
         "company_context": company_context,
         "market_context": market_context,
-        "combined_activation_hypothesis": _clip(combined_activation, 700),
         "falsifier": "The hypothesis weakens if the customer confirms the condition is already controlled, the market pressure is not relevant, or there is no owner, timing, or business consequence.",
         "context_type": context_type,
     }
+    semantic_need["combined_activation_hypothesis"] = _compose_semantic_activation(semantic_need, play_type)
+    return semantic_need
 
 
 def _normalize_need_hypothesis(need: Any, fallback_signal: dict, play_type: Any = None) -> dict:
@@ -1730,22 +1843,38 @@ def _normalize_need_hypothesis(need: Any, fallback_signal: dict, play_type: Any 
     fallback = _need_hypothesis_from_signal(fallback_signal)
     for key, value in fallback.items():
         normalized[key] = _clip(normalized.get(key) or value, 700)
-    normalized["context_type"] = _normalize_context_type(normalized.get("context_type"), play_type or fallback_signal.get("play_type"))
+    normalized_play_type = _normalize_play_type(play_type or fallback_signal.get("play_type") or fallback_signal.get("sales_play_type"))
+    normalized["context_type"] = _normalize_context_type(normalized.get("context_type"), normalized_play_type)
     if normalized["context_type"] == "company_only" and not normalized.get("market_context"):
         normalized["market_context"] = "No separate market pressure is required for this company-derived need hypothesis."
     if normalized["context_type"] == "market_watch" and not normalized.get("company_context"):
         normalized["company_context"] = "Account-specific exposure is not established; keep as market watch until discovery validates relevance."
+    if normalized_play_type != "current_status":
+        current_l = str(normalized.get("current_condition") or "").strip().lower()
+        pressure_l = str(normalized.get("external_pressure") or normalized.get("future_pressure") or "").strip().lower()
+        external_as_condition = bool(
+            current_l
+            and pressure_l
+            and (current_l in pressure_l or pressure_l in current_l)
+        ) or bool(re.search(r"\b(?:external signals?|market pressure|increasingly capable|becoming (?:a|the)|moving toward)\b", current_l))
+        if external_as_condition:
+            normalized["current_condition"] = normalized.get("account_unknown") or fallback["account_unknown"]
+            normalized["company_context"] = normalized["current_condition"]
     combined_text = str(normalized.get("combined_activation_hypothesis") or "")
+    legacy_semantic_mix = bool(re.search(
+        r"Account-specific question: whether this connects to the current condition:|"
+        r"Proactive opportunity: test whether this account condition becomes more commercially relevant|"
+        r"Account condition:\s*(?:Agentic AI|External signals?|AI-ready data)",
+        combined_text,
+        re.I,
+    ))
     if (
         not combined_text
+        or legacy_semantic_mix
         or re.search(r"\bmay make\s+[A-Z]", combined_text)
         or re.search(r"^If .{80,}, then .{80,}", combined_text)
     ):
-        normalized["combined_activation_hypothesis"] = _clip(
-            fallback.get("combined_activation_hypothesis")
-            or f"{normalized.get('company_context')} + {normalized.get('market_context')} may create a need to {normalized.get('what_to_propose')}",
-            700,
-        )
+        normalized["combined_activation_hypothesis"] = _compose_semantic_activation(normalized, normalized_play_type)
     if not normalized.get("falsifier"):
         normalized["falsifier"] = fallback["falsifier"]
     if not normalized.get("what_progress_shows"):
@@ -2020,7 +2149,20 @@ def _build_account_signal_map(
                 "what_progress_shows": what_progress_shows,
                 "account_movement": _clip(pair.get("why") or pair.get("theme") or text, 420),
                 "commercial_pressure": _clip(pair.get("why") or text, 500),
-                "business_consequence": _clip(what_progress_shows or _infer_pressure(text)[2], 500),
+                "business_consequence": _clip(
+                    pair.get("business_consequence")
+                    or pair.get("potential_consequence")
+                    or _infer_pressure(text)[2],
+                    500,
+                ),
+                "validation_outcome": _clip(
+                    pair.get("validation_outcome") or what_progress_shows,
+                    500,
+                ),
+                "account_fact": _clip(pair.get("account_fact"), 420),
+                "account_unknown": _clip(pair.get("account_unknown"), 520),
+                "causal_bridge": _clip(pair.get("causal_bridge"), 520),
+                "potential_consequence": _clip(pair.get("potential_consequence"), 520),
                 "timing_relevance": (
                     "Current-status validation should be tested in near-term discovery."
                     if play_type == "current_status"
@@ -2134,6 +2276,11 @@ def _build_account_signal_map(
                 "pressure_horizon": force.get("horizon") or force.get("time_horizon") or force.get("timeframe"),
                 "geography": force.get("geography"),
                 "domain_relevance": force.get("domain_relevance"),
+                "company_specific": force.get("company_specific") is True,
+                "requires_company_specific_corroboration": force.get("requires_company_specific_corroboration") is True,
+                "excluded_from_company_fact_generation": force.get("excluded_from_company_fact_generation") is True,
+                "not_evidence_of_deployment": force.get("not_evidence_of_deployment") is True,
+                "source_says": _clip(force.get("source_says") or force.get("exact_passage"), 420),
             },
         )
 
@@ -2265,6 +2412,11 @@ def _build_input_payload(
                 "domain_relevance": force.get("domain_relevance") or force.get("relevance"),
                 "source_freshness": force.get("source_freshness") or force.get("updated_at"),
                 "source_ids": _list(force.get("source_ids") or force.get("evidence_ids"))[:8],
+                "company_specific": force.get("company_specific") is True,
+                "requires_company_specific_corroboration": force.get("requires_company_specific_corroboration") is True,
+                "excluded_from_company_fact_generation": force.get("excluded_from_company_fact_generation") is True,
+                "not_evidence_of_deployment": force.get("not_evidence_of_deployment") is True,
+                "source_says": _clip(force.get("source_says") or force.get("exact_passage"), 420),
             })
 
     services = []
@@ -2508,6 +2660,16 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
             maximum_gate,
             "Use only the current HYP/SIG lineage and its governed evidence parents",
         )
+        if external and (
+            external.get("requires_company_specific_corroboration")
+            or external.get("excluded_from_company_fact_generation")
+            or external.get("not_evidence_of_deployment")
+        ):
+            wording_boundary = _clip(
+                f"{wording_boundary} External foresight is not an account fact or evidence of deployment; "
+                "keep the account connection explicit and unconfirmed until company-specific discovery corroborates it.",
+                420,
+            )
         registry.append({
             "hypothesis_id": hypothesis_id,
             "activation_signal_id": activation.get("id"),
@@ -2515,9 +2677,14 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
             "play_type": _normalize_play_type(activation.get("play_type")),
             "theme": _clip(activation.get("theme") or activation.get("account_movement"), 180),
             "current_condition": _clip(need.get("current_condition"), 520),
+            "account_fact": _clip(need.get("account_fact"), 420),
+            "account_unknown": _clip(need.get("account_unknown"), 520),
             "external_pressure": authoritative_pressure,
-            "causal_bridge": _clip(need.get("combined_activation_hypothesis"), 700),
+            "causal_bridge": _clip(need.get("causal_bridge"), 520),
+            "causal_bridge_status": _clip(need.get("causal_bridge_status"), 80),
             "likely_business_consequence": _clip(need.get("likely_business_consequence"), 520),
+            "potential_consequence": _clip(need.get("potential_consequence"), 520),
+            "validation_outcome": _clip(need.get("validation_outcome") or need.get("what_progress_shows"), 520),
             "pressure_horizon": _clip(activation.get("pressure_horizon") or external.get("pressure_horizon"), 120),
             "sales_validation_window": _clip(activation.get("sales_validation_window") or "Validate through discovery when an owner, consequence, and timing trigger are confirmed.", 220),
             "timing_basis": _clip(activation.get("timing_basis") or external.get("timing_relevance"), 360),
@@ -2561,9 +2728,18 @@ def _synchronize_hypothesis_contract(payload: dict) -> None:
         need = _normalize_need_hypothesis(signal.get("need_hypothesis"), signal, signal.get("play_type"))
         if record.get("external_pressure") and _normalize_play_type(signal.get("play_type")) != "current_status":
             need["future_pressure"] = _clip(record.get("external_pressure"), 520)
+            need["external_pressure"] = _clip(record.get("external_pressure"), 520)
             need["market_context"] = _clip(record.get("external_pressure"), 520)
         if record.get("likely_business_consequence"):
             need["likely_business_consequence"] = _clip(record.get("likely_business_consequence"), 520)
+            need["potential_consequence"] = _clip(
+                record.get("potential_consequence") or record.get("likely_business_consequence"),
+                520,
+            )
+        if record.get("validation_outcome"):
+            need["validation_outcome"] = _clip(record.get("validation_outcome"), 520)
+            need["what_progress_shows"] = _clip(record.get("validation_outcome"), 520)
+        need["combined_activation_hypothesis"] = _compose_semantic_activation(need, signal.get("play_type"))
         signal["need_hypothesis"] = need
 
     for item in _list(payload.get("required_sales_spine")):
@@ -2594,6 +2770,11 @@ def _compact_signal(signal: dict) -> dict:
         "parent_foresight_ids": _list(signal.get("parent_foresight_ids"))[:8],
         "independent_source_count": signal.get("independent_source_count"),
         "source_freshness": signal.get("source_freshness"),
+        "company_specific": signal.get("company_specific"),
+        "requires_company_specific_corroboration": signal.get("requires_company_specific_corroboration"),
+        "excluded_from_company_fact_generation": signal.get("excluded_from_company_fact_generation"),
+        "not_evidence_of_deployment": signal.get("not_evidence_of_deployment"),
+        "source_says": _clip(signal.get("source_says"), 420),
         "pressure_horizon": signal.get("pressure_horizon"),
         "external_pressure": _clip(signal.get("external_pressure"), 520),
         "financial_scope": _clip(signal.get("financial_scope"), 320),
@@ -2849,7 +3030,7 @@ Return ONLY valid JSON with this schema:
   "why_now": [{{"trigger": "...", "interpretation": "...", "gate": "...", "confidence": 0, "evidence_basis": []}}],
   "stakeholder_map": [{{"name": "...", "role": "...", "likely_buying_committee_role": "...", "relevance_rationale": "...", "linked_pressure_themes": [], "linked_service_themes": [], "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis", "do_not_say": [], "safety_notes": []}}],
   "pain_to_solution_map": [{{"evidence": "...", "interpreted_pressure": "...", "service": "...", "proof_point": "...", "safe_wording": "...", "gate": "...", "confidence": 0, "disqualifiers": []}}],
-  "recommended_sales_plays": [{{"service_or_offer": "...", "need_hypothesis": {{"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}}, "response_directions": {{"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
+  "recommended_sales_plays": [{{"service_or_offer": "...", "need_hypothesis": {{"account_fact": "...", "account_unknown": "...", "external_pressure": "...", "causal_bridge": "...", "causal_bridge_status": "not_required|not_established|inferred|confirmed", "potential_consequence": "...", "validation_outcome": "...", "future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "discovery_priority": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}}, "response_directions": {{"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
   "sales_spine": {{"account_thesis": "", "strategic_synthesis_basis": "", "top_buying_hypotheses": [], "risk_themes": [], "self_scan_note": ""}},
   "evidence_confidence": {{"strongest_evidence": [], "verified_facts": [], "safe_hypotheses": [], "use_only_as_question": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "do_not_say": [], "sensitive_claims": [], "claims_as_questions_only": []}},
   "missing_input_warnings": [],
@@ -2897,7 +3078,7 @@ BUYING_SECTION_SCHEMAS = {
 """.strip(),
     "sales_plays": """
 {
-  "recommended_sales_plays": [{"play_name": "...", "linked_signal_ids": ["SIG-01"], "activation_pair_index": 1, "play_type": "current_status|foresight_driven|proactive_opportunity", "service_or_offer": "...", "need_hypothesis": {"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}, "response_directions": {"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "primary_buyer": "...", "secondary_buyers": [], "trigger": "...", "account_thesis": "...", "buying_hypothesis": "...", "trigger_to_offer_bridge": "...", "business_hypothesis": "...", "why_relevant": "...", "target_stakeholder": "...", "first_meeting_objective": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "safe_customer_wording": "...", "discovery_questions": ["..."], "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}], "proof_point": "...", "do_not_say": ["..."], "qualification_upgrade_criteria": [], "confidence": 0, "play_score": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "play_classification": "strong_account_play|qualified_discovery_play|monitor_soft_discovery|weak_signal|do_not_use", "overclaim_risk": "low|medium|high", "evidence_basis": ["SIG-01"], "disqualifiers": []}],
+  "recommended_sales_plays": [{"play_name": "...", "linked_signal_ids": ["SIG-01"], "activation_pair_index": 1, "play_type": "current_status|foresight_driven|proactive_opportunity", "service_or_offer": "...", "need_hypothesis": {"account_fact": "...", "account_unknown": "...", "external_pressure": "...", "causal_bridge": "...", "causal_bridge_status": "not_required|not_established|inferred|confirmed", "potential_consequence": "...", "validation_outcome": "...", "future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "discovery_priority": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}, "response_directions": {"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "primary_buyer": "...", "secondary_buyers": [], "trigger": "...", "account_thesis": "...", "buying_hypothesis": "...", "trigger_to_offer_bridge": "...", "business_hypothesis": "...", "why_relevant": "...", "target_stakeholder": "...", "first_meeting_objective": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "safe_customer_wording": "...", "discovery_questions": ["..."], "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}], "proof_point": "...", "do_not_say": ["..."], "qualification_upgrade_criteria": [], "confidence": 0, "play_score": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "play_classification": "strong_account_play|qualified_discovery_play|monitor_soft_discovery|weak_signal|do_not_use", "overclaim_risk": "low|medium|high", "evidence_basis": ["SIG-01"], "disqualifiers": []}],
   "model_notes": []
 }
 """.strip(),
@@ -3158,7 +3339,7 @@ _BUYING_GATE_REVIEW_SCHEMA = _BUYING_GATE_DECISION_SCHEMA
 BUYING_SECTION_INSTRUCTIONS = {
     "snapshot_thesis": (
         "Create one shared Qualification Reasoning Spine for the opening of the report. Start from verified account "
-        "condition and Scanner activation pairs, then reason in this order: current position, structural exposure, "
+        "evidence and explicitly separate any unknown condition before using Scanner activation pairs, then reason in this order: current position, structural exposure, "
         "strategic tension, external pressure, likely business consequence, emerging need, ability to act, validation "
         "question, and falsifier. Use the complete Strategic Synthesis as the analytical backbone and General Summary "
         "only for factual context. Do not list services, buyer roles, raw SIG contracts, WHY/WHAT field labels, or source "
@@ -3167,7 +3348,9 @@ BUYING_SECTION_INSTRUCTIONS = {
     ),
     "why_now": (
         "Create Timing Triggers & Urgency Signals. Each item must cite a SIG id, explain what changed, "
-        "why it may matter now or soon, who probably cares, and include one safe discovery question."
+        "why it may matter now or soon, who probably cares, and include one safe discovery question. Any near-term "
+        "window describes discovery priority and sequencing only; it must not imply an urgent account problem, active "
+        "programme, confirmed budget, buying intent, or immediate need for Vivicta services."
     ),
     "pain_to_solution": (
         "Create Potential Response Directions. Each fit must start with an account_signal_map item, then map "
@@ -3188,6 +3371,9 @@ BUYING_SECTION_INSTRUCTIONS = {
     "pressure_evidence": (
         "Create Commercial Pressure Signals from required_sales_spine first. Produce one complete pressure signal "
         "per required SIG and do not add extra signals unless there is a non-empty SIG/source evidence basis. "
+        "Keep account evidence or unknowns, external pressure, causal bridge, potential consequence, and validation "
+        "outcome semantically separate. An external technology or market development is never an account condition. "
+        "Business consequence must describe a conditional consequence, not WHAT_PROGRESS_SHOWS or desired proof. "
         "Keep evidence_confidence buckets short and conservative; deterministic post-processing will finalize "
         "verified facts, weak/missing evidence, question-only claims, and do-not-say guardrails. "
         "Do not create empty pressure descriptions or blank evidence_basis values."
@@ -3232,6 +3418,8 @@ Evidence contract:
 - Stakeholder notes must remain professional, role-relevant, and source-bound. No private-life profiling.
 - Strategic Synthesis and scanner_activation_pair signals are the sales spine. Preserve each pair's why, what_to_do, and what_progress_shows logic.
 - WHY is why the customer challenge matters. WHAT_TO_DO is the customer outcome or deliverable state to validate next. WHAT_PROGRESS_SHOWS is observable proof of progress. Do not turn WHAT_TO_DO into consulting-method/HOW language or a pre-scoped implementation plan.
+- Preserve separate semantic roles: account fact, account unknown, external pressure, causal bridge, potential consequence, and validation outcome. Do not relabel external trends as account conditions or combine unrelated pressures merely because they occur in the same activation pair.
+- If the account-to-pressure bridge is not established, say so explicitly and keep the idea conditional; do not fill the missing account condition with market or technology trend text.
 - General Summary is factual context only. AI Diagnosis and evidence_based_risks are internal reasoning and discovery framing, not customer-facing facts.
 - Numeric scores are internal compatibility diagnostics only. They must not be used as proof that a need exists, as customer-facing evidence, or as the main reason for a proposal.
 - Every recommended play should map to one activation pair when any activation-pair SIG exists.
@@ -3658,7 +3846,10 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
         )
 
     section_fields = {
-        "pressure_signals": ("trigger", "description", "business_consequence"),
+        "pressure_signals": (
+            "trigger", "description", "business_consequence", "account_fact", "account_unknown",
+            "external_pressure", "causal_bridge", "potential_consequence", "validation_outcome",
+        ),
         "why_now": ("trigger", "why_it_matters_now", "safe_discovery_question"),
         "pain_to_solution_map": ("interpreted_pressure", "why_this_service", "safe_wording"),
         "recommended_sales_plays": (
@@ -3737,7 +3928,7 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
         })
 
     packet = {
-        "review_scope": "Evidence safety, claim strength, service bridges, and customer-facing wording only.",
+        "review_scope": "Evidence safety, claim strength, semantic-role integrity, service bridges, and customer-facing wording only.",
         "allowed_use_boundary": _dict(report.get("reliability_status")).get("allowed_use")
         or "Internal sales hypothesis; customer-facing claims require evidence-gate compliance.",
         "evidence_sufficiency": payload.get("evidence_sufficiency"),
@@ -3746,7 +3937,12 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
             {
                 "hypothesis_id": item.get("hypothesis_id"),
                 "activation_signal_id": item.get("activation_signal_id"),
+                "account_fact": _clip(item.get("account_fact"), 320),
+                "account_unknown": _clip(item.get("account_unknown"), 360),
                 "external_pressure": _clip(item.get("external_pressure"), 420),
+                "causal_bridge": _clip(item.get("causal_bridge"), 420),
+                "potential_consequence": _clip(item.get("potential_consequence"), 420),
+                "validation_outcome": _clip(item.get("validation_outcome"), 420),
                 "financial_scope": _clip(item.get("financial_scope"), 280),
                 "wording_boundary": _clip(item.get("wording_boundary"), 280),
                 "prohibited_claims": _list(item.get("prohibited_claims"))[:6],
@@ -3769,7 +3965,7 @@ Review this compact Buying Insight gate packet. This is a bounded semantic safet
 Return only JSON matching the supplied schema.
 
 Review rules:
-- Review only evidence safety, claim strength, service bridges, and customer-facing wording.
+- Review only evidence safety, claim strength, semantic-role integrity, service bridges, and customer-facing wording.
 - Do not assess originality, analytical depth, writing style, or whether a different hypothesis would be better.
 - Factual claims require fact-grade eligible evidence with correct entity scope.
 - Return every supplied claim_id in reviewed_claim_ids exactly once. claim_decisions contains flagged claims only.
@@ -3778,6 +3974,8 @@ Review rules:
 - Use reanalysis_required only when simply narrowing/removing the sentence would break the linked SIG/HYP causal chain.
 - Copy the exact unsafe wording into unsafe_text for rewrite, remove, and reanalysis_required decisions.
 - Weak or incomplete support may be hypothesis/question only; unsupported specifics require a claim decision.
+- Treat account fact, account unknown, external pressure, causal bridge, potential consequence, and validation outcome as distinct roles. Flag an external trend labeled as an account condition, a validation outcome labeled as a business consequence, or a causal bridge that is implied without account-specific support.
+- A discovery window may express priority and sequencing without proving urgency. Preserve cautious validation wording unless it implies an active problem, programme, budget, buying intent, or immediate service need.
 - Service recommendations require an existing SIG/HYP bridge and an exact service ID/name from the packet.
 - Use status=approved when claim_decisions is empty; changes_required when one or more decisions are supplied.
 - Use status=unavailable only when the packet cannot be evaluated. Do not invent evidence or IDs.
@@ -4377,6 +4575,8 @@ def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], l
         "why_this_service", "need_hypothesis",
         "current_condition", "future_pressure", "market_context", "company_context",
         "combined_activation_hypothesis", "likely_business_consequence", "what_to_propose",
+        "account_fact", "account_unknown", "external_pressure", "causal_bridge",
+        "potential_consequence", "validation_outcome", "discovery_priority",
         "top_buying_hypotheses", "hypothesis", "vivicta_potential_contribution",
         "evolving_modernization_directions", "other_capabilities_may_be_required", "discovery_questions",
     }
@@ -4593,6 +4793,8 @@ _LANGUAGE_PROSE_FIELDS = {
     "technical_angle", "relevance_rationale", "current_condition", "future_pressure",
     "market_context", "company_context", "combined_activation_hypothesis",
     "likely_business_consequence", "what_to_propose", "what_to_do", "what_progress_shows",
+    "account_fact", "account_unknown", "external_pressure", "causal_bridge",
+    "potential_consequence", "validation_outcome", "discovery_priority",
     "validation_question", "falsifier", "service_fit_rationale", "vivicta_potential_contribution",
 }
 
@@ -5794,7 +5996,10 @@ def _pressure_signal_from_signal(signal: dict, ledger_records: list[dict] | None
     gate = _normalize_gate(signal.get("gate"), "allowed_as_hypothesis")
     if ledger_records and gate == "allowed_as_fact":
         gate = "allowed_as_hypothesis"
+    play_type = _normalize_play_type(signal.get("play_type") or signal.get("sales_play_type") or signal.get("theme_type"))
+    need = _normalize_need_hypothesis(signal.get("need_hypothesis"), signal, play_type)
     return {
+        "play_type": play_type,
         "signal_type": _clip(signal.get("theme") or signal.get("pressure_type") or "Buying hypothesis pressure", 120),
         "trigger": _clip(f"{signal_id} activation pair: {signal.get('theme') or signal.get('account_movement') or signal_id}", 260),
         "description": _clip(
@@ -5805,11 +6010,17 @@ def _pressure_signal_from_signal(signal: dict, ledger_records: list[dict] | None
             620,
         ),
         "business_consequence": _clip(
-            signal.get("business_consequence")
-            or signal.get("what_progress_shows")
+            need.get("potential_consequence")
+            or signal.get("business_consequence")
             or "Treat as a need hypothesis until discovery confirms owner, timing, and business consequence.",
             520,
         ),
+        "account_fact": _clip(need.get("account_fact"), 420),
+        "account_unknown": _clip(need.get("account_unknown"), 520),
+        "external_pressure": _clip(need.get("external_pressure"), 520),
+        "causal_bridge": _clip(need.get("causal_bridge"), 520),
+        "potential_consequence": _clip(need.get("potential_consequence"), 520),
+        "validation_outcome": _clip(need.get("validation_outcome"), 520),
         "buyer_role_concern": _clip(
             signal.get("buyer_role_concern")
             or "; ".join(str(role) for role in _list(signal.get("buyer_roles"))[:4])
@@ -6600,12 +6811,37 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             None,
         )
         lineage = hypothesis_record_by_signal.get(str(_dict(linked_signal).get("id") or ""), {})
+        if linked_signal:
+            linked_play_type = _normalize_play_type(
+                _dict(linked_signal).get("play_type")
+                or _dict(linked_signal).get("sales_play_type")
+                or _dict(linked_signal).get("theme_type")
+            )
+            semantic_need = _normalize_need_hypothesis(
+                _dict(linked_signal).get("need_hypothesis"),
+                linked_signal,
+                linked_play_type,
+            )
+            fixed["play_type"] = linked_play_type
+            for field in (
+                "account_fact",
+                "account_unknown",
+                "external_pressure",
+                "causal_bridge",
+                "potential_consequence",
+                "validation_outcome",
+            ):
+                fixed[field] = _clip(semantic_need.get(field), 520)
+            if semantic_need.get("potential_consequence"):
+                fixed["business_consequence"] = _clip(semantic_need.get("potential_consequence"), 520)
         if lineage.get("external_pressure") and _normalize_play_type(_dict(linked_signal).get("play_type")) != "current_status":
             fixed["description"] = _clip(lineage.get("external_pressure"), 520)
+            fixed["external_pressure"] = _clip(lineage.get("external_pressure"), 520)
             fixed["business_consequence"] = _clip(
                 lineage.get("likely_business_consequence") or fixed.get("business_consequence"),
                 520,
             )
+            fixed["potential_consequence"] = fixed["business_consequence"]
         if not _pressure_signal_has_renderable_basis(fixed, known_signal_ids):
             render_quality_notes.append(
                 "Pressure signal removed before rendering because its evidence basis was empty or incomplete: "
@@ -6763,12 +6999,24 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         play["need_hypothesis"] = _normalize_need_hypothesis(play.get("need_hypothesis"), fallback_signal, play.get("play_type"))
         if hypothesis_record.get("external_pressure") and play.get("play_type") != "current_status":
             play["need_hypothesis"]["future_pressure"] = _clip(hypothesis_record.get("external_pressure"), 520)
+            play["need_hypothesis"]["external_pressure"] = _clip(hypothesis_record.get("external_pressure"), 520)
             play["need_hypothesis"]["market_context"] = _clip(hypothesis_record.get("external_pressure"), 520)
         if hypothesis_record.get("likely_business_consequence"):
             play["need_hypothesis"]["likely_business_consequence"] = _clip(
                 hypothesis_record.get("likely_business_consequence"),
                 520,
             )
+            play["need_hypothesis"]["potential_consequence"] = _clip(
+                hypothesis_record.get("potential_consequence") or hypothesis_record.get("likely_business_consequence"),
+                520,
+            )
+        if hypothesis_record.get("validation_outcome"):
+            play["need_hypothesis"]["validation_outcome"] = _clip(hypothesis_record.get("validation_outcome"), 520)
+            play["need_hypothesis"]["what_progress_shows"] = _clip(hypothesis_record.get("validation_outcome"), 520)
+        play["need_hypothesis"]["combined_activation_hypothesis"] = _compose_semantic_activation(
+            play["need_hypothesis"],
+            play.get("play_type"),
+        )
         role_questions = _list(play.get("discovery_questions_by_role"))
         if not role_questions:
             play["discovery_questions_by_role"] = [{
@@ -8144,24 +8392,25 @@ def render_buying_potential_html(report: dict) -> str:
         return f"{label} ({signal_id})"
 
     def combined_need_items(limit=5):
-        items = []
+        items: list[tuple[dict, str]] = []
         seen = set()
 
-        def add_item(raw):
-            text = _restore_company_case(_clip(raw, 460), company)
+        def add_item(need_value, play_type, fallback_text=""):
+            need = _dict(need_value)
+            semantic_text = _compose_semantic_activation(need, play_type)
+            text = _restore_company_case(_clip(semantic_text or fallback_text, 1000), company)
             if len(text) < 24:
                 return
             key = re.sub(r"\W+", " ", text.lower()).strip()[:140]
             if key in seen:
                 return
             seen.add(key)
-            items.append(text)
+            items.append((need, _normalize_play_type(play_type)))
 
         for play in _list(report.get("recommended_sales_plays")):
             if not isinstance(play, dict):
                 continue
-            need = _dict(play.get("need_hypothesis"))
-            add_item(need.get("combined_activation_hypothesis") or play.get("buying_hypothesis"))
+            add_item(play.get("need_hypothesis"), play.get("play_type"), play.get("buying_hypothesis"))
             if len(items) >= limit:
                 break
 
@@ -8169,20 +8418,63 @@ def render_buying_potential_html(report: dict) -> str:
             for signal in _list(report.get("account_signal_map")):
                 if not isinstance(signal, dict):
                     continue
-                need = _dict(signal.get("need_hypothesis"))
-                add_item(need.get("combined_activation_hypothesis") or signal.get("business_consequence"))
+                add_item(
+                    signal.get("need_hypothesis"),
+                    signal.get("play_type") or signal.get("sales_play_type") or signal.get("theme_type"),
+                    signal.get("business_consequence"),
+                )
                 if len(items) >= limit:
                     break
 
-        return simple_items(items, limit)
+        rendered = []
+        for need, play_type in items[:limit]:
+            rows = []
+
+            def row(label, value):
+                text = _restore_company_case(_clip(value, 300), company)
+                if text:
+                    rows.append(f'<span class="semantic-field"><b>{_esc(label)}:</b> {_esc(text)}</span>')
+
+            row("Account fact", need.get("account_fact"))
+            row("Account condition to validate" if play_type == "current_status" else "Account boundary", need.get("account_unknown"))
+            if play_type != "current_status":
+                row("External pressure", need.get("external_pressure") or need.get("future_pressure"))
+            row("Causal bridge", need.get("causal_bridge"))
+            row("Potential consequence if confirmed", need.get("potential_consequence") or need.get("likely_business_consequence"))
+            row("Progress would show", need.get("validation_outcome") or need.get("what_progress_shows"))
+            if rows:
+                rendered.append(f'<li class="semantic-need-item">{"".join(rows)}</li>')
+        return "".join(rendered) or simple_items([], limit)
 
     def pressure_card(item):
+        semantic_rows = []
+        play_type = _normalize_play_type(item.get("play_type"))
+
+        def semantic_row(label, value):
+            text = _clip(value, 520)
+            if text:
+                semantic_rows.append(f'<p><b>{_esc(label)}:</b> {_esc(text)}</p>')
+
+        semantic_row("Account fact", item.get("account_fact"))
+        semantic_row(
+            "Account condition to validate" if play_type == "current_status" else "Account boundary",
+            item.get("account_unknown"),
+        )
+        if play_type == "current_status" and not item.get("account_fact") and not item.get("account_unknown"):
+            semantic_row("Account signal to validate", item.get("description") or item.get("trigger"))
+        if play_type != "current_status":
+            semantic_row("External pressure", item.get("external_pressure") or item.get("description"))
+        semantic_row("Causal bridge", item.get("causal_bridge"))
+        semantic_row("Potential consequence if confirmed", item.get("potential_consequence") or item.get("business_consequence"))
+        semantic_row("Validation outcome", item.get("validation_outcome"))
+        if not semantic_rows:
+            semantic_row("Trigger", item.get("trigger"))
+            semantic_row("Pressure hypothesis", item.get("description"))
+            semantic_row("Potential consequence if confirmed", item.get("business_consequence"))
         return f"""
         <article class="card">
           <div class="card-top"><strong>{_esc(item.get('signal_type'))}</strong>{_gate_badge(item.get('gate'))}</div>
-          <p><b>Trigger:</b> {_esc(item.get('trigger'))}</p>
-          <p>{_esc(item.get('description'))}</p>
-          <p><b>Business consequence:</b> {_esc(item.get('business_consequence'))}</p>
+          {''.join(semantic_rows)}
           <p><b>Buyer concern:</b> {_esc(item.get('buyer_role_concern'))}</p>
           <small>Evidence: {_esc(', '.join(item.get('evidence_basis') or []))} · Boundary: {_esc(item.get('gate'))}</small>
         </article>"""
@@ -8384,6 +8676,7 @@ def render_buying_potential_html(report: dict) -> str:
     ul {{ margin:8px 0 0 18px; padding:0; }} li {{ margin:5px 0; }} .warning {{ border-color:rgba(250,204,21,.4); background:rgba(250,204,21,.08); }} .danger {{ border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }}
     .role-line {{ color:var(--green); font:800 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; margin:-2px 0 12px; }} .theme-row {{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }}
     .simple-list-block {{ margin-top:18px; border-top:1px solid rgba(142,160,187,.18); padding-top:18px; }}
+    .semantic-need-item {{ margin:10px 0; }} .semantic-field {{ display:block; margin:4px 0; }}
     .sales-play-card h3 {{ margin-top:18px; }}
     .safe-wording {{ margin-top:20px; border-left:3px solid var(--cyan); border-radius:8px; padding:13px 15px; background:rgba(103,232,249,.08); }}
     .safe-wording strong {{ display:block; color:var(--cyan); font:800 11px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }}
@@ -8435,7 +8728,7 @@ def render_buying_potential_html(report: dict) -> str:
   </section>
 
   <section><h2>Pressure & Demand Hypothesis Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
-  <section><h2>Why This May Matter Now</h2><div class="grid">{_render_list(_list(report.get('why_now')), why_card)}</div></section>
+  <section><h2>Why This May Matter Now</h2><p class="muted"><b>Timing boundary:</b> Near-term validation windows express the priority and sequencing of discovery. They do not establish an urgent account problem, active transformation programme, confirmed budget, buying intent, or immediate need for Vivicta services.</p><div class="grid">{_render_list(_list(report.get('why_now')), why_card)}</div></section>
 
   <section>
     <h2>Buying Committee & Influence Map</h2>
