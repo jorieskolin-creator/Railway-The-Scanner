@@ -19,7 +19,7 @@ from reality_check import validate_summary, validate_pitch, ai_fact_check_summar
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources, is_foresight_context_eligible_source
 from prompts import PROMPT_VERSION, build_shared_guardrails
-from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
+from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
 import anthropic
 
 
@@ -474,7 +474,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             else:
                 foresight_links = [l for l in foresight_links if isinstance(l, dict)]
 
-            # 4. SYNTHESIS (Claude Opus 4.8 / GPT / Sonnet)
+            # 4. SYNTHESIS (Claude Opus 5 / GPT / Sonnet)
             summary_text = "Automated Analysis Complete."
             pitch_text = "Pitch unavailable."
             why_proposals = []
@@ -649,7 +649,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \\n\\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). The pitch value must also contain \\n\\n between its 3 paragraphs. The archetype field is audit-only and must not appear in summary, pitch, why_proposals, or what_proposals.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                    # --- Synthesis with fallback chain: Opus 4.8 → GPT frontier → Sonnet 5 ---
+                    # --- Synthesis with fallback chain: Opus 5 → GPT frontier → Sonnet 5 ---
                     response_text = ""
                     _seed_elapsed = time.time() - company_start
                     _seed_synth_remaining = COMPANY_BUDGET - _seed_elapsed
@@ -661,13 +661,13 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         company_scan_quality = "partial_synthesis"
                         print(f"   [{company_name}] ⏭ [Synthesis] Budget < 90s — skipping synthesis chain")
                     else:
-                        # Primary: Opus 4.8 with Extended Thinking
+                        # Primary: Opus 5 with adaptive thinking
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Attempting {CLAUDE_OPUS_MODEL} with adaptive thinking...")
                                 synth_start = time.time()
                                 resp = claude_client.messages.create(
-                                    model="claude-opus-4-8",
+                                    model=CLAUDE_OPUS_MODEL,
                                     max_tokens=16000,
                                     thinking={"type": "adaptive"},
                                     extra_body={"output_config": {"effort": "xhigh"}},
@@ -678,9 +678,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                         if getattr(block, 'type', None) == 'text':
                                             response_text = block.text
                                             break
-                                print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] {CLAUDE_OPUS_MODEL} + adaptive thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                             except Exception as opus_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] {CLAUDE_OPUS_MODEL} failed: {opus_err}")
 
                         # Fallback 1: configured GPT frontier model
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:

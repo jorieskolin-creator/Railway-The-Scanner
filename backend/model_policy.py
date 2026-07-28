@@ -10,7 +10,7 @@ import os
 from typing import Any
 
 
-MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-policy-v2-gpt56-sol").strip() or "model-policy-v2-gpt56-sol"
+MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-policy-v3-gpt56-claude5").strip() or "model-policy-v3-gpt56-claude5"
 
 GPT_REASONING_MODEL = os.environ.get("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
 # GPT-5.6 Pro is a reasoning mode on the Sol model, not a separate model slug.
@@ -28,7 +28,7 @@ DETAILED_COMPLETION_MODEL = (
     or GPT_REASONING_MODEL
 )
 
-CLAUDE_OPUS_MODEL = os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8"
+CLAUDE_OPUS_MODEL = os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-5").strip() or "claude-opus-5"
 CLAUDE_SONNET_MODEL = os.environ.get("CLAUDE_SONNET_MODEL", "claude-sonnet-5").strip() or "claude-sonnet-5"
 
 GEMINI_GROUNDED_MODEL = os.environ.get("SCANNER_GROUNDED_RESEARCH_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
