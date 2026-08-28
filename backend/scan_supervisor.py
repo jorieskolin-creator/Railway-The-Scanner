@@ -147,6 +147,7 @@ class StageExecutionResult:
     checkpoint_ref: str | None
     gate_result: Mapping[str, Any]
     next_stage: str | None
+    checkpoint: ScanCheckpoint | None = None
 
 
 class StageExecutor(Protocol):
