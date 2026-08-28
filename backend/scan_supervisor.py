@@ -31,6 +31,10 @@ class MaterialIntegrityError(RuntimeError):
     """Raised when persisted material no longer matches its immutable text hash."""
 
 
+class SourceRetrievalIntegrityError(RuntimeError):
+    """Raised when durable source-retrieval text or metadata is malformed."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -113,6 +117,30 @@ class ScanMaterial:
     extraction_status: str
     extraction_warnings: tuple[str, ...]
     allowed_use_classification: str
+    extracted_text: str
+
+
+@dataclass(frozen=True)
+class SourceRetrieval:
+    """One retrieval outcome; operational input only, never claim-support evidence."""
+
+    retrieval_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    retrieval_origin: str
+    source_url: str
+    canonical_url: str
+    retrieved_at: datetime
+    http_status: int | None
+    content_type: str
+    response_sha256: str
+    extracted_text_sha256: str
+    parser_route: str
+    readability_status: str
+    retrieval_outcome: str
+    extraction_warnings: tuple[str, ...]
+    response_metadata: Mapping[str, Any]
     extracted_text: str
 
 
@@ -277,6 +305,28 @@ def _material_warnings(value: Any) -> tuple[str, ...]:
     if not isinstance(raw_value, list) or not all(isinstance(item, str) for item in raw_value):
         raise MaterialIntegrityError("Material warnings must be a string list.")
     return tuple(raw_value)
+
+
+def _source_metadata(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise SourceRetrievalIntegrityError("Source retrieval metadata is not valid JSON.") from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise SourceRetrievalIntegrityError("Source retrieval metadata must be a JSON-safe mapping.")
+    return dict(raw_value)
+
+
+def _json_safe(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return True
+    if isinstance(value, Mapping):
+        return all(isinstance(key, str) and _json_safe(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return all(_json_safe(item) for item in value)
+    return False
 
 
 
@@ -621,6 +671,213 @@ class ScanRepository:
             materials.append(material)
         return materials
 
+
+    def persist_source_retrievals(
+        self,
+        *,
+        retrievals: list[SourceRetrieval],
+    ) -> list[Mapping[str, Any]]:
+        """Persist retrieval provenance without converting it into evidence."""
+
+        self._validate_source_retrievals(retrievals)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            return self._persist_source_retrievals_on_cursor(cursor, retrievals=retrievals)
+
+    def load_source_retrievals(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> list[SourceRetrieval]:
+        """Load retrievals only when their extracted text remains hash-verified."""
+
+        if not run_id or not stage_name or attempt < 1:
+            raise ValueError("run_id, stage_name, and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM scan_steps
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            if _mapping(cursor.fetchone()) is None:
+                raise KeyError(f"Unknown scan step: {run_id}/{stage_name}/{attempt}")
+            cursor.execute(
+                """
+                SELECT retrieval_id, run_id, stage_name, attempt, retrieval_origin,
+                       source_url, canonical_url, retrieved_at, http_status,
+                       content_type, response_sha256, extracted_text_sha256,
+                       parser_route, readability_status, retrieval_outcome,
+                       extraction_warnings, response_metadata, extracted_text
+                FROM source_retrievals
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                ORDER BY retrieved_at, retrieval_id
+                """,
+                (run_id, stage_name, attempt),
+            )
+            rows = [_mapping(row) for row in cursor.fetchall()]
+
+        retrievals: list[SourceRetrieval] = []
+        for row in rows:
+            if row is None:
+                raise SourceRetrievalIntegrityError("Source retrieval query returned an empty row.")
+            metadata = _source_metadata(row.get("response_metadata"))
+            warnings = _material_warnings(row.get("extraction_warnings"))
+            retrieved_at = row.get("retrieved_at")
+            if not isinstance(retrieved_at, datetime):
+                raise SourceRetrievalIntegrityError("Source retrieval timestamp is invalid.")
+            retrieval = SourceRetrieval(
+                retrieval_id=str(row["retrieval_id"]),
+                run_id=str(row["run_id"]),
+                stage_name=str(row["stage_name"]),
+                attempt=int(row["attempt"]),
+                retrieval_origin=str(row["retrieval_origin"]),
+                source_url=str(row["source_url"]),
+                canonical_url=str(row["canonical_url"]),
+                retrieved_at=retrieved_at,
+                http_status=int(row["http_status"]) if row.get("http_status") is not None else None,
+                content_type=str(row["content_type"]),
+                response_sha256=str(row["response_sha256"]),
+                extracted_text_sha256=str(row["extracted_text_sha256"]),
+                parser_route=str(row["parser_route"]),
+                readability_status=str(row["readability_status"]),
+                retrieval_outcome=str(row["retrieval_outcome"]),
+                extraction_warnings=warnings,
+                response_metadata=metadata,
+                extracted_text=str(row["extracted_text"]),
+            )
+            self._validate_source_retrievals([retrieval])
+            if _sha256_text(retrieval.extracted_text) != retrieval.extracted_text_sha256:
+                raise SourceRetrievalIntegrityError(
+                    f"Extracted text hash mismatch for retrieval {retrieval.retrieval_id}."
+                )
+            retrievals.append(retrieval)
+        return retrievals
+
+    def _validate_source_retrievals(self, retrievals: list[SourceRetrieval]) -> None:
+        seen_retrieval_ids: set[str] = set()
+        allowed_readability = {"readable", "unreadable", "unknown"}
+        allowed_outcomes = {"succeeded", "not_found", "blocked", "failed"}
+        for retrieval in retrievals:
+            if retrieval.retrieval_id in seen_retrieval_ids:
+                raise ValueError("retrieval_id must be unique within one persistence request.")
+            seen_retrieval_ids.add(retrieval.retrieval_id)
+            if not all(
+                (
+                    retrieval.retrieval_id,
+                    retrieval.run_id,
+                    retrieval.stage_name,
+                    retrieval.retrieval_origin,
+                    retrieval.source_url,
+                    retrieval.canonical_url,
+                    retrieval.content_type,
+                    retrieval.parser_route,
+                )
+            ):
+                raise ValueError("source retrieval identity fields are required.")
+            if retrieval.attempt < 1:
+                raise ValueError("source retrieval attempt must be positive.")
+            if retrieval.retrieved_at.tzinfo is None:
+                raise ValueError("source retrieval timestamp must be timezone-aware.")
+            if not retrieval.source_url.startswith(("http://", "https://")):
+                raise ValueError("source retrieval URL must use HTTP or HTTPS.")
+            if not retrieval.canonical_url.startswith(("http://", "https://")):
+                raise ValueError("source retrieval canonical URL must use HTTP or HTTPS.")
+            if not _is_sha256_digest(retrieval.response_sha256) or not _is_sha256_digest(
+                retrieval.extracted_text_sha256
+            ):
+                raise ValueError("source retrieval hashes must be SHA-256 hex digests.")
+            if retrieval.readability_status not in allowed_readability:
+                raise ValueError("source retrieval readability_status is invalid.")
+            if retrieval.retrieval_outcome not in allowed_outcomes:
+                raise ValueError("source retrieval outcome is invalid.")
+            if retrieval.http_status is not None and not (100 <= retrieval.http_status <= 599):
+                raise ValueError("source retrieval HTTP status is invalid.")
+            if not _json_safe(retrieval.response_metadata):
+                raise ValueError("source retrieval metadata must be JSON-safe and contain no raw bytes.")
+
+    def _persist_source_retrievals_on_cursor(
+        self,
+        cursor: CursorLike,
+        *,
+        retrievals: list[SourceRetrieval],
+    ) -> list[Mapping[str, Any]]:
+        persisted: list[Mapping[str, Any]] = []
+        for retrieval in retrievals:
+            cursor.execute(
+                """
+                INSERT INTO source_retrievals (
+                    retrieval_id, run_id, stage_name, attempt, retrieval_origin,
+                    source_url, canonical_url, retrieved_at, http_status,
+                    content_type, response_sha256, extracted_text_sha256,
+                    parser_route, readability_status, retrieval_outcome,
+                    extraction_warnings, response_metadata, extracted_text
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s::jsonb, %s::jsonb, %s
+                )
+                ON CONFLICT (retrieval_id) DO NOTHING
+                RETURNING retrieval_id, run_id, stage_name, attempt, canonical_url,
+                          response_sha256, extracted_text_sha256, parser_route,
+                          readability_status, retrieval_outcome
+                """,
+                (
+                    retrieval.retrieval_id,
+                    retrieval.run_id,
+                    retrieval.stage_name,
+                    retrieval.attempt,
+                    retrieval.retrieval_origin,
+                    retrieval.source_url,
+                    retrieval.canonical_url,
+                    retrieval.retrieved_at,
+                    retrieval.http_status,
+                    retrieval.content_type,
+                    retrieval.response_sha256,
+                    retrieval.extracted_text_sha256,
+                    retrieval.parser_route,
+                    retrieval.readability_status,
+                    retrieval.retrieval_outcome,
+                    _json({"warnings": list(retrieval.extraction_warnings)}),
+                    _json(retrieval.response_metadata),
+                    retrieval.extracted_text,
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT retrieval_id, run_id, stage_name, attempt, canonical_url,
+                           response_sha256, extracted_text_sha256, parser_route,
+                           readability_status, retrieval_outcome
+                    FROM source_retrievals
+                    WHERE retrieval_id = %s
+                    """,
+                    (retrieval.retrieval_id,),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError("Idempotent source retrieval disappeared before it could be read.")
+                expected = {
+                    "retrieval_id": retrieval.retrieval_id,
+                    "run_id": retrieval.run_id,
+                    "stage_name": retrieval.stage_name,
+                    "attempt": retrieval.attempt,
+                    "canonical_url": retrieval.canonical_url,
+                    "response_sha256": retrieval.response_sha256,
+                    "extracted_text_sha256": retrieval.extracted_text_sha256,
+                    "parser_route": retrieval.parser_route,
+                    "readability_status": retrieval.readability_status,
+                    "retrieval_outcome": retrieval.retrieval_outcome,
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "retrieval_id was already used for different immutable retrieval content."
+                    )
+            persisted.append(stored)
+        return persisted
 
     def claim_next_step(
         self,
