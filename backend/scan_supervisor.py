@@ -35,6 +35,10 @@ class SourceRetrievalIntegrityError(RuntimeError):
     """Raised when durable source-retrieval text or metadata is malformed."""
 
 
+class IntentInputSnapshotIntegrityError(RuntimeError):
+    """Raised when an immutable Intent input manifest is malformed or mismatched."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"

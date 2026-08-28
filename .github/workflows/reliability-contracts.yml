@@ -81,4 +81,4 @@ jobs:
             tests/test_scan_ingress_postgres_integration.py \
             tests/test_scan_checkpoint_postgres_integration.py \
             tests/test_scan_stage_executor_postgres_integration.py \
-            tests/test_scan_retrieval_postgres_integration.py
+            tests/test_scan_retrieval_postgres_integration.py \\\n            tests/test_scan_intent_snapshot_postgres_integration.py
