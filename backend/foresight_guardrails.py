@@ -14,7 +14,7 @@ from typing import Any
 
 FORESIGHT_CLAIM_TYPE = "foresight_context"
 REGULATORY_CLAIM_TYPE = "regulatory_context"
-FORESIGHT_SANITIZER_VERSION = "2026-05-03-v3-hardening"
+FORESIGHT_SANITIZER_VERSION = "2026-08-28-v4-idempotent"
 
 # Narrowed per spec — do NOT use \brequires?\b (flags "may require") or bare \bforces?\b
 # (flags noun usage "forces are building"). Use obligation/deployment-specific patterns only.
@@ -510,7 +510,7 @@ def sanitize_future_insight(text: str, report_date: date | None = None) -> tuple
         (r"\blast[-\s]?chance\s+window\b", "near-term evaluation window"),
         (r"\bwill\s+force\b", "may increase pressure to evaluate"),
         (r"\bforces?\s+(the\s+company|the\s+firm|[A-Z][A-Za-zÀ-ÿ\-]+)\b", r"may increase pressure on \1"),
-        (r"\brequires?\s+(the\s+company|the\s+firm|[A-Z][A-Za-zÀ-ÿ\-]+)\s+to\b", r"may require \1 to assess whether it needs to"),
+        (r"(?<!may )(?<!could )(?<!should )(?<!might )(?<!would )\brequires?\s+(the\s+company|the\s+firm|[A-Z][A-Za-zÀ-ÿ\-]+)\s+to\b", r"may require \1 to assess whether it needs to"),
         (r"\bwill\s+need\s+to\b", "may need to"),
         (r"\bwill\s+directly\s+impact\b", "could affect"),
         (r"\bdemands?\s+rapid\b", "may increase pressure to evaluate timely"),

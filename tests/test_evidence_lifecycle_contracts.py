@@ -130,6 +130,7 @@ def test_jury_handoff_uses_current_packet_verdict_and_reports_seed_lifecycle():
         "promoted_to_verified": 1,
         "rejected": 0,
         "rejection_reasons": {},
+        "quarantined": 0,
     }
 
 

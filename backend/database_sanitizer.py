@@ -32,7 +32,7 @@ try:
     _GUARDRAILS_IMPORTED = True
 except Exception:
     _GUARDRAILS_IMPORTED = False
-    FORESIGHT_SANITIZER_VERSION = "2026-05-03-v3-hardening-standalone"
+    FORESIGHT_SANITIZER_VERSION = "2026-08-28-v4-idempotent-standalone"
 
     # Narrowed patterns — no bare \brequires?\b (flags "may require")
     # and no bare \bforces?\b (flags noun "forces are building").

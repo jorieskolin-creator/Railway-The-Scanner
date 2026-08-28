@@ -2605,9 +2605,10 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
                 continue
 
             source_url = (sig.get("source_url") or sig.get("url") or "").strip()
-            url_alive = bool(sig.get("url_verified") is True or sig.get("verified") is True)
-            if source_url and not url_alive:
+            url_alive = False
+            if source_url:
                 try:
+                    # Cleanup is a fresh verification boundary; never inherit a stored liveness verdict.
                     url_alive = bool(_verify_foresight_url(source_url, 8))
                 except Exception:
                     url_alive = False
