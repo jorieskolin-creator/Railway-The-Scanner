@@ -230,6 +230,10 @@ def _env_bool(name: str, *, default: bool) -> bool:
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
+def _is_sha256_digest(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdefABCDEF" for character in value)
+
+
 
 def _json(value: Mapping[str, Any] | None) -> str:
     return json.dumps(value or {}, sort_keys=True, separators=(",", ":"))
@@ -300,61 +304,121 @@ class ScanRepository:
     ) -> Mapping[str, Any]:
         """Create one queued run and its first pending step idempotently."""
 
+        with self._transaction() as connection, connection.cursor() as cursor:
+            return self._create_run_on_cursor(
+                cursor,
+                run_id=run_id,
+                company_name=company_name,
+                company_url=company_url,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                cognitive_contract_version=cognitive_contract_version,
+                initial_stage=initial_stage,
+            )
+
+    def create_run_with_materials(
+        self,
+        *,
+        run_id: str,
+        company_name: str,
+        company_url: str,
+        idempotency_key: str,
+        request_hash: str,
+        cognitive_contract_version: str,
+        initial_stage: str,
+        materials: list[ScanMaterial],
+    ) -> Mapping[str, Any]:
+        """Atomically create (or replay) a run with immutable prepared material.
+
+        This is an ingress transaction only.  It does not claim a lease, start
+        a worker, or route the legacy in-memory /scan path through PostgreSQL.
+        """
+
+        self._validate_materials(materials)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            created = self._create_run_on_cursor(
+                cursor,
+                run_id=run_id,
+                company_name=company_name,
+                company_url=company_url,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                cognitive_contract_version=cognitive_contract_version,
+                initial_stage=initial_stage,
+            )
+            if str(created["run_id"]) != run_id:
+                raise ValueError(
+                    "idempotency_key already belongs to a different deterministic run_id."
+                )
+            self._persist_materials_on_cursor(cursor, run_id=run_id, materials=materials)
+            return created
+
+    def _create_run_on_cursor(
+        self,
+        cursor: CursorLike,
+        *,
+        run_id: str,
+        company_name: str,
+        company_url: str,
+        idempotency_key: str,
+        request_hash: str,
+        cognitive_contract_version: str,
+        initial_stage: str,
+    ) -> Mapping[str, Any]:
         if not all((run_id, company_name, idempotency_key, request_hash, initial_stage)):
             raise ValueError("run_id, company_name, idempotency_key, request_hash, and initial_stage are required.")
 
-        with self._transaction() as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO scan_runs (
+                run_id, company_name, company_url, cognitive_contract_version,
+                status, current_stage, idempotency_key, request_hash
+            ) VALUES (%s, %s, %s, %s, 'queued', %s, %s, %s)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING run_id, status, current_stage, request_hash
+            """,
+            (
+                run_id,
+                company_name,
+                company_url or None,
+                cognitive_contract_version,
+                initial_stage,
+                idempotency_key,
+                request_hash,
+            ),
+        )
+        created = _mapping(cursor.fetchone())
+        if created is None:
             cursor.execute(
                 """
-                INSERT INTO scan_runs (
-                    run_id, company_name, company_url, cognitive_contract_version,
-                    status, current_stage, idempotency_key, request_hash
-                ) VALUES (%s, %s, %s, %s, 'queued', %s, %s, %s)
-                ON CONFLICT (idempotency_key) DO NOTHING
-                RETURNING run_id, status, current_stage, request_hash
+                SELECT run_id, status, current_stage, request_hash
+                FROM scan_runs
+                WHERE idempotency_key = %s
                 """,
-                (
-                    run_id,
-                    company_name,
-                    company_url or None,
-                    cognitive_contract_version,
-                    initial_stage,
-                    idempotency_key,
-                    request_hash,
-                ),
+                (idempotency_key,),
             )
             created = _mapping(cursor.fetchone())
             if created is None:
-                cursor.execute(
-                    """
-                    SELECT run_id, status, current_stage, request_hash
-                    FROM scan_runs
-                    WHERE idempotency_key = %s
-                    """,
-                    (idempotency_key,),
-                )
-                created = _mapping(cursor.fetchone())
-                if created is None:
-                    raise RuntimeError("Idempotent scan run disappeared before it could be read.")
-                if created.get("request_hash") != request_hash:
-                    raise ValueError("Idempotency key was already used for different scan input.")
-                return created
-
-            cursor.execute(
-                """
-                INSERT INTO scan_steps (run_id, stage_name, attempt, status)
-                VALUES (%s, %s, 1, 'pending')
-                """,
-                (run_id, initial_stage),
-            )
-            cursor.execute(
-                """
-                INSERT INTO scan_events (run_id, stage_name, attempt, event_type, details)
-                VALUES (%s, %s, 1, 'run_queued', %s::jsonb)
-                """,
-                (run_id, initial_stage, _json({"idempotency_key": idempotency_key})),
-            )
+                raise RuntimeError("Idempotent scan run disappeared before it could be read.")
+            if created.get("request_hash") != request_hash:
+                raise ValueError("Idempotency key was already used for different scan input.")
             return created
+
+        cursor.execute(
+            """
+            INSERT INTO scan_steps (run_id, stage_name, attempt, status)
+            VALUES (%s, %s, 1, 'pending')
+            """,
+            (run_id, initial_stage),
+        )
+        cursor.execute(
+            """
+            INSERT INTO scan_events (run_id, stage_name, attempt, event_type, details)
+            VALUES (%s, %s, 1, 'run_queued', %s::jsonb)
+            """,
+            (run_id, initial_stage, _json({"idempotency_key": idempotency_key})),
+        )
+        return created
 
     def persist_materials(
         self,
@@ -362,88 +426,104 @@ class ScanRepository:
         run_id: str,
         materials: list[ScanMaterial],
     ) -> list[Mapping[str, Any]]:
-        """Persist immutable extracted material without retaining raw file bytes.
+        """Persist immutable extracted material without retaining raw file bytes."""
 
-        This method deliberately requires an existing run.  The later request
-        handoff will create that run and its materials atomically; Phase 3 does
-        not yet redirect the live in-memory /scan path into this repository.
-        """
+        self._validate_materials(materials)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            return self._persist_materials_on_cursor(cursor, run_id=run_id, materials=materials)
 
-        if not run_id:
-            raise ValueError("run_id is required.")
+    def _validate_materials(self, materials: list[ScanMaterial]) -> None:
         seen_material_ids: set[str] = set()
+        allowed_statuses = {"extracted", "empty", "failed"}
         for material in materials:
             if material.material_id in seen_material_ids:
                 raise ValueError("material_id must be unique within one persistence request.")
             seen_material_ids.add(material.material_id)
+            if not material.material_id or not material.origin or not material.filename:
+                raise ValueError("material identity fields are required.")
             if material.byte_size < 0:
                 raise ValueError("material byte_size cannot be negative.")
-            if len(material.content_sha256) != 64 or len(material.extracted_text_sha256) != 64:
+            if not _is_sha256_digest(material.content_sha256) or not _is_sha256_digest(
+                material.extracted_text_sha256
+            ):
                 raise ValueError("material hashes must be SHA-256 hex digests.")
+            if material.extraction_status not in allowed_statuses:
+                raise ValueError("material extraction_status is invalid.")
+            if not material.parser_version or not material.allowed_use_classification:
+                raise ValueError("material parser and allowed-use classifications are required.")
+
+    def _persist_materials_on_cursor(
+        self,
+        cursor: CursorLike,
+        *,
+        run_id: str,
+        materials: list[ScanMaterial],
+    ) -> list[Mapping[str, Any]]:
+        if not run_id:
+            raise ValueError("run_id is required.")
 
         persisted: list[Mapping[str, Any]] = []
-        with self._transaction() as connection, connection.cursor() as cursor:
-            for material in materials:
+        for material in materials:
+            cursor.execute(
+                """
+                INSERT INTO scan_materials (
+                    material_id, run_id, origin, filename, media_type, byte_size,
+                    content_sha256, extracted_text_sha256, parser_version,
+                    extraction_status, extraction_warnings,
+                    allowed_use_classification, extracted_text
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s
+                )
+                ON CONFLICT (material_id) DO NOTHING
+                RETURNING material_id, run_id, content_sha256,
+                          extracted_text_sha256, parser_version,
+                          extraction_status, allowed_use_classification
+                """,
+                (
+                    material.material_id,
+                    run_id,
+                    material.origin,
+                    material.filename,
+                    material.media_type,
+                    material.byte_size,
+                    material.content_sha256,
+                    material.extracted_text_sha256,
+                    material.parser_version,
+                    material.extraction_status,
+                    _json({"warnings": list(material.extraction_warnings)}),
+                    material.allowed_use_classification,
+                    material.extracted_text,
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
                 cursor.execute(
                     """
-                    INSERT INTO scan_materials (
-                        material_id, run_id, origin, filename, media_type, byte_size,
-                        content_sha256, extracted_text_sha256, parser_version,
-                        extraction_status, extraction_warnings,
-                        allowed_use_classification, extracted_text
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s
-                    )
-                    ON CONFLICT (material_id) DO NOTHING
-                    RETURNING material_id, run_id, content_sha256,
-                              extracted_text_sha256, parser_version,
-                              extraction_status, allowed_use_classification
+                    SELECT material_id, run_id, content_sha256,
+                           extracted_text_sha256, parser_version,
+                           extraction_status, allowed_use_classification
+                    FROM scan_materials
+                    WHERE material_id = %s
                     """,
-                    (
-                        material.material_id,
-                        run_id,
-                        material.origin,
-                        material.filename,
-                        material.media_type,
-                        material.byte_size,
-                        material.content_sha256,
-                        material.extracted_text_sha256,
-                        material.parser_version,
-                        material.extraction_status,
-                        _json({"warnings": list(material.extraction_warnings)}),
-                        material.allowed_use_classification,
-                        material.extracted_text,
-                    ),
+                    (material.material_id,),
                 )
                 stored = _mapping(cursor.fetchone())
                 if stored is None:
-                    cursor.execute(
-                        """
-                        SELECT material_id, run_id, content_sha256,
-                               extracted_text_sha256, parser_version,
-                               extraction_status, allowed_use_classification
-                        FROM scan_materials
-                        WHERE material_id = %s
-                        """,
-                        (material.material_id,),
+                    raise RuntimeError("Idempotent material disappeared before it could be read.")
+                expected = {
+                    "material_id": material.material_id,
+                    "run_id": run_id,
+                    "content_sha256": material.content_sha256,
+                    "extracted_text_sha256": material.extracted_text_sha256,
+                    "parser_version": material.parser_version,
+                    "extraction_status": material.extraction_status,
+                    "allowed_use_classification": material.allowed_use_classification,
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "material_id was already used for different immutable material content."
                     )
-                    stored = _mapping(cursor.fetchone())
-                    if stored is None:
-                        raise RuntimeError("Idempotent material disappeared before it could be read.")
-                    expected = {
-                        "material_id": material.material_id,
-                        "run_id": run_id,
-                        "content_sha256": material.content_sha256,
-                        "extracted_text_sha256": material.extracted_text_sha256,
-                        "parser_version": material.parser_version,
-                        "extraction_status": material.extraction_status,
-                        "allowed_use_classification": material.allowed_use_classification,
-                    }
-                    if any(stored.get(key) != value for key, value in expected.items()):
-                        raise ValueError(
-                            "material_id was already used for different immutable material content."
-                        )
-                persisted.append(stored)
+            persisted.append(stored)
         return persisted
 
     def claim_next_step(
