@@ -142,7 +142,8 @@ def test_intent_input_snapshot_round_trips_idempotently_and_hydrates_exact_input
             (ingress.run_id,),
         ).fetchone()
     assert stored[0] == 1
-    assert "extracted_text" not in stored[1]
+    assert "Acquired page" not in stored[1]
+    assert "Submitted context" not in stored[1]
     assert "response_content" not in stored[1]
 
 

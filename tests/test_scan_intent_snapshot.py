@@ -68,9 +68,15 @@ def test_intent_input_manifest_is_deterministic_and_contains_references_not_text
     assert first.contract_version == INTENT_INPUT_SNAPSHOT_CONTRACT
     assert first.snapshot_ref == f"intent-input://scan/{first.snapshot_id}"
     assert len(first.input_hash) == 64
-    assert "extracted_text" not in str(first.manifest)
-    assert "response_content" not in str(first.manifest)
-    assert "claim_support" not in str(first.manifest)
+    manifest_text = str(first.manifest)
+    assert "Acquired page" not in manifest_text
+    assert "Submitted company context." not in manifest_text
+    assert "response_content" not in manifest_text
+    assert "claim_support" not in manifest_text
+    assert all(
+        "extracted_text" not in reference
+        for reference in first.manifest["material_refs"] + first.manifest["retrieval_refs"]
+    )
     assert first.manifest["retrieval_refs"][0]["retrieval_outcome"] == "succeeded"
 
 
