@@ -240,12 +240,65 @@ That is how this program already avoided losing the thread through 3A–3F.
 
 Suggested names when 3H closes (cards not specified until then):
 
-1. `3I-J0` Jury-stage retrieval/candidate durability
+1. `3I-J0` Jury-stage retrieval/candidate durability — specified below
 2. `3I-J1` Jury input snapshot from Intent checkpoint
 3. `3I-J2` Prepare-only Jury adapter
 4. `3I-J3` Jury fenced commit + reclaim
 5. Then the same 1–3 beats for Diagnosis, Foresight, Strategic Synthesis,
    Verification
+
+---
+
+## Card 3I-J0 — Jury-stage retrieval and candidate durability
+
+**Parent stakeholder step:** 3I (beat 0)
+**Status:** Next
+**Mirrors:** 3E durable source-retrieval foundation
+
+### In scope
+
+- New table `jury_source_candidates` keyed to the `jury_analysis` step/attempt.
+- `prepare_jury_source_candidate` builds one immutable, raw-body-free candidate
+  from a URL plus optional cached extract text. Origins are
+  `company_evidence_db`, `previous_scan_source_cache`, or
+  `jury_live_acquisition_seed`.
+- Transport-only URL canonicalization (reuse 3E). Reload verifies the cached
+  extract SHA-256. Replay is idempotent; a different payload under the same ID
+  is rejected.
+- Existing `source_retrievals` may be keyed to `jury_analysis` for an actual
+  Jury-stage fetch. That is still retrieval provenance, not evidence.
+- Candidate metadata may carry discovery labels only. It must not store claim
+  support, entity match, Foresight eligibility, or publication authority.
+
+### Deliberate exclusions
+
+- Do not call five-Jury cognitive functions or `main.py` scan orchestration.
+- Do not scrape, Brave, Firecrawl, or Coresignal.
+- Do not build a Jury input snapshot, adapter, or fenced commit (3I-J1–J3).
+- Do not claim the `jury_analysis` lease, register a Supervisor, or switch
+  `POST /scan`.
+- Do not copy Company Evidence DB eligibility/verification fields into durable
+  Jury input.
+
+### Tests
+
+- Hermetic: deterministic IDs; transport canonicalization; empty extract
+  allowed; forbidden evidence keys rejected; no raw bytes on the record.
+- PostgreSQL: attach candidates (and a Jury-stage retrieval) to the pending
+  `jury_analysis` step created by 3H; idempotent replay; tampered extract
+  rejected; Intent-stage retrievals remain a separate set.
+
+### Exit evidence
+
+Jury-stage fetches and candidates have an immutable provenance store that is
+not Company Evidence. Next card is **3I-J1** (Jury input snapshot).
+
+### Likely files
+
+`backend/migrations/006_jury_source_candidates.sql`,
+`backend/scan_jury_candidates.py`, repository persist/load,
+`tests/test_scan_jury_candidates.py`,
+`tests/test_scan_jury_candidates_postgres_integration.py`
 
 Phase 3 exit gate stays the plan's gate: restart after every major stage
 resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
