@@ -35,6 +35,10 @@ class SourceRetrievalIntegrityError(RuntimeError):
     """Raised when durable source-retrieval text or metadata is malformed."""
 
 
+class JurySourceCandidateIntegrityError(RuntimeError):
+    """Raised when durable Jury candidate text or metadata is malformed."""
+
+
 class IntentInputSnapshotIntegrityError(RuntimeError):
     """Raised when an immutable Intent input manifest is malformed or mismatched."""
 
@@ -146,6 +150,25 @@ class SourceRetrieval:
     extraction_warnings: tuple[str, ...]
     response_metadata: Mapping[str, Any]
     extracted_text: str
+
+
+@dataclass(frozen=True)
+class JurySourceCandidate:
+    """One Jury-stage discovery candidate; never claim support or evidence."""
+
+    candidate_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    candidate_origin: str
+    source_url: str
+    canonical_url: str
+    recorded_at: datetime
+    parser_route: str
+    cached_extract_sha256: str
+    cached_extract_text: str
+    extraction_warnings: tuple[str, ...]
+    metadata: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -356,6 +379,39 @@ def _source_metadata(value: Any) -> Mapping[str, Any]:
     if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
         raise SourceRetrievalIntegrityError("Source retrieval metadata must be a JSON-safe mapping.")
     return dict(raw_value)
+
+
+_FORBIDDEN_JURY_CANDIDATE_METADATA_KEYS = frozenset(
+    {
+        "claim_support",
+        "generation_eligible",
+        "analysis_verified",
+        "allowed_as_fact",
+        "promotion_status",
+        "foresight_eligible",
+        "entity_verified",
+        "entity_match_status",
+    }
+)
+
+
+def _jury_candidate_metadata(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise JurySourceCandidateIntegrityError("Jury source candidate metadata is not valid JSON.") from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise JurySourceCandidateIntegrityError("Jury source candidate metadata must be a JSON-safe mapping.")
+    mapping = dict(raw_value)
+    blocked = sorted(key for key in mapping if key in _FORBIDDEN_JURY_CANDIDATE_METADATA_KEYS)
+    if blocked:
+        raise JurySourceCandidateIntegrityError(
+            "Jury source candidate metadata cannot include evidence fields: "
+            + ", ".join(blocked)
+        )
+    return mapping
 
 
 def _json_safe(value: Any) -> bool:
@@ -914,6 +970,198 @@ class ScanRepository:
                 if any(stored.get(key) != value for key, value in expected.items()):
                     raise ValueError(
                         "retrieval_id was already used for different immutable retrieval content."
+                    )
+            persisted.append(stored)
+        return persisted
+
+    def persist_jury_source_candidates(
+        self,
+        *,
+        candidates: list[JurySourceCandidate],
+    ) -> list[Mapping[str, Any]]:
+        """Persist Jury-stage candidates without converting them into evidence."""
+
+        self._validate_jury_source_candidates(candidates)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            return self._persist_jury_source_candidates_on_cursor(cursor, candidates=candidates)
+
+    def load_jury_source_candidates(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> list[JurySourceCandidate]:
+        """Load Jury candidates only when cached extract text remains hash-verified."""
+
+        if not run_id or stage_name != "jury_analysis" or attempt < 1:
+            raise ValueError("run_id, stage_name='jury_analysis', and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM scan_steps
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            if _mapping(cursor.fetchone()) is None:
+                raise KeyError(f"Unknown scan step: {run_id}/{stage_name}/{attempt}")
+            cursor.execute(
+                """
+                SELECT candidate_id, run_id, stage_name, attempt, candidate_origin,
+                       source_url, canonical_url, recorded_at, parser_route,
+                       cached_extract_sha256, cached_extract_text,
+                       extraction_warnings, metadata
+                FROM jury_source_candidates
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                ORDER BY recorded_at, candidate_id
+                """,
+                (run_id, stage_name, attempt),
+            )
+            rows = [_mapping(row) for row in cursor.fetchall()]
+
+        candidates: list[JurySourceCandidate] = []
+        for row in rows:
+            if row is None:
+                raise JurySourceCandidateIntegrityError("Jury source candidate query returned an empty row.")
+            recorded_at = row.get("recorded_at")
+            if not isinstance(recorded_at, datetime):
+                raise JurySourceCandidateIntegrityError("Jury source candidate timestamp is invalid.")
+            candidate = JurySourceCandidate(
+                candidate_id=str(row["candidate_id"]),
+                run_id=str(row["run_id"]),
+                stage_name=str(row["stage_name"]),
+                attempt=int(row["attempt"]),
+                candidate_origin=str(row["candidate_origin"]),
+                source_url=str(row["source_url"]),
+                canonical_url=str(row["canonical_url"]),
+                recorded_at=recorded_at,
+                parser_route=str(row["parser_route"]),
+                cached_extract_sha256=str(row["cached_extract_sha256"]),
+                cached_extract_text=str(row["cached_extract_text"]),
+                extraction_warnings=_material_warnings(row.get("extraction_warnings")),
+                metadata=_jury_candidate_metadata(row.get("metadata")),
+            )
+            self._validate_jury_source_candidates([candidate])
+            if _sha256_text(candidate.cached_extract_text) != candidate.cached_extract_sha256:
+                raise JurySourceCandidateIntegrityError(
+                    f"Cached extract hash mismatch for candidate {candidate.candidate_id}."
+                )
+            candidates.append(candidate)
+        return candidates
+
+    def _validate_jury_source_candidates(self, candidates: list[JurySourceCandidate]) -> None:
+        seen_ids: set[str] = set()
+        allowed_origins = {
+            "company_evidence_db",
+            "previous_scan_source_cache",
+            "jury_live_acquisition_seed",
+        }
+        for candidate in candidates:
+            if candidate.candidate_id in seen_ids:
+                raise ValueError("candidate_id must be unique within one persistence request.")
+            seen_ids.add(candidate.candidate_id)
+            if not all(
+                (
+                    candidate.candidate_id,
+                    candidate.run_id,
+                    candidate.stage_name,
+                    candidate.candidate_origin,
+                    candidate.source_url,
+                    candidate.canonical_url,
+                    candidate.parser_route,
+                )
+            ):
+                raise ValueError("Jury source candidate identity fields are required.")
+            if candidate.stage_name != "jury_analysis" or candidate.attempt < 1:
+                raise ValueError("Jury source candidate must bind one positive jury_analysis attempt.")
+            if candidate.candidate_origin not in allowed_origins:
+                raise ValueError("Jury source candidate origin is invalid.")
+            if candidate.recorded_at.tzinfo is None:
+                raise ValueError("Jury source candidate timestamp must be timezone-aware.")
+            if not candidate.source_url.startswith(("http://", "https://")):
+                raise ValueError("Jury source candidate URL must use HTTP or HTTPS.")
+            if not candidate.canonical_url.startswith(("http://", "https://")):
+                raise ValueError("Jury source candidate canonical URL must use HTTP or HTTPS.")
+            if not _is_sha256_digest(candidate.cached_extract_sha256):
+                raise ValueError("Jury source candidate extract hash must be a SHA-256 digest.")
+            if not _json_safe(candidate.metadata):
+                raise ValueError("Jury source candidate metadata must be JSON-safe and contain no raw bytes.")
+            blocked = sorted(
+                key for key in candidate.metadata if key in _FORBIDDEN_JURY_CANDIDATE_METADATA_KEYS
+            )
+            if blocked:
+                raise ValueError(
+                    "Jury source candidate metadata cannot include evidence fields: "
+                    + ", ".join(blocked)
+                )
+
+    def _persist_jury_source_candidates_on_cursor(
+        self,
+        cursor: CursorLike,
+        *,
+        candidates: list[JurySourceCandidate],
+    ) -> list[Mapping[str, Any]]:
+        persisted: list[Mapping[str, Any]] = []
+        for candidate in candidates:
+            cursor.execute(
+                """
+                INSERT INTO jury_source_candidates (
+                    candidate_id, run_id, stage_name, attempt, candidate_origin,
+                    source_url, canonical_url, recorded_at, parser_route,
+                    cached_extract_sha256, cached_extract_text,
+                    extraction_warnings, metadata
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb
+                )
+                ON CONFLICT (candidate_id) DO NOTHING
+                RETURNING candidate_id, run_id, stage_name, attempt, candidate_origin,
+                          canonical_url, cached_extract_sha256, parser_route
+                """,
+                (
+                    candidate.candidate_id,
+                    candidate.run_id,
+                    candidate.stage_name,
+                    candidate.attempt,
+                    candidate.candidate_origin,
+                    candidate.source_url,
+                    candidate.canonical_url,
+                    candidate.recorded_at,
+                    candidate.parser_route,
+                    candidate.cached_extract_sha256,
+                    candidate.cached_extract_text,
+                    _json({"warnings": list(candidate.extraction_warnings)}),
+                    _json(candidate.metadata),
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT candidate_id, run_id, stage_name, attempt, candidate_origin,
+                           canonical_url, cached_extract_sha256, parser_route
+                    FROM jury_source_candidates
+                    WHERE candidate_id = %s
+                    """,
+                    (candidate.candidate_id,),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError("Idempotent Jury source candidate disappeared before it could be read.")
+                expected = {
+                    "candidate_id": candidate.candidate_id,
+                    "run_id": candidate.run_id,
+                    "stage_name": candidate.stage_name,
+                    "attempt": candidate.attempt,
+                    "candidate_origin": candidate.candidate_origin,
+                    "canonical_url": candidate.canonical_url,
+                    "cached_extract_sha256": candidate.cached_extract_sha256,
+                    "parser_route": candidate.parser_route,
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "candidate_id was already used for different immutable candidate content."
                     )
             persisted.append(stored)
         return persisted

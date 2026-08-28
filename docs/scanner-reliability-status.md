@@ -29,10 +29,10 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-J0 — Jury-stage retrieval/candidate durability**
-(first 3I template beat; specify the full card before implementing). Do not
-start Diagnosis, Foresight, Supervisor execution, or `POST /scan` in the same
-change. Cards **3G1**, **3G2**, and **3H** are complete.
+Immediate next card: **3I-J1 — Jury input snapshot from Intent checkpoint**.
+Do not start a Jury adapter, Jury commit, Diagnosis, Foresight, Supervisor
+execution, or `POST /scan` in the same change. Cards **3G1**, **3G2**, **3H**,
+and **3I-J0** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -463,5 +463,37 @@ Verification evidence:
 
 - Fenced Intent commit: [5a77c7f](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/5a77c7fc27787e884a03c0154dfa91ea9eb57c6b).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; six new hermetic 3H contracts passed; five disposable PostgreSQL 3H durability contracts passed (happy-path queue, stale reclaim, identical replay, malformed rejection, restart hash/gate). Full suite with the test DSN: `419 passed`.
+
+
+## Slice 3I-J0 — Jury-stage retrieval and candidate durability
+
+The pending `jury_analysis` step now has an immutable provenance store before
+any five-Jury function is wrapped:
+
+- `006_jury_source_candidates.sql` stores discovery candidates keyed to one
+  `jury_analysis` attempt: origin, original and transport-canonical URL,
+  optional cached extract text and SHA-256, parser route, warnings, and
+  discovery-only metadata. Raw response bytes are never stored.
+- Origins are `company_evidence_db`, `previous_scan_source_cache`, or
+  `jury_live_acquisition_seed`. Metadata cannot carry claim support, entity
+  match, Foresight eligibility, or publication authority.
+- Reload verifies the cached-extract hash. Identical replay is idempotent; a
+  different payload under the same candidate ID is rejected.
+- Existing `source_retrievals` may be keyed to that pending `jury_analysis`
+  step for a real Jury-stage fetch. Intent-stage retrievals remain a separate
+  set. Neither record is Company Evidence.
+- Candidates and Jury-stage retrievals attach without claiming the
+  `jury_analysis` lease. This slice does not call five-Jury functions, scrape,
+  build a Jury snapshot/adapter/commit, register a Supervisor, or switch
+  `POST /scan`.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-J1 — Jury
+input snapshot from Intent checkpoint**. Do not start Diagnosis, Foresight,
+Synthesis, Verification, or request handoff from this slice.
+
+Verification evidence:
+
+- Jury-stage candidate durability: [6e8bfc9](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/6e8bfc9197e859a813dc89bfdd500e5300c7ffa8).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; four new hermetic 3I-J0 contracts passed; three disposable PostgreSQL 3I-J0 durability contracts passed (pending-step attach without claim, conflicting ID rejection, tampered extract rejection). Full suite with the test DSN: `426 passed`.
 
 
