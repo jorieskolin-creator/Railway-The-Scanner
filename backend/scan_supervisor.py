@@ -43,6 +43,10 @@ class IntentInputSnapshotIntegrityError(RuntimeError):
     """Raised when an immutable Intent input manifest is malformed or mismatched."""
 
 
+class JuryInputSnapshotIntegrityError(RuntimeError):
+    """Raised when an immutable Jury input manifest is malformed or mismatched."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -191,6 +195,28 @@ class IntentInputSnapshot:
     @property
     def snapshot_ref(self) -> str:
         return f"intent-input://scan/{self.snapshot_id}"
+
+
+@dataclass(frozen=True)
+class JuryInputSnapshot:
+    """Immutable manifest binding one Jury attempt to verified durable input.
+
+    It contains only the upstream Intent checkpoint identity plus Jury-stage
+    candidate and retrieval references. It has no Company Evidence, Foresight,
+    claim-support, or publication meaning.
+    """
+
+    snapshot_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    contract_version: str
+    input_hash: str
+    manifest: Mapping[str, Any]
+
+    @property
+    def snapshot_ref(self) -> str:
+        return f"jury-input://scan/{self.snapshot_id}"
 
 
 @dataclass(frozen=True)
@@ -366,6 +392,18 @@ def _intent_manifest(value: Any) -> Mapping[str, Any]:
             raise IntentInputSnapshotIntegrityError("Intent input manifest is not valid JSON.") from error
     if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
         raise IntentInputSnapshotIntegrityError("Intent input manifest must be a JSON-safe mapping.")
+    return dict(raw_value)
+
+
+def _jury_manifest(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise JuryInputSnapshotIntegrityError("Jury input manifest is not valid JSON.") from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise JuryInputSnapshotIntegrityError("Jury input manifest must be a JSON-safe mapping.")
     return dict(raw_value)
 
 
@@ -1317,6 +1355,182 @@ class ScanRepository:
         from scan_intent_snapshot import validate_intent_input_snapshot_manifest
 
         validate_intent_input_snapshot_manifest(snapshot)
+
+    def persist_jury_input_snapshot(
+        self,
+        *,
+        snapshot: JuryInputSnapshot,
+    ) -> Mapping[str, Any]:
+        """Persist one immutable Jury input manifest without stage execution."""
+
+        self._validate_jury_input_snapshot(snapshot)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO jury_input_snapshots (
+                    snapshot_id, run_id, stage_name, attempt, contract_version,
+                    input_hash, manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT DO NOTHING
+                RETURNING snapshot_id, run_id, stage_name, attempt,
+                          contract_version, input_hash, manifest
+                """,
+                (
+                    snapshot.snapshot_id,
+                    snapshot.run_id,
+                    snapshot.stage_name,
+                    snapshot.attempt,
+                    snapshot.contract_version,
+                    snapshot.input_hash,
+                    _json(snapshot.manifest),
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT snapshot_id, run_id, stage_name, attempt,
+                           contract_version, input_hash, manifest
+                    FROM jury_input_snapshots
+                    WHERE snapshot_id = %s
+                       OR (run_id = %s AND stage_name = %s AND attempt = %s)
+                    ORDER BY snapshot_id = %s DESC
+                    LIMIT 1
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.run_id,
+                        snapshot.stage_name,
+                        snapshot.attempt,
+                        snapshot.snapshot_id,
+                    ),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError("Idempotent Jury input snapshot disappeared before it could be read.")
+                expected = {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "run_id": snapshot.run_id,
+                    "stage_name": snapshot.stage_name,
+                    "attempt": snapshot.attempt,
+                    "contract_version": snapshot.contract_version,
+                    "input_hash": snapshot.input_hash,
+                    "manifest": dict(snapshot.manifest),
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "Jury input snapshot already exists for different immutable input."
+                    )
+            return stored
+
+    def load_jury_input_snapshot(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> JuryInputSnapshot:
+        """Load and validate a persisted Jury input manifest."""
+
+        if not run_id or stage_name != "jury_analysis" or attempt < 1:
+            raise ValueError("run_id, stage_name='jury_analysis', and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_id, run_id, stage_name, attempt,
+                       contract_version, input_hash, manifest
+                FROM jury_input_snapshots
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            raise KeyError(f"Unknown Jury input snapshot: {run_id}/{stage_name}/{attempt}")
+        snapshot = JuryInputSnapshot(
+            snapshot_id=str(row["snapshot_id"]),
+            run_id=str(row["run_id"]),
+            stage_name=str(row["stage_name"]),
+            attempt=int(row["attempt"]),
+            contract_version=str(row["contract_version"]),
+            input_hash=str(row["input_hash"]),
+            manifest=_jury_manifest(row.get("manifest")),
+        )
+        self._validate_jury_input_snapshot(snapshot)
+        return snapshot
+
+    def load_verified_jury_inputs(
+        self,
+        *,
+        run_id: str,
+        attempt: int,
+    ) -> tuple[JuryInputSnapshot, ScanCheckpoint, list[JurySourceCandidate], list[SourceRetrieval]]:
+        """Hydrate only Jury input records that exactly match the immutable manifest."""
+
+        snapshot = self.load_jury_input_snapshot(
+            run_id=run_id,
+            stage_name="jury_analysis",
+            attempt=attempt,
+        )
+        intent_ref = snapshot.manifest.get("intent_checkpoint_ref")
+        if not isinstance(intent_ref, Mapping):
+            raise JuryInputSnapshotIntegrityError(
+                "Jury input snapshot is missing its Intent checkpoint ref."
+            )
+        try:
+            intent_attempt = int(intent_ref.get("attempt"))
+        except (TypeError, ValueError) as error:
+            raise JuryInputSnapshotIntegrityError(
+                "Jury input snapshot Intent checkpoint attempt is invalid."
+            ) from error
+        checkpoint = self.load_checkpoint(
+            run_id=run_id,
+            stage_name="intent",
+            attempt=intent_attempt,
+        )
+        if checkpoint is None:
+            raise JuryInputSnapshotIntegrityError(
+                f"Unknown Intent checkpoint for Jury input: {run_id}/intent/{intent_attempt}"
+            )
+        candidates = self.load_jury_source_candidates(
+            run_id=run_id,
+            stage_name="jury_analysis",
+            attempt=attempt,
+        )
+        retrievals = self.load_source_retrievals(
+            run_id=run_id,
+            stage_name="jury_analysis",
+            attempt=attempt,
+        )
+        from scan_jury_snapshot import assert_jury_input_snapshot_matches
+
+        assert_jury_input_snapshot_matches(
+            snapshot,
+            intent_checkpoint=checkpoint,
+            candidates=candidates,
+            retrievals=retrievals,
+        )
+        return snapshot, checkpoint, candidates, retrievals
+
+    def _validate_jury_input_snapshot(self, snapshot: JuryInputSnapshot) -> None:
+        if not all(
+            (
+                snapshot.snapshot_id,
+                snapshot.run_id,
+                snapshot.contract_version,
+                snapshot.input_hash,
+            )
+        ):
+            raise JuryInputSnapshotIntegrityError("Jury input snapshot identity fields are required.")
+        if snapshot.stage_name != "jury_analysis" or snapshot.attempt < 1:
+            raise JuryInputSnapshotIntegrityError("Jury input snapshot must bind one positive jury_analysis attempt.")
+        if not _is_sha256_digest(snapshot.input_hash):
+            raise JuryInputSnapshotIntegrityError("Jury input snapshot hash must be a SHA-256 digest.")
+        if not isinstance(snapshot.manifest, Mapping) or not _json_safe(snapshot.manifest):
+            raise JuryInputSnapshotIntegrityError("Jury input manifest must be a JSON-safe mapping.")
+        from scan_jury_snapshot import validate_jury_input_snapshot_manifest
+
+        validate_jury_input_snapshot_manifest(snapshot)
 
     def claim_next_step(
         self,

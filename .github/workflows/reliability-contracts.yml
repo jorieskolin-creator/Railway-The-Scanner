@@ -85,4 +85,5 @@ jobs:
             tests/test_scan_intent_snapshot_postgres_integration.py \
             tests/test_scan_intent_adapter_postgres_integration.py \
             tests/test_scan_intent_commit_postgres_integration.py \
-            tests/test_scan_jury_candidates_postgres_integration.py
+            tests/test_scan_jury_candidates_postgres_integration.py \
+            tests/test_scan_jury_snapshot_postgres_integration.py
