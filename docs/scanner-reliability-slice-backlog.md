@@ -73,7 +73,7 @@ instead of replacing it.
 ## Card 3G1 — Intent input projection and output checkpoint contract
 
 **Parent stakeholder step:** 3G
-**Status:** Next
+**Status:** Complete
 **Mirrors:** 3C checkpoint builder, without the fenced commit that 3C also included
 
 ### In scope
@@ -128,7 +128,7 @@ unused by any live path. Status register records 3G1 and names 3G2 as next.
 ## Card 3G2 — Prepare-only Intent adapter
 
 **Parent stakeholder step:** 3G
-**Status:** Blocked on 3G1
+**Status:** Complete
 **Mirrors:** 3D `MaterialIngestionStageExecutor`
 
 ### In scope
@@ -176,7 +176,7 @@ here, not after 3H.
 ## Card 3H — Intent fenced commit and reclaim
 
 **Parent stakeholder step:** 3H
-**Status:** Blocked on 3G2
+**Status:** Complete
 
 ### In scope
 
@@ -302,16 +302,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Implement exactly slice 3G1 from docs/scanner-reliability-slice-backlog.md.
-Do not start 3G2, 3H, Supervisor registration, POST /scan, Railway, or any
-other cognitive stage.
+Specify then implement exactly slice 3I-J0 from docs/scanner-reliability-slice-backlog.md
+(Jury-stage retrieval/candidate durability). Do not start a Jury adapter, Jury
+commit, Diagnosis, Foresight, Supervisor registration, POST /scan, or Railway.
 
-Constraints: no analyze_intent call; no scrape/acquisition; no database write;
-keep new code out of scan_supervisor.py except unavoidable types.
-
-Deliver: module + hermetic tests + docs/scanner-reliability-status.md evidence
-section. Stop when 3G1 exit evidence is recorded.
+Deliver: the specified card plus its module/tests/status evidence. Stop when
+3I-J0 exit evidence is recorded.
 ```
 
-After 3G1 merges, replace `3G1` with `3G2` in that prompt. Do not accumulate
+After 3I-J0 merges, replace `3I-J0` with `3I-J1` in that prompt. Do not accumulate
 open cards in one run.

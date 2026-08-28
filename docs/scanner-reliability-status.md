@@ -29,9 +29,10 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3G1 — Intent input projection and output checkpoint
-contract**. Do not start 3G2, 3H, Jury wrapping, Supervisor execution, or
-`POST /scan` in the same change.
+Immediate next card: **3I-J0 — Jury-stage retrieval/candidate durability**
+(first 3I template beat; specify the full card before implementing). Do not
+start Diagnosis, Foresight, Supervisor execution, or `POST /scan` in the same
+change. Cards **3G1**, **3G2**, and **3H** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -367,15 +368,100 @@ adapter is allowed to use it:
   Supervisor loop, lease claim, checkpoint completion, or Railway setting
   changed in this slice.
 
-The next bounded dependency remains a **prepare-only Intent adapter**, now
-split in `docs/scanner-reliability-slice-backlog.md` so it matches the 3C→3D
-size that already worked: **3G1** defines the versioned input projection and
-output checkpoint contract without calling `analyze_intent`; **3G2** is the
-prepare-only adapter that reads `load_verified_intent_inputs` and proposes
-that checkpoint without committing it. The actual stage commit (**3H**) and
-any authoritative `POST /scan` handoff remain later decisions.
+The next bounded dependency was split in
+`docs/scanner-reliability-slice-backlog.md` so the adapter cannot invent its
+output contract: a versioned Intent projection and checkpoint builder first,
+then a prepare-only adapter that uses that builder.
 
 Verification evidence:
 
 - Snapshot foundation: [18e8f11e](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/18e8f11e516b235279304f8df47c8df81e086599); contract corrections: [14928c67](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/14928c674d8b845b8c6dac293830ac37e3b1e8b7), [d0da5eba](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/d0da5ebaedd514345e8f52f3a72e5ac6baff63c5), [fe9ed988](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/fe9ed988fec192378f1dd99cf033c0c1ca332c06), and [ebffbce5](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/ebffbce5712e4b4bfb7d9d35a57eaa1cdadb6cb7).
 - [Reliability contracts run 33153940507](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33153940507): compilation and duplicate-definition guard passed; 127 focused contracts, the full hermetic suite (`385 passed, 13 skipped`), and 13 disposable PostgreSQL durability contracts passed.
+
+
+## Slice 3G1 — Intent input projection and output checkpoint contract
+
+The first cognitive stage now has a versioned prepare-time contract without
+being invoked or committed:
+
+- `build_intent_input_projection` accepts only a verified Intent input snapshot
+  plus the already-hydrated material and retrieval lists. Added, omitted, or
+  tampered input raises an integrity error and cannot become a best-effort
+  payload.
+- The projection concatenates hash-verified extracted text in stable
+  `material_id` then `retrieval_id` order. That string is the only payload a
+  later adapter may pass to existing Intent scoring.
+- `build_intent_checkpoint` maps that projection and a caller-supplied Intent
+  result into a `scanner.intent/v1` checkpoint. The snapshot uses envelope
+  fields (`contract`, `run_id`, `stage`, `attempt`, `input_refs`, `output_refs`,
+  `gate_results`) plus Intent payload hashes. Extracted text and raw bytes are
+  not copied into the checkpoint.
+- A well-shaped result (`score`, `breakdown`, `metrics`) yields `passed`. A
+  malformed result yields `validation_failed` and is not stored as output. Empty
+  concatenated text is allowed; this slice does not add a shortness gate.
+- The builders do not call `analyze_intent`, acquire content, write PostgreSQL,
+  register a Supervisor executor, queue `jury_analysis`, or change `POST /scan`.
+
+The next bounded dependency is **3G2 — prepare-only Intent adapter**. It must
+read `load_verified_intent_inputs`, use these builders, invoke existing
+`analyze_intent` on the projection text, and return a checkpoint proposal
+without committing it.
+
+Verification evidence:
+
+- Projection/checkpoint contract: [53baf9a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/53baf9a938951bfc4a0f8182bda5d34d8b10c140).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; full hermetic suite `391 passed, 7 skipped` (six new 3G1 contracts; PostgreSQL durability jobs were not required for this slice).
+
+
+## Slice 3G2 — prepare-only Intent adapter
+
+Intent now has a prepare-only adapter while execution remains inactive:
+
+- `IntentStageExecutor` reads only `load_verified_intent_inputs`, builds the 3G1
+  projection, and calls existing `analyze_intent` on that concatenated text.
+- It returns a `StageExecutionResult` carrying the 3G1 checkpoint proposal.
+  `next_stage` may name `jury_analysis` when the gate passed, but only as
+  metadata. Nothing is queued or committed.
+- The adapter has no claim, persist, or `complete_step` method. It does not
+  scrape, import `main.py`, register with FastAPI, or change `POST /scan`.
+- Its PostgreSQL contract proves preparation can read a leased Intent step and
+  leave that step leased, with no Intent checkpoint row and no `jury_analysis`
+  step.
+
+The next bounded dependency was **3H — Intent fenced commit and reclaim**.
+
+Verification evidence:
+
+- Prepare-only adapter: [c79090f](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/c79090f222876757f1817cff037b651af70ddc3f).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; full hermetic suite `394 passed, 8 skipped` (three new 3G2 hermetic contracts; the disposable PostgreSQL adapter contract is wired into Reliability contracts and skipped without the test DSN).
+
+
+## Slice 3H — Intent fenced commit and reclaim
+
+Intent is now the first cognitive stage with a crash-safe durable boundary,
+while live execution remains inactive:
+
+- `commit_intent_stage` persists a passed 3G2 proposal with existing
+  `complete_step_with_checkpoint` and queues only `jury_analysis`.
+- A stale fencing token rolls the Intent checkpoint insert back; the
+  reclaiming owner can commit. Identical replay of the same passed checkpoint
+  is idempotent and does not insert a second row or a second completion event.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Juries.
+- Restart reload through `load_verified_intent_inputs` reproduces the same
+  input and output hashes. Tampered persisted text cannot hydrate a new
+  payload. The Intent gate remains `passed` and `jury_analysis` stays pending.
+- This slice does not register a Supervisor loop, switch `POST /scan`, apply a
+  Railway migration, or wrap any later cognitive stage.
+
+Phase 3 is **not** closed. The next bounded dependency is the first Jury wrap
+beat: durable Jury-stage input/retrieval lineage, specified after this evidence
+and implemented as its own card. Do not start Diagnosis, Foresight, Synthesis,
+Verification, or request handoff from this slice.
+
+Verification evidence:
+
+- Fenced Intent commit: [5a77c7f](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/5a77c7fc27787e884a03c0154dfa91ea9eb57c6b).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; six new hermetic 3H contracts passed; five disposable PostgreSQL 3H durability contracts passed (happy-path queue, stale reclaim, identical replay, malformed rejection, restart hash/gate). Full suite with the test DSN: `419 passed`.
+
+
