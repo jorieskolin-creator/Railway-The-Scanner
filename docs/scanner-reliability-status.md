@@ -208,3 +208,32 @@ The next slice is a transactional ingress adapter that creates a run and its
 prepared material together.  It must remain inactive until it can replace,
 rather than parallel, the legacy `/scan` thread handoff.  Only then can
 material ingestion become the first resumable stage.
+
+
+## Slice 3B — transactional inactive ingress
+
+The Scanner now has a deterministic ingress contract ready for the later
+`POST /scan` handoff:
+
+- an explicit client idempotency key deterministically derives the run ID and
+  the material IDs, so a retry can address the exact same durable input;
+- the request hash covers the Scanner-relevant submitted input and material
+  metadata, but is intentionally independent of the idempotency key;
+- one PostgreSQL transaction creates the queued run, initial
+  `material_ingestion` step, event, and immutable material rows;
+- replaying the same request is idempotent; changing input under the same
+  key is rejected; and a database-level material failure rolls the newly
+  inserted run and step back completely;
+- this ingress remains inactive.  It never claims a lease or starts a worker,
+  and the legacy in-memory `/scan` thread is still the only live path.
+
+This is the required precondition for switching the request path later, but
+not permission to switch it yet.  The next Phase 3 slice will define durable
+material retrieval and an immutable first-stage checkpoint contract; only
+after that can an execution adapter replace the current handoff safely.
+
+Verification evidence:
+
+- Ingress commit: [69362b2](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/69362b28587379a8fec27687d55664902366a3e2).
+- Database-rollback contract strengthening: [df86bd0](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/df86bd06e7233f2310f44e63697f04f8cb58ac81).
+- [Reliability contracts run 33143601885](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33143601885): 127 focused contracts and the full hermetic suite passed (`376 passed, 5 skipped`); all five disposable PostgreSQL durability contracts passed.
