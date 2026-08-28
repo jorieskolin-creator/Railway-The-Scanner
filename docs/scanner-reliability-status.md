@@ -414,14 +414,40 @@ Intent now has a prepare-only adapter while execution remains inactive:
   leave that step leased, with no Intent checkpoint row and no `jury_analysis`
   step.
 
-The next bounded dependency is **3H — Intent fenced commit and reclaim**. It
-must persist the 3G2 proposal with the existing fenced checkpoint transaction,
-queue only `jury_analysis`, and prove stale-attempt rollback. Supervisor
-registration and `POST /scan` remain later decisions.
+The next bounded dependency was **3H — Intent fenced commit and reclaim**.
 
 Verification evidence:
 
 - Prepare-only adapter: [c79090f](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/c79090f222876757f1817cff037b651af70ddc3f).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; full hermetic suite `394 passed, 8 skipped` (three new 3G2 hermetic contracts; the disposable PostgreSQL adapter contract is wired into Reliability contracts and skipped without the test DSN).
+
+
+## Slice 3H — Intent fenced commit and reclaim
+
+Intent is now the first cognitive stage with a crash-safe durable boundary,
+while live execution remains inactive:
+
+- `commit_intent_stage` persists a passed 3G2 proposal with existing
+  `complete_step_with_checkpoint` and queues only `jury_analysis`.
+- A stale fencing token rolls the Intent checkpoint insert back; the
+  reclaiming owner can commit. Identical replay of the same passed checkpoint
+  is idempotent and does not insert a second row or a second completion event.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Juries.
+- Restart reload through `load_verified_intent_inputs` reproduces the same
+  input and output hashes. Tampered persisted text cannot hydrate a new
+  payload. The Intent gate remains `passed` and `jury_analysis` stays pending.
+- This slice does not register a Supervisor loop, switch `POST /scan`, apply a
+  Railway migration, or wrap any later cognitive stage.
+
+Phase 3 is **not** closed. The next bounded dependency is the first Jury wrap
+beat: durable Jury-stage input/retrieval lineage, specified after this evidence
+and implemented as its own card. Do not start Diagnosis, Foresight, Synthesis,
+Verification, or request handoff from this slice.
+
+Verification evidence:
+
+- Fenced Intent commit: [5a77c7f](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/5a77c7fc27787e884a03c0154dfa91ea9eb57c6b).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; six new hermetic 3H contracts passed; five disposable PostgreSQL 3H durability contracts passed (happy-path queue, stale reclaim, identical replay, malformed rejection, restart hash/gate). Full suite with the test DSN: `419 passed`.
 
 
