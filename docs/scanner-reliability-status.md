@@ -14,7 +14,7 @@
 |---|---|---|
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
-| 2 — PostgreSQL orchestration primitives | In progress — foundation committed, Supervisor disabled | Process-kill reclaim and stale-attempt rejection proven |
+| 2 — PostgreSQL orchestration primitives | Complete — lifecycle wired, execution intentionally blocked | Process-kill reclaim and stale-attempt rejection proven |
 | 3 — Material durability and checkpoints | Not started | Restart at every stage preserves immutable lineage |
 | 4 — Typed envelopes and deterministic gates | Not started | Invalid/stale/hash-mismatched inputs block explicitly |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
@@ -128,9 +128,10 @@ is an explicitly configured test-only `127.0.0.1:5432` PostgreSQL endpoint in
 the separate CI job; no hostname, non-loopback address, alternate port, or
 production DSN is permitted.
 
-Phase 2 remains in progress: FastAPI lifecycle registration, a stage-executor
-adapter, and deployment-time migration handling must be added before this
-repository can own queued production work.
+Phase 2's database exit gate is now met.  It does not authorize production
+execution: the migration must be deliberately applied and verified before the
+schema-ready setting is armed, and Phase 3 must persist material/checkpoints
+before an executor can claim queued work.
 
 Verification evidence:
 
@@ -144,3 +145,34 @@ Verification evidence:
 - No phase is marked complete from code presence alone; its documented exit gate must pass.
 - No gate may be weakened to obtain a green suite.
 - Deployment success is not test evidence.
+
+
+## Slice 2C — disabled FastAPI lifecycle boundary
+
+The existing FastAPI process now owns Supervisor lifecycle registration without
+starting any new service, thread, or queued execution path:
+
+- application startup reads opt-in Supervisor settings and records a precise
+  lifecycle state; shutdown has no worker to drain in this phase;
+- the default is `SCAN_SUPERVISOR_ENABLED=false`, which performs no database
+  I/O and leaves the existing `POST /scan` implementation untouched;
+- an enabled Supervisor remains blocked until
+  `SCAN_SUPERVISOR_SCHEMA_READY=true`, which is a deliberate post-migration
+  release assertion—not an automatic migration attempt;
+- even with a schema-ready setting, Phase 2 registers no stage executor and
+  never claims work.  A supplied executor is still blocked until Phase 3 adds
+  durable material/checkpoint commits;
+- `StageExecutor` and `StageExecutionResult` define the narrow future
+  boundary: an existing cognitive stage can later return only checkpoint
+  metadata, while Phase 3 persists and verifies the referenced immutable
+  material.
+
+This keeps the plan's single-Railway-service topology and the cognitive flow
+unchanged.  In particular, Company Summary generation, Market Intelligence,
+and Foresight harvesting remain on their current paths until the preceding
+durability contracts exist.
+
+Verification evidence:
+
+- Lifecycle commit: [033e78a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/033e78a77366e701819982b97c5b79b2038b7219).
+- [Reliability contracts run 33142124310](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33142124310): compilation and duplicate-definition checks passed; 127 focused contracts and the full hermetic suite passed (`368 passed, 1 skipped`); the disposable PostgreSQL lease-reclaim job passed (`1 passed`).
