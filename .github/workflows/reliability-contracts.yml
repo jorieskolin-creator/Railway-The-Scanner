@@ -39,3 +39,5 @@ jobs:
       - name: Run focused trust contracts
         run: |
           python -m pytest -q             tests/test_evidence_lifecycle_contracts.py             tests/test_evidence_graph.py             tests/test_evidence_packaging.py             tests/test_general_summary_snapshot.py             tests/test_general_summary_language_qa.py             tests/test_foresight_hardening.py             tests/test_foresight_kb_evidence_promotion.py             tests/test_post_synthesis_reliability_contract.py
+      - name: Run complete hermetic suite
+        run: python -m pytest -q
