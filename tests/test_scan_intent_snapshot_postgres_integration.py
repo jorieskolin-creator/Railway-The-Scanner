@@ -137,14 +137,18 @@ def test_intent_input_snapshot_round_trips_idempotently_and_hydrates_exact_input
     assert hydrated_materials == materials
     assert hydrated_retrievals == retrievals
     with psycopg.connect(DATABASE_URL) as connection:
-        stored = connection.execute(
-            "SELECT count(*), manifest::text FROM intent_input_snapshots WHERE run_id = %s",
+        snapshot_count = connection.execute(
+            "SELECT count(*) FROM intent_input_snapshots WHERE run_id = %s",
             (ingress.run_id,),
-        ).fetchone()
-    assert stored[0] == 1
-    assert "Acquired page" not in stored[1]
-    assert "Submitted context" not in stored[1]
-    assert "response_content" not in stored[1]
+        ).fetchone()[0]
+        stored_manifest = connection.execute(
+            "SELECT manifest::text FROM intent_input_snapshots WHERE run_id = %s",
+            (ingress.run_id,),
+        ).fetchone()[0]
+    assert snapshot_count == 1
+    assert "Acquired page" not in stored_manifest
+    assert "Submitted context" not in stored_manifest
+    assert "response_content" not in stored_manifest
 
 
 def test_tampered_manifest_is_rejected_before_any_future_intent_adapter_can_use_it():
