@@ -78,4 +78,5 @@ jobs:
           python -m pytest -q \
             tests/test_scan_supervisor_postgres_integration.py \
             tests/test_scan_material_postgres_integration.py \
-            tests/test_scan_ingress_postgres_integration.py
+            tests/test_scan_ingress_postgres_integration.py \
+            tests/test_scan_checkpoint_postgres_integration.py

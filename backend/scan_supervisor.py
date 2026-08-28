@@ -27,6 +27,10 @@ class StaleLeaseError(RuntimeError):
     """Raised when a reclaimed or expired attempt tries to mutate a step."""
 
 
+class MaterialIntegrityError(RuntimeError):
+    """Raised when persisted material no longer matches its immutable text hash."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -110,6 +114,25 @@ class ScanMaterial:
     extraction_warnings: tuple[str, ...]
     allowed_use_classification: str
     extracted_text: str
+
+
+@dataclass(frozen=True)
+class ScanCheckpoint:
+    """Immutable persisted stage output with only references to input material."""
+
+    checkpoint_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    contract_version: str
+    input_hash: str
+    output_hash: str
+    gate_result: Mapping[str, Any]
+    snapshot: Mapping[str, Any]
+
+    @property
+    def checkpoint_ref(self) -> str:
+        return f"checkpoint://scan/{self.checkpoint_id}"
 
 
 @dataclass(frozen=True)
@@ -206,6 +229,7 @@ class CursorLike(Protocol):
 
     def execute(self, query: str, parameters: tuple[Any, ...] | None = None) -> Any: ...
     def fetchone(self) -> Mapping[str, Any] | None: ...
+    def fetchall(self) -> list[Mapping[str, Any]]: ...
     def __enter__(self) -> "CursorLike": ...
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None: ...
 
@@ -232,6 +256,26 @@ def _now() -> datetime:
 
 def _is_sha256_digest(value: str) -> bool:
     return len(value) == 64 and all(character in "0123456789abcdefABCDEF" for character in value)
+
+
+def _sha256_text(value: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _material_warnings(value: Any) -> tuple[str, ...]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise MaterialIntegrityError("Material warnings are not valid JSON.") from error
+    if isinstance(raw_value, Mapping):
+        raw_value = raw_value.get("warnings", [])
+    if not isinstance(raw_value, list) or not all(isinstance(item, str) for item in raw_value):
+        raise MaterialIntegrityError("Material warnings must be a string list.")
+    return tuple(raw_value)
 
 
 
@@ -526,6 +570,57 @@ class ScanRepository:
             persisted.append(stored)
         return persisted
 
+    def load_materials(self, *, run_id: str) -> list[ScanMaterial]:
+        """Load extracted material and reject any text-hash mismatch."""
+
+        if not run_id:
+            raise ValueError("run_id is required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM scan_runs WHERE run_id = %s", (run_id,))
+            if _mapping(cursor.fetchone()) is None:
+                raise KeyError(f"Unknown scan run: {run_id}")
+            cursor.execute(
+                """
+                SELECT material_id, origin, filename, media_type, byte_size,
+                       content_sha256, extracted_text_sha256, parser_version,
+                       extraction_status, extraction_warnings,
+                       allowed_use_classification, extracted_text
+                FROM scan_materials
+                WHERE run_id = %s
+                ORDER BY created_at, material_id
+                """,
+                (run_id,),
+            )
+            rows = [_mapping(row) for row in cursor.fetchall()]
+
+        materials: list[ScanMaterial] = []
+        for row in rows:
+            if row is None:
+                raise MaterialIntegrityError("Material query returned an empty row.")
+            warnings = _material_warnings(row.get("extraction_warnings"))
+            material = ScanMaterial(
+                material_id=str(row["material_id"]),
+                origin=str(row["origin"]),
+                filename=str(row["filename"]),
+                media_type=str(row["media_type"]),
+                byte_size=int(row["byte_size"]),
+                content_sha256=str(row["content_sha256"]),
+                extracted_text_sha256=str(row["extracted_text_sha256"]),
+                parser_version=str(row["parser_version"]),
+                extraction_status=str(row["extraction_status"]),
+                extraction_warnings=warnings,
+                allowed_use_classification=str(row["allowed_use_classification"]),
+                extracted_text=str(row["extracted_text"]),
+            )
+            self._validate_materials([material])
+            if _sha256_text(material.extracted_text) != material.extracted_text_sha256:
+                raise MaterialIntegrityError(
+                    f"Extracted text hash mismatch for material {material.material_id}."
+                )
+            materials.append(material)
+        return materials
+
+
     def claim_next_step(
         self,
         *,
@@ -692,85 +787,173 @@ class ScanRepository:
         next_stage: str | None,
         now: datetime | None = None,
     ) -> None:
-        """Commit a checkpoint only while the lease owner and token still match."""
+        """Complete a step with a pre-existing checkpoint reference."""
 
         current_time = now or self._clock()
         with self._transaction() as connection, connection.cursor() as cursor:
+            self._complete_step_on_cursor(
+                cursor,
+                lease,
+                output_hash=output_hash,
+                checkpoint_ref=checkpoint_ref,
+                gate_result=gate_result,
+                next_stage=next_stage,
+                current_time=current_time,
+            )
+
+    def complete_step_with_checkpoint(
+        self,
+        lease: StepLease,
+        *,
+        checkpoint: ScanCheckpoint,
+        next_stage: str | None,
+        now: datetime | None = None,
+    ) -> None:
+        """Atomically persist one immutable checkpoint and complete its lease."""
+
+        self._validate_checkpoint(lease, checkpoint)
+        current_time = now or self._clock()
+        with self._transaction() as connection, connection.cursor() as cursor:
+            self._insert_checkpoint_on_cursor(cursor, checkpoint)
+            self._complete_step_on_cursor(
+                cursor,
+                lease,
+                output_hash=checkpoint.output_hash,
+                checkpoint_ref=checkpoint.checkpoint_ref,
+                gate_result=checkpoint.gate_result,
+                next_stage=next_stage,
+                current_time=current_time,
+            )
+
+    def _validate_checkpoint(self, lease: StepLease, checkpoint: ScanCheckpoint) -> None:
+        if (
+            checkpoint.run_id != lease.run_id
+            or checkpoint.stage_name != lease.stage_name
+            or checkpoint.attempt != lease.attempt
+        ):
+            raise ValueError("checkpoint identity does not match the leased step.")
+        if not checkpoint.checkpoint_id or not checkpoint.contract_version:
+            raise ValueError("checkpoint identity and contract version are required.")
+        if not _is_sha256_digest(checkpoint.input_hash) or not _is_sha256_digest(
+            checkpoint.output_hash
+        ):
+            raise ValueError("checkpoint hashes must be SHA-256 hex digests.")
+        if checkpoint.gate_result.get("status") != "passed":
+            raise ValueError("only a passed gate may complete a step checkpoint.")
+        if not isinstance(checkpoint.snapshot, Mapping):
+            raise ValueError("checkpoint snapshot must be a mapping.")
+
+    def _insert_checkpoint_on_cursor(
+        self,
+        cursor: CursorLike,
+        checkpoint: ScanCheckpoint,
+    ) -> None:
+        cursor.execute(
+            """
+            INSERT INTO scan_checkpoints (
+                checkpoint_id, run_id, stage_name, attempt, contract_version,
+                input_hash, output_hash, gate_result, snapshot
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+            """,
+            (
+                checkpoint.checkpoint_id,
+                checkpoint.run_id,
+                checkpoint.stage_name,
+                checkpoint.attempt,
+                checkpoint.contract_version,
+                checkpoint.input_hash,
+                checkpoint.output_hash,
+                _json(checkpoint.gate_result),
+                _json(checkpoint.snapshot),
+            ),
+        )
+
+    def _complete_step_on_cursor(
+        self,
+        cursor: CursorLike,
+        lease: StepLease,
+        *,
+        output_hash: str,
+        checkpoint_ref: str | None,
+        gate_result: Mapping[str, Any],
+        next_stage: str | None,
+        current_time: datetime,
+    ) -> None:
+        cursor.execute(
+            """
+            UPDATE scan_steps
+            SET status = 'completed',
+                output_hash = %s,
+                checkpoint_ref = %s,
+                gate_result = %s::jsonb,
+                completed_at = %s,
+                updated_at = %s
+            WHERE run_id = %s
+              AND stage_name = %s
+              AND attempt = %s
+              AND status IN ('leased', 'running')
+              AND lease_owner = %s
+              AND fencing_token = %s
+              AND lease_expires_at > %s
+            """,
+            (
+                output_hash,
+                checkpoint_ref,
+                _json(gate_result),
+                current_time,
+                current_time,
+                lease.run_id,
+                lease.stage_name,
+                lease.attempt,
+                lease.lease_owner,
+                lease.fencing_token,
+                current_time,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise StaleLeaseError(
+                f"Lease lost before completing {lease.run_id}/{lease.stage_name} attempt {lease.attempt}."
+            )
+
+        if next_stage:
             cursor.execute(
                 """
-                UPDATE scan_steps
-                SET status = 'completed',
-                    output_hash = %s,
-                    checkpoint_ref = %s,
-                    gate_result = %s::jsonb,
-                    completed_at = %s,
-                    updated_at = %s
+                INSERT INTO scan_steps (run_id, stage_name, attempt, status)
+                VALUES (%s, %s, 1, 'pending')
+                ON CONFLICT (run_id, stage_name, attempt) DO NOTHING
+                """,
+                (lease.run_id, next_stage),
+            )
+            cursor.execute(
+                """
+                UPDATE scan_runs
+                SET status = 'running', current_stage = %s, updated_at = %s
                 WHERE run_id = %s
-                  AND stage_name = %s
-                  AND attempt = %s
-                  AND status IN ('leased', 'running')
-                  AND lease_owner = %s
-                  AND fencing_token = %s
-                  AND lease_expires_at > %s
                 """,
-                (
-                    output_hash,
-                    checkpoint_ref,
-                    _json(gate_result),
-                    current_time,
-                    current_time,
-                    lease.run_id,
-                    lease.stage_name,
-                    lease.attempt,
-                    lease.lease_owner,
-                    lease.fencing_token,
-                    current_time,
-                ),
+                (next_stage, current_time, lease.run_id),
             )
-            if cursor.rowcount != 1:
-                raise StaleLeaseError(
-                    f"Lease lost before completing {lease.run_id}/{lease.stage_name} attempt {lease.attempt}."
-                )
-
-            if next_stage:
-                cursor.execute(
-                    """
-                    INSERT INTO scan_steps (run_id, stage_name, attempt, status)
-                    VALUES (%s, %s, 1, 'pending')
-                    ON CONFLICT (run_id, stage_name, attempt) DO NOTHING
-                    """,
-                    (lease.run_id, next_stage),
-                )
-                cursor.execute(
-                    """
-                    UPDATE scan_runs
-                    SET status = 'running', current_stage = %s, updated_at = %s
-                    WHERE run_id = %s
-                    """,
-                    (next_stage, current_time, lease.run_id),
-                )
-            else:
-                cursor.execute(
-                    """
-                    UPDATE scan_runs
-                    SET status = 'completed', current_stage = NULL, completed_at = %s, updated_at = %s
-                    WHERE run_id = %s
-                    """,
-                    (current_time, current_time, lease.run_id),
-                )
-
+        else:
             cursor.execute(
                 """
-                INSERT INTO scan_events (run_id, stage_name, attempt, event_type, details)
-                VALUES (%s, %s, %s, 'step_completed', %s::jsonb)
+                UPDATE scan_runs
+                SET status = 'completed', current_stage = NULL, completed_at = %s, updated_at = %s
+                WHERE run_id = %s
                 """,
-                (
-                    lease.run_id,
-                    lease.stage_name,
-                    lease.attempt,
-                    _json({"output_hash": output_hash, "next_stage": next_stage}),
-                ),
+                (current_time, current_time, lease.run_id),
             )
+
+        cursor.execute(
+            """
+            INSERT INTO scan_events (run_id, stage_name, attempt, event_type, details)
+            VALUES (%s, %s, %s, 'step_completed', %s::jsonb)
+            """,
+            (
+                lease.run_id,
+                lease.stage_name,
+                lease.attempt,
+                _json({"output_hash": output_hash, "next_stage": next_stage}),
+            ),
+        )
 
     def fail_step(
         self,
