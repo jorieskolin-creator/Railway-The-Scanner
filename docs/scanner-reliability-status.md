@@ -12,8 +12,8 @@
 
 | Phase | Status | Exit gate |
 |---|---|---|
-| 0 — Canonicalize and freeze | In progress | One canonical plan, no shadowed trust functions, focused deterministic CI green |
-| 1 — Repair and freeze trust contracts | Pending verification | Trust-boundary suites green without network/model calls |
+| 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
+| 1 — Repair and freeze trust contracts | In progress | Trust-boundary suites green without network/model calls |
 | 2 — PostgreSQL orchestration primitives | Not started on v2 | Process-kill reclaim and stale-attempt rejection proven |
 | 3 — Material durability and checkpoints | Not started | Restart at every stage preserves immutable lineage |
 | 4 — Typed envelopes and deterministic gates | Not started | Invalid/stale/hash-mismatched inputs block explicitly |
@@ -31,6 +31,22 @@ This first slice is deliberately behaviour-preserving:
 4. run focused evidence, Foresight, Summary and post-synthesis contract tests in CI.
 
 No database schema, deployment topology, scan-state transition, Summary publication rule, model route or cognitive-stage behaviour changes in this slice.
+
+## Slice 0B — focused trust repair
+
+The first CI run classified three pre-existing failures without weakening any gate:
+
+| Failure | Classification | Resolution |
+|---|---|---|
+| Seed lifecycle omitted `quarantined` | Stale expectation | Freeze the intentional quarantine counter in the lifecycle contract |
+| Foresight sanitation changed text on a second pass | Implementation regression | Make the final company-obligation rewrite modal-aware and version the sanitizer as v4 |
+| KB cleanup retained a stale positive URL verdict | Implementation regression | Reverify every stored source URL at the cleanup trust boundary |
+
+Verification evidence:
+
+- Corrective commit: [e787e32](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/e787e32d65983b949c5e777254a057a9f981aacc).
+- [Reliability contracts run 33139505262](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33139505262): backend compilation passed, duplicate-definition guard passed, and 127 focused contracts passed with five deprecation warnings.
+- Phase 0 is closed. Phase 1 remains in progress until explicit no-network enforcement and full-suite failure classification are complete.
 
 ## Change rules
 
