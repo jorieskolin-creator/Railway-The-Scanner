@@ -14,7 +14,7 @@
 |---|---|---|
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
-| 2 — PostgreSQL orchestration primitives | Not started on v2 | Process-kill reclaim and stale-attempt rejection proven |
+| 2 — PostgreSQL orchestration primitives | In progress — foundation committed, Supervisor disabled | Process-kill reclaim and stale-attempt rejection proven |
 | 3 — Material durability and checkpoints | Not started | Restart at every stage preserves immutable lineage |
 | 4 — Typed envelopes and deterministic gates | Not started | Invalid/stale/hash-mismatched inputs block explicitly |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
@@ -78,6 +78,36 @@ Verification evidence:
 
 - Corrective commits: [b7e1ec2](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/b7e1ec2dbb5bbbba868d3581b665ed0bec3886d5), [959045a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/959045a7627649412bfd4229866f32faefc58167), [994ac8d](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/994ac8dfa24553fee4e52588b305c4e74c1d65ab), and [0192f1b](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/0192f1bda80e3f8fdbdff2f387c7c286c6d83535).
 - [Reliability contracts run 33140984217](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33140984217): compilation, duplicate-definition guard, 127 focused trust contracts, and the complete hermetic suite passed (`357 passed`, 59 deprecation warnings).
+
+
+## Slice 2A — execution-state foundation
+
+This slice adds no new Railway service and does not activate the Supervisor or
+alter the existing `/scan` request path. It provides the PostgreSQL foundation
+that later slices will use after material durability is in place:
+
+- `001_scan_execution_state.sql` defines `scan_runs`, `scan_steps`, and
+  append-only `scan_events` only; operational state remains separate from
+  evidence and Foresight records.
+- `scan_supervisor.py` is opt-in. It rejects enabled-without-DSN
+  configuration, claims one lease at a time, increments a fencing token at
+  every claim/reclaim, and conditions heartbeat/complete/fail writes on the
+  current owner, token, and unexpired lease.
+- A partial unique index permits only one `running` run; no in-memory
+  dictionary becomes the source of truth for the future Supervisor.
+- Repository contract tests cover disabled configuration, database requirement,
+  advisory-lock claim semantics, lease expiry, fencing, and stale checkpoint
+  rejection.
+
+Still deliberately out of scope: applying the migration to Railway, FastAPI
+startup/shutdown ownership, process-kill integration against a disposable
+PostgreSQL database, material persistence, checkpoints, and changing
+`POST /scan`. Those are required before Phase 2 can close.
+
+Verification evidence:
+
+- Foundation commit: [7f130ad](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/7f130ad71f4871e51021301845738bf88e73e051).
+- [Reliability contracts run 33141291533](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33141291533): compilation and duplicate-definition checks passed; 127 focused contracts and 363 hermetic tests passed (61 deprecation warnings).
 
 ## Change rules
 
