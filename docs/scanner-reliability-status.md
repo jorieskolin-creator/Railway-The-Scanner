@@ -21,6 +21,19 @@
 | 6 — Transactional final index | Not started | One current pointer; no duplicate final artifact |
 | 7 — Orchestrator decomposition | Not started | Golden checkpoint replay unchanged |
 
+## Operational slice register
+
+Remaining Phase 3 implementation is executed from
+`docs/scanner-reliability-slice-backlog.md`. That register does not change
+plan ideas, trust boundaries, topology, or phase exit gates. It splits the
+stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
+multiple cognitive stages and lose context.
+
+Immediate next card: **3I-J0 — Jury-stage retrieval/candidate durability**
+(first 3I template beat; specify the full card before implementing). Do not
+start Diagnosis, Foresight, Supervisor execution, or `POST /scan` in the same
+change. Cards **3G1**, **3G2**, and **3H** are complete.
+
 ## Slice 0A — baseline integrity
 
 This first slice is deliberately behaviour-preserving:
@@ -355,9 +368,10 @@ adapter is allowed to use it:
   Supervisor loop, lease claim, checkpoint completion, or Railway setting
   changed in this slice.
 
-The next bounded dependency was split so the adapter cannot invent its output
-contract: a versioned Intent projection and checkpoint builder first, then a
-prepare-only adapter that uses that builder.
+The next bounded dependency was split in
+`docs/scanner-reliability-slice-backlog.md` so the adapter cannot invent its
+output contract: a versioned Intent projection and checkpoint builder first,
+then a prepare-only adapter that uses that builder.
 
 Verification evidence:
 
