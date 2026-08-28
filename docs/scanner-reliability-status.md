@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Complete — lifecycle wired, execution intentionally blocked | Process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | Not started | Restart at every stage preserves immutable lineage |
+| 3 — Material durability and checkpoints | In progress — material foundation committed, request path unchanged | Restart at every stage preserves immutable lineage |
 | 4 — Typed envelopes and deterministic gates | Not started | Invalid/stale/hash-mismatched inputs block explicitly |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Transactional final index | Not started | One current pointer; no duplicate final artifact |
@@ -176,3 +176,35 @@ Verification evidence:
 
 - Lifecycle commit: [033e78a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/033e78a77366e701819982b97c5b79b2038b7219).
 - [Reliability contracts run 33142124310](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33142124310): compilation and duplicate-definition checks passed; 127 focused contracts and the full hermetic suite passed (`368 passed, 1 skipped`); the disposable PostgreSQL lease-reclaim job passed (`1 passed`).
+
+
+## Slice 3A — durable material foundation
+
+This slice creates the persistence contract for submitted scan input without
+handing the live request path to PostgreSQL prematurely:
+
+- `002_scan_materials.sql` adds an input-material table linked to a future
+  `scan_runs` row.  It stores a stable material ID, origin, filename/MIME,
+  byte size, raw-content SHA-256, extracted-text SHA-256, parser version,
+  extraction status/warnings, allowed-use classification, and extracted text.
+  It does **not** retain raw file bytes.
+- Material preparation is deterministic and model-free.  A material is
+  explicitly only company-provided input context; it is not Company Evidence,
+  cannot satisfy a claim, and has no Foresight or publication role.
+- Repository persistence is transactional and immutable: replaying the same
+  material ID succeeds only when all persisted identity/hash/status fields
+  agree; a conflicting reuse is rejected.
+- The repository currently requires an existing run, but `POST /scan` is
+  deliberately unchanged.  This prevents a partial handoff in which a
+  database run is queued while the legacy in-memory thread also executes it.
+
+Verification evidence:
+
+- Material-foundation commit: [5d9c719](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/5d9c719a2b7e2b8190d5bfc2c21df465e7aae6f8).
+- Corrective test-only commit: [5f9dbe2](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/5f9dbe2e032625ea21a5820df0787ed8df2b02c8).
+- [Reliability contracts run 33142848655](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33142848655): 127 focused contracts and the full hermetic suite passed (`372 passed, 2 skipped`); two disposable PostgreSQL durability contracts passed.
+
+The next slice is a transactional ingress adapter that creates a run and its
+prepared material together.  It must remain inactive until it can replace,
+rather than parallel, the legacy `/scan` thread handoff.  Only then can
+material ingestion become the first resumable stage.

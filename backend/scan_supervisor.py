@@ -130,7 +130,7 @@ class StageExecutor(Protocol):
     """Adapter boundary for invoking an existing cognitive stage.
 
     The adapter is intentionally not called in Phase 2.  Its later
-    implementation must read verified durable input for ${lease} and return
+    implementation must read verified durable input for the lease and return
     only checkpoint metadata after the existing stage function has completed.
     """
 
