@@ -395,5 +395,6 @@ without committing it.
 
 Verification evidence:
 
-- Projection/checkpoint contract is covered by `tests/test_scan_intent_checkpoint.py`.
+- Projection/checkpoint contract: [53baf9a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/53baf9a938951bfc4a0f8182bda5d34d8b10c140).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; full hermetic suite `391 passed, 7 skipped` (six new 3G1 contracts; PostgreSQL durability jobs were not required for this slice).
 
