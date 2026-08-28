@@ -73,6 +73,7 @@ from market_readiness_report import build_market_readiness_report, render_market
 from evidence_graph import attach_evidence_graph, build_evidence_manifest, evidence_prompt_packet
 from evidence_absence import build_evidence_absence_signals, format_absence_signals_for_prompt
 from evidence_contracts import build_classification_namespaces
+from scan_supervisor import ScanSupervisorLifecycle, ScanSupervisorSettings
 
 # VERIFICATION LOG: v5.4.0 - Adaptive Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Adaptive Thinking + Search Budget Upgrade)...", flush=True)
@@ -1802,6 +1803,33 @@ def _clear_attempts(ip: str):
     _login_attempts.pop(ip, None)
 
 app = FastAPI()
+
+# Phase 2 owns application lifecycle only.  The default remains inert, and the
+# existing in-memory /scan path is not handed to the Supervisor until Phase 3
+# persists material and checkpoints around the cognitive stages.
+_scan_supervisor_lifecycle: ScanSupervisorLifecycle | None = None
+
+
+@app.on_event("startup")
+def start_scan_supervisor_lifecycle() -> None:
+    global _scan_supervisor_lifecycle
+    settings = ScanSupervisorSettings.from_env()
+    _scan_supervisor_lifecycle = ScanSupervisorLifecycle(settings)
+    report = _scan_supervisor_lifecycle.start()
+    print(
+        f"Scan Supervisor lifecycle: {report.status.value} — {report.reason}",
+        flush=True,
+    )
+
+
+@app.on_event("shutdown")
+def stop_scan_supervisor_lifecycle() -> None:
+    if _scan_supervisor_lifecycle is None:
+        return
+    report = _scan_supervisor_lifecycle.stop()
+    if report is not None:
+        print(f"Scan Supervisor lifecycle stopped: {report.status.value}", flush=True)
+
 
 # --- MAINTENANCE MODE ---
 # Set MAINTENANCE_MODE=true in Railway env vars to block all user access.

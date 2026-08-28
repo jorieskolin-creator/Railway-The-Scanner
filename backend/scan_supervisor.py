@@ -1,8 +1,8 @@
 """PostgreSQL-backed execution primitives for the in-process Scan Supervisor.
 
-This module intentionally has no FastAPI startup hook yet.  It establishes the
-durable run/step state machine first; the existing in-memory /scan execution
-path remains unchanged until material persistence and checkpointing are ready.
+This module supplies only opt-in lifecycle wiring.  It cannot claim or execute
+work until Phase 3 supplies durable material persistence, checkpoints, and a
+concrete stage executor.  The existing in-memory /scan path remains unchanged.
 
 Operational rows are never evidence.  They contain only identity, leases,
 fencing tokens, hashes, transition diagnostics, and checkpoint references.
@@ -57,12 +57,14 @@ class ScanSupervisorSettings:
 
     database_url: str
     enabled: bool
+    schema_ready: bool = False
     lease_seconds: int = 90
     poll_seconds: float = 2.0
 
     @classmethod
     def from_env(cls) -> "ScanSupervisorSettings":
         enabled = _env_bool("SCAN_SUPERVISOR_ENABLED", default=False)
+        schema_ready = _env_bool("SCAN_SUPERVISOR_SCHEMA_READY", default=False)
         database_url = (
             os.environ.get("SCANNER_DATABASE_URL")
             or os.environ.get("DATABASE_URL")
@@ -71,6 +73,7 @@ class ScanSupervisorSettings:
         settings = cls(
             database_url=database_url,
             enabled=enabled,
+            schema_ready=schema_ready,
             lease_seconds=max(15, int(os.environ.get("SCAN_SUPERVISOR_LEASE_SECONDS", "90"))),
             poll_seconds=max(0.25, float(os.environ.get("SCAN_SUPERVISOR_POLL_SECONDS", "2"))),
         )
@@ -89,6 +92,95 @@ class StepLease:
     lease_owner: str
     fencing_token: int
     lease_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class StageExecutionResult:
+    """Metadata a future stage adapter may commit after durable validation.
+
+    Payloads themselves remain outside this object: Phase 3 must first write
+    immutable material/checkpoint records and calculate their hashes.
+    """
+
+    output_hash: str
+    checkpoint_ref: str | None
+    gate_result: Mapping[str, Any]
+    next_stage: str | None
+
+
+class StageExecutor(Protocol):
+    """Adapter boundary for invoking an existing cognitive stage.
+
+    The adapter is intentionally not called in Phase 2.  Its later
+    implementation must read verified durable input for ${lease} and return
+    only checkpoint metadata after the existing stage function has completed.
+    """
+
+    def execute(self, lease: StepLease) -> StageExecutionResult: ...
+
+
+class SupervisorLifecycleStatus(str, Enum):
+    DISABLED = "disabled"
+    BLOCKED_SCHEMA_NOT_READY = "blocked_schema_not_ready"
+    BLOCKED_STAGE_EXECUTOR_NOT_REGISTERED = "blocked_stage_executor_not_registered"
+    BLOCKED_PHASE_3_CHECKPOINTING_REQUIRED = "blocked_phase_3_checkpointing_required"
+
+
+@dataclass(frozen=True)
+class SupervisorLifecycleReport:
+    status: SupervisorLifecycleStatus
+    reason: str
+
+
+class ScanSupervisorLifecycle:
+    """Own FastAPI lifecycle intent without allowing premature execution.
+
+    The lifecycle performs no database I/O while disabled or blocked.  That is
+    intentional: applying the migration is a release operation, and a concrete
+    executor must not exist before durable material/checkpoint support lands.
+    """
+
+    def __init__(
+        self,
+        settings: ScanSupervisorSettings,
+        *,
+        executor: StageExecutor | None = None,
+    ) -> None:
+        self.settings = settings
+        self.executor = executor
+        self._report: SupervisorLifecycleReport | None = None
+
+    @property
+    def report(self) -> SupervisorLifecycleReport | None:
+        return self._report
+
+    def start(self) -> SupervisorLifecycleReport:
+        if not self.settings.enabled:
+            self._report = SupervisorLifecycleReport(
+                SupervisorLifecycleStatus.DISABLED,
+                "SCAN_SUPERVISOR_ENABLED is false.",
+            )
+        elif not self.settings.schema_ready:
+            self._report = SupervisorLifecycleReport(
+                SupervisorLifecycleStatus.BLOCKED_SCHEMA_NOT_READY,
+                "Apply the verified Supervisor migration before setting SCAN_SUPERVISOR_SCHEMA_READY=true.",
+            )
+        elif self.executor is None:
+            self._report = SupervisorLifecycleReport(
+                SupervisorLifecycleStatus.BLOCKED_STAGE_EXECUTOR_NOT_REGISTERED,
+                "Phase 3 must register a durable material/checkpoint stage executor before work can be claimed.",
+            )
+        else:
+            self._report = SupervisorLifecycleReport(
+                SupervisorLifecycleStatus.BLOCKED_PHASE_3_CHECKPOINTING_REQUIRED,
+                "Phase 2 never starts a worker loop; Phase 3 must supply durable checkpoint commits first.",
+            )
+        return self._report
+
+    def stop(self) -> SupervisorLifecycleReport | None:
+        """Return the last state; Phase 2 has no worker thread to stop."""
+
+        return self._report
 
 
 class CursorLike(Protocol):

@@ -87,10 +87,12 @@ def test_supervisor_is_disabled_by_default(monkeypatch):
     monkeypatch.delenv("SCAN_SUPERVISOR_ENABLED", raising=False)
     monkeypatch.delenv("SCANNER_DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("SCAN_SUPERVISOR_SCHEMA_READY", raising=False)
 
     settings = ScanSupervisorSettings.from_env()
 
     assert settings.enabled is False
+    assert settings.schema_ready is False
     assert settings.database_url == ""
 
 
