@@ -1274,6 +1274,46 @@ class ScanRepository:
                 current_time=current_time,
             )
 
+    def load_checkpoint(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> ScanCheckpoint | None:
+        """Load one persisted checkpoint, or None if that attempt has no row."""
+
+        if not run_id or not stage_name or attempt < 1:
+            raise ValueError("run_id, stage_name, and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT checkpoint_id, run_id, stage_name, attempt, contract_version,
+                       input_hash, output_hash, gate_result, snapshot
+                FROM scan_checkpoints
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            return None
+        gate_result = row.get("gate_result")
+        snapshot = row.get("snapshot")
+        if not isinstance(gate_result, Mapping) or not isinstance(snapshot, Mapping):
+            raise ValueError("persisted checkpoint gate result and snapshot must be mappings.")
+        return ScanCheckpoint(
+            checkpoint_id=str(row["checkpoint_id"]),
+            run_id=str(row["run_id"]),
+            stage_name=str(row["stage_name"]),
+            attempt=int(row["attempt"]),
+            contract_version=str(row["contract_version"]),
+            input_hash=str(row["input_hash"]),
+            output_hash=str(row["output_hash"]),
+            gate_result=dict(gate_result),
+            snapshot=dict(snapshot),
+        )
+
     def _validate_checkpoint(self, lease: StepLease, checkpoint: ScanCheckpoint) -> None:
         if (
             checkpoint.run_id != lease.run_id
