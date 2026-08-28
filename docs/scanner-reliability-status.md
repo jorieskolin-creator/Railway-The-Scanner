@@ -13,7 +13,7 @@
 | Phase | Status | Exit gate |
 |---|---|---|
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
-| 1 — Repair and freeze trust contracts | In progress | Trust-boundary suites green without network/model calls |
+| 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Not started on v2 | Process-kill reclaim and stale-attempt rejection proven |
 | 3 — Material durability and checkpoints | Not started | Restart at every stage preserves immutable lineage |
 | 4 — Typed envelopes and deterministic gates | Not started | Invalid/stale/hash-mismatched inputs block explicitly |
@@ -47,6 +47,37 @@ Verification evidence:
 - Corrective commit: [e787e32](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/e787e32d65983b949c5e777254a057a9f981aacc).
 - [Reliability contracts run 33139505262](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33139505262): backend compilation passed, duplicate-definition guard passed, and 127 focused contracts passed with five deprecation warnings.
 - Phase 0 is closed. Phase 1 remains in progress until explicit no-network enforcement and full-suite failure classification are complete.
+
+
+## Slice 1A — hermetic trust-contract exit
+
+Phase 1 is closed without changing the Scanner's cognitive flow, Railway topology,
+or the historical `staging` branch.
+
+The full suite exposed and repaired the following production-boundary defects:
+
+- Coresignal search fallbacks now preserve provider record IDs for downstream
+  stakeholder lookup.
+- Claim-cleaner accounting includes `unsupported_for_this_claim`.
+- Foresight eligibility rejects any dead/unreadable/excluded/rejected audit
+  state, even when a separate signal status is eligible.
+- Official-domain acquisition packets explicitly begin unverified, and recovered
+  Firecrawl passages are applied only when they match the provider's quoted
+  passage.
+- Jury merging preserves verification obtained from the current matched source
+  passage; stale pre-jury flags cannot overwrite it.
+- Overstrong Jury claims are preserved only as a narrower, source-derived fact
+  or bounded context—never as the original unsupported claim.
+
+Test isolation now blocks socket and DNS access for the entire session. The
+Company Summary/Buying Potential payload test injects its tactics dependency
+locally, so its Coresignal contract no longer depends on remote knowledge
+artifacts.
+
+Verification evidence:
+
+- Corrective commits: [b7e1ec2](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/b7e1ec2dbb5bbbba868d3581b665ed0bec3886d5), [959045a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/959045a7627649412bfd4229866f32faefc58167), [994ac8d](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/994ac8dfa24553fee4e52588b305c4e74c1d65ab), and [0192f1b](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/0192f1bda80e3f8fdbdff2f387c7c286c6d83535).
+- [Reliability contracts run 33140984217](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33140984217): compilation, duplicate-definition guard, 127 focused trust contracts, and the complete hermetic suite passed (`357 passed`, 59 deprecation warnings).
 
 ## Change rules
 
