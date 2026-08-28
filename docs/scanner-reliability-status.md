@@ -237,3 +237,35 @@ Verification evidence:
 - Ingress commit: [69362b2](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/69362b28587379a8fec27687d55664902366a3e2).
 - Database-rollback contract strengthening: [df86bd0](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/df86bd06e7233f2310f44e63697f04f8cb58ac81).
 - [Reliability contracts run 33143601885](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33143601885): 127 focused contracts and the full hermetic suite passed (`376 passed, 5 skipped`); all five disposable PostgreSQL durability contracts passed.
+
+
+## Slice 3C — verified material retrieval and first checkpoint
+
+The first resumable boundary is now represented in PostgreSQL without changing
+the live Scanner pipeline:
+
+- `load_materials` reconstructs persisted material only after validating every
+  extracted-text SHA-256.  A mismatch is a `MaterialIntegrityError`; it cannot
+  become a best-effort input to a later stage.
+- `003_scan_checkpoints.sql` stores immutable stage checkpoints containing only
+  versioned material references, hashes, and gate results.  It stores neither
+  raw bytes, extracted text, Company Evidence, nor Foresight content.
+- Material ingestion creates a deterministic manifest checkpoint.  It passes
+  only when all submitted material was extracted or deliberately empty;
+  extraction failure yields an explicit blocked gate.
+- A passed checkpoint is inserted and the fenced step is completed in one
+  transaction.  A stale process loses both: its checkpoint insert rolls back,
+  so it cannot leave durable output after a replacement lease exists.
+- The success-path contract queues a stable `intent` stage name for the future
+  adapter, but does not call the existing Intent function yet.
+
+The endpoint and Supervisor are still inactive relative to this path.  The next
+slice can introduce a non-registered material-ingestion stage adapter that
+loads, validates, checkpoints, and queues `intent`; it must remain unable to
+run until the authoritative request handoff replaces the legacy thread.
+
+Verification evidence:
+
+- Checkpoint contract: [8c38772](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/8c38772f679547627a18d2171f13261b5f212e9a).
+- Boundary assertion correction: [12a3451](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/12a34513bc30794c1883319969099110b0f73844).
+- [Reliability contracts run 33144362428](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33144362428): 127 focused contracts and the full hermetic suite passed (`378 passed, 8 skipped`); eight disposable PostgreSQL durability contracts passed.
