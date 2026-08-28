@@ -29,10 +29,10 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-J1 — Jury input snapshot from Intent checkpoint**.
-Do not start a Jury adapter, Jury commit, Diagnosis, Foresight, Supervisor
-execution, or `POST /scan` in the same change. Cards **3G1**, **3G2**, **3H**,
-and **3I-J0** are complete.
+Immediate next card: **3I-J2 — prepare-only Jury adapter**.
+Do not start a Jury commit, Diagnosis, Foresight, Supervisor execution, or
+`POST /scan` in the same change. Cards **3G1**, **3G2**, **3H**, **3I-J0**,
+and **3I-J1** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -495,5 +495,39 @@ Verification evidence:
 
 - Jury-stage candidate durability: [6e8bfc9](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/6e8bfc9197e859a813dc89bfdd500e5300c7ffa8).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; four new hermetic 3I-J0 contracts passed; three disposable PostgreSQL 3I-J0 durability contracts passed (pending-step attach without claim, conflicting ID rejection, tampered extract rejection). Full suite with the test DSN: `426 passed`.
+
+
+## Slice 3I-J1 — Jury input snapshot from Intent checkpoint
+
+The pending `jury_analysis` step can now be bound to exact durable input
+before a Jury adapter is allowed to use it:
+
+- `007_jury_input_snapshots.sql` stores one immutable manifest per
+  `run / jury_analysis / attempt`. It contains the passed Intent checkpoint
+  identity (id, ref, attempt, contract, input/output hashes) plus Jury-stage
+  candidate and retrieval references. Extracted text, raw response bytes, and
+  the Intent result payload are not copied into the manifest.
+- The manifest has a deterministic ID and input hash. Replays are idempotent;
+  a different manifest for the same attempt is rejected.
+- Hydration reloads the Intent checkpoint, Jury candidates, and Jury-stage
+  retrievals through their hash-verifying repository paths, then requires an
+  exact manifest match. Added, omitted, stale, or tampered input cannot become
+  a best-effort payload for a later adapter. Intent-stage retrievals stay
+  behind the Intent checkpoint.
+- The snapshot attaches without claiming the `jury_analysis` lease. This slice
+  does not call five-Jury functions, scrape, build a Jury adapter or commit,
+  register a Supervisor, or switch `POST /scan`.
+- The manifest is operational lineage only. It does not grant source trust,
+  entity identity, evidence eligibility, claim support, Foresight meaning, or
+  Company Summary/publication authority.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-J2 — prepare-only
+Jury adapter**. Do not start Diagnosis, Foresight, Synthesis, Verification, or
+request handoff from this slice.
+
+Verification evidence:
+
+- Jury input snapshot: [f68f255](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/f68f2553e58b060ddb25f7b9d4cd5e0ca4ed24b9).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; three new hermetic 3I-J1 contracts passed; two disposable PostgreSQL 3I-J1 durability contracts passed (pending-step attach without claim plus exact hydrate; tampered manifest and extra candidate rejected). Full suite with the test DSN: `431 passed`.
 
 
