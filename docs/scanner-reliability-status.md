@@ -29,10 +29,10 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-J3 — Jury fenced commit + reclaim**.
-Do not start Diagnosis, Foresight, Supervisor execution, or `POST /scan` in
-the same change. Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, and
-**3I-J2** are complete.
+Immediate next card: **3I-D1 — Diagnosis input snapshot** (specify after this
+evidence; do not implement in the same change as 3I-J3). Do not start
+Foresight, Supervisor execution, or `POST /scan`. Cards **3G1**, **3G2**,
+**3H**, **3I-J0**, **3I-J1**, **3I-J2**, and **3I-J3** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -551,7 +551,7 @@ Jury now has a prepare-only adapter while execution remains inactive:
   step and leave that step leased, with no Jury checkpoint row and no
   `diagnosis` step.
 
-Phase 3 is **not** closed. The next bounded dependency is **3I-J3 — Jury
+Phase 3 is **not** closed. The next bounded dependency was **3I-J3 — Jury
 fenced commit + reclaim**. Do not start Diagnosis, Foresight, Synthesis,
 Verification, or request handoff from this slice.
 
@@ -559,5 +559,34 @@ Verification evidence:
 
 - Prepare-only Jury adapter: [f3662ba](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/f3662ba4a6cdd56718caab7f4f0317f96c203ee8).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; eleven new hermetic 3I-J2 contracts passed; one disposable PostgreSQL 3I-J2 contract passed (leased `jury_analysis` unchanged, no Jury checkpoint row, no `diagnosis` step). Full suite with the test DSN: `443 passed`.
+
+
+## Slice 3I-J3 — Jury fenced commit and reclaim
+
+Jury is now the second cognitive stage with a crash-safe durable boundary,
+while live execution remains inactive:
+
+- `commit_jury_stage` persists a passed 3I-J2 proposal with existing
+  `complete_step_with_checkpoint` and queues only `diagnosis`.
+- A stale fencing token rolls the Jury checkpoint insert back; the reclaiming
+  owner can commit. Identical replay of the same passed checkpoint is
+  idempotent and does not insert a second row or a second completion event.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Diagnosis.
+- Restart reload through `load_verified_jury_inputs` reproduces the same
+  input and output hashes. Tampered persisted Jury extract cannot hydrate a
+  new payload. The Jury gate remains `passed` and `diagnosis` stays pending.
+- This slice does not register a Supervisor loop, switch `POST /scan`, apply a
+  Railway migration, or wrap Diagnosis, Foresight, Synthesis, or Verification.
+
+Phase 3 is **not** closed. The next bounded dependency is Diagnosis beat 1:
+an input snapshot from the passed Jury checkpoint, specified after this
+evidence and implemented as its own card. Do not start Diagnosis wrapping,
+Foresight, Synthesis, Verification, or request handoff from this slice.
+
+Verification evidence:
+
+- Fenced Jury commit: [d157b2b](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/d157b2b742df0146f1d21ec5d06b22095a36625d).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; six new hermetic 3I-J3 contracts passed; five disposable PostgreSQL 3I-J3 durability contracts passed (happy-path queue, stale reclaim, identical replay, malformed rejection, restart hash/gate). Full suite with the test DSN: `454 passed`.
 
 

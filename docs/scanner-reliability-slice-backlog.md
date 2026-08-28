@@ -243,7 +243,7 @@ Suggested names when 3H closes (cards not specified until then):
 1. `3I-J0` Jury-stage retrieval/candidate durability — specified below
 2. `3I-J1` Jury input snapshot from Intent checkpoint — specified below
 3. `3I-J2` Prepare-only Jury adapter — specified below
-4. `3I-J3` Jury fenced commit + reclaim
+4. `3I-J3` Jury fenced commit + reclaim — specified below
 5. Then the same 1–3 beats for Diagnosis, Foresight, Strategic Synthesis,
    Verification
 
@@ -425,13 +425,71 @@ builders, which Jury still lacked after 3I-J1's snapshot-only beat)
 ### Exit evidence
 
 Same class of proof as 3G2: preparation reads durable Jury input and proposes
-output without moving the state machine. Next card is **3I-J3**.
+output without moving the state machine. Next card was **3I-J3**.
 
 ### Likely files
 
 `backend/scan_jury_checkpoint.py`, `backend/scan_jury_adapter.py`,
 `tests/test_scan_jury_checkpoint.py`, `tests/test_scan_jury_adapter.py`,
 `tests/test_scan_jury_adapter_postgres_integration.py`
+
+---
+
+## Card 3I-J3 — Jury fenced commit + reclaim
+
+**Parent stakeholder step:** 3I (beat 3)
+**Status:** Complete
+**Mirrors:** 3H `commit_intent_stage`
+
+### In scope
+
+- New module `backend/scan_jury_commit.py` with `commit_jury_stage`.
+- Persist a passed 3I-J2 proposal with existing `complete_step_with_checkpoint`.
+- Queue only the already-defined next stage name `diagnosis`.
+- Stale fencing token rolls back the Jury checkpoint insert and does not
+  advance the run.
+- Process-kill / lease-reclaim proof for the `jury_analysis` step, reusing the
+  3H disposable-PostgreSQL pattern.
+- Restart from the Jury checkpoint must not re-hash different inputs or skip
+  the Jury gate. Identical replay of the same passed checkpoint is idempotent.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Diagnosis.
+
+### Deliberate exclusions
+
+- No Diagnosis adapter, Diagnosis snapshot, or Diagnosis cognitive call.
+- No Foresight, Strategic Synthesis, or Verification wrapping.
+- No Supervisor loop registration.
+- No `POST /scan` switch.
+- No Railway migration/enablement.
+- No scrape, Brave, Firecrawl, Coresignal, or `x_ray_search`.
+- No Phase 4 envelope validator beyond what 3I-J2 already stored.
+
+### Tests
+
+- Hermetic: passed proposal queues `diagnosis` metadata through the commit
+  helper; identical replay does not complete again; a different existing
+  checkpoint is rejected; malformed/blocked proposal cannot be committed;
+  packet-wrap fixture remains unchanged; module source does not register live
+  paths.
+- PostgreSQL: happy-path commit queues `diagnosis`; stale owner cannot commit
+  and reclaiming owner can; replay of the same passed checkpoint is
+  idempotent; malformed/blocked proposal cannot complete the step; restart
+  reload keeps Jury hashes and the passed gate, and tampered Jury input cannot
+  hydrate.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Jury is the second cognitive stage with a crash-safe durable boundary.
+Phase 3 is **not** closed. Next work is Diagnosis beat 1 (input snapshot),
+specified after this evidence — not in this slice.
+
+### Likely files
+
+`backend/scan_jury_commit.py`, `tests/test_scan_jury_commit.py`,
+`tests/test_scan_jury_commit_postgres_integration.py`
 
 Phase 3 exit gate stays the plan's gate: restart after every major stage
 resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
@@ -488,13 +546,14 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-J3 from docs/scanner-reliability-slice-backlog.md
-(Jury fenced commit + reclaim). Do not start Diagnosis, Foresight,
-Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-D1 from docs/scanner-reliability-slice-backlog.md
+(Diagnosis input snapshot from the passed Jury checkpoint). Do not start
+Foresight, Synthesis, Verification, Supervisor registration, POST /scan, or
+Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-J3 exit evidence is recorded.
+3I-D1 exit evidence is recorded.
 ```
 
-After 3I-J3 merges, replace `3I-J3` with the next specified card in that prompt.
+After 3I-D1 merges, replace `3I-D1` with the next specified card in that prompt.
 Do not accumulate open cards in one run.
