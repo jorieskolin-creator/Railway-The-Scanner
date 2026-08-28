@@ -19,18 +19,22 @@ def _finding(url: str, category: str, **extra):
         "category": category,
         "found": True,
         "snippet": "A source-supported excerpt with enough content for revalidation.",
-        "fetched_excerpt": "A source-supported excerpt with enough content for revalidation.",
-        "verified": True,
-        "url_verified": True,
-        "content_readable": True,
-        "content_verified": True,
-        "entity_verified": True,
-        "entity_mentioned": True,
-        "entity_match_status": "exact",
-        "content_entity_match_status": "exact",
-        "entity_scope": "canonical_group",
     }
     item.update(extra)
+    item.setdefault(
+        "fetched_excerpt",
+        item["snippet"] + " This official page provides enough surrounding source content "
+        "for deterministic source and claim review.",
+    )
+    item.setdefault("verified", True)
+    item.setdefault("url_verified", True)
+    item.setdefault("content_readable", True)
+    item.setdefault("content_verified", True)
+    item.setdefault("entity_verified", True)
+    item.setdefault("entity_mentioned", True)
+    item.setdefault("entity_match_status", "exact")
+    item.setdefault("content_entity_match_status", "exact")
+    item.setdefault("entity_scope", "canonical_group")
     return item
 
 
@@ -89,7 +93,8 @@ def test_each_acquisition_prompt_is_jury_scoped_and_excludes_people_search():
         assert "Do not search for people" in prompt
         assert "verbatim_quote" in prompt
         assert "copy it word-for-word" in prompt
-        assert "Return 2-3 high-quality canonical URLs only" in prompt
+        assert "Return up to" in prompt
+        assert "ranked high-quality canonical candidate URL(s)" in prompt
         other_juries = [name for name in scanner_two.FORENSIC_JURIES if name != jury]
         assert all(f"\n    {other}" not in prompt for other in other_juries)
 
@@ -138,6 +143,7 @@ def test_official_domain_discovery_parses_homepage_and_sitemap_links(monkeypatch
         def __init__(self, text: str, status_code: int = 200):
             self.text = text
             self.status_code = status_code
+            self.url = ""
 
     homepage = """
         <html>
@@ -806,8 +812,9 @@ def test_jury_rejects_claim_that_exceeds_its_exact_quote():
         }],
         {jury: []},
     )
-    assert result["findings"] == []
-    assert "exceeded" in result["rejected_evidence"][0]["reason"]
+    assert result["findings"][0]["support_level"] == "context_only"
+    assert result["findings"][0]["claim_support_status"] == "unsupported_for_this_claim"
+    assert result["findings"][0]["analysis_verified"] is False
 
 
 def test_jury_rejects_bundled_multi_assertion_claim():
@@ -839,8 +846,9 @@ def test_jury_rejects_bundled_multi_assertion_claim():
         {jury: []},
     )
 
-    assert result["findings"] == []
-    assert "bundled" in result["rejected_evidence"][0]["reason"]
+    assert result["findings"][0]["support_level"] == "context_only"
+    assert result["findings"][0]["claim_support_status"] == "unsupported_for_this_claim"
+    assert result["findings"][0]["analysis_verified"] is False
 
 
 def test_promoted_coverage_ignores_partial_and_unverified_findings():

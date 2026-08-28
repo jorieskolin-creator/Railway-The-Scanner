@@ -1861,12 +1861,25 @@ def _prevalidate_acquisition_results(
                         source["extraction_recovery_reason"] = recovered.get("reason") or "passage_not_found"
                     reason = "unreadable"
             elif proof_hint and not match["matched"]:
-                stats["quote_not_found"] += 1
-                source["passage_hint_status"] = (
-                    "provider_quote_not_found_in_official_source_content"
-                    if official_domain_source else "provider_quote_not_found_in_source_content"
-                )
-                source["claim_support_status"] = "pending_jury_verification"
+                recovered = firecrawl_results.get(source.get("url"), {})
+                recovered_text = str(recovered.get("text") or "")
+                recovered_match = _quote_match_details(proof_hint, recovered_text)
+                if recovered.get("ok") and recovered_text and recovered_match["matched"]:
+                    provider = recovered.get("provider") or "firecrawl"
+                    source["extraction_provider"] = provider
+                    source["quote_match_method"] = f"{provider}_{recovered_match['method']}"
+                    source["quote_match_score"] = round(float(recovered_match["score"]), 3)
+                    source["fetched_excerpt"] = _relevant_passage(
+                        routing_hint or proof_hint, recovered_text
+                    )
+                    stats["firecrawl_recovered"] += 1
+                else:
+                    stats["quote_not_found"] += 1
+                    source["passage_hint_status"] = (
+                        "provider_quote_not_found_in_official_source_content"
+                        if official_domain_source else "provider_quote_not_found_in_source_content"
+                    )
+                    source["claim_support_status"] = "pending_jury_verification"
             if not reason and source["content_readable"]:
                 source["source_context_status"] = (
                     "scoped_context" if official_domain_source else "valid_company_context"
@@ -3046,7 +3059,7 @@ def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str)
             "provider_quote_candidate": quote[:1800],
             "discovery_rationale": str(item.get("discovery_rationale") or semantic_snippet)[:900],
             "survival_check": item.get("survival_check") if isinstance(item.get("survival_check"), dict) else {},
-            "source_intent": item.get("source_intent") or "",
+            "source_intent": item.get("source_intent") or "candidate_discovery",
             "expected_subdimensions": item.get("expected_subdimensions") or [],
             "published_at": item.get("published_at"),
             "source_type": item.get("source_type") or "web_source",
@@ -3058,6 +3071,10 @@ def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str)
             "sentiment": "neutral",
             "source_status": "fresh_discovery",
             "trust_state": "candidate_unverified",
+            "url_verified": False,
+            "content_readable": False,
+            "content_verified": False,
+            "entity_verified": False,
             "claim_support_pending": True,
             "acquisition_provider": provider,
             "forensic_provenance": "fresh_acquisition",
