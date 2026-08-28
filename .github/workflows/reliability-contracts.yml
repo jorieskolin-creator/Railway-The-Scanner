@@ -41,3 +41,37 @@ jobs:
           python -m pytest -q             tests/test_evidence_lifecycle_contracts.py             tests/test_evidence_graph.py             tests/test_evidence_packaging.py             tests/test_general_summary_snapshot.py             tests/test_general_summary_language_qa.py             tests/test_foresight_hardening.py             tests/test_foresight_kb_evidence_promotion.py             tests/test_post_synthesis_reliability_contract.py
       - name: Run complete hermetic suite
         run: python -m pytest -q
+
+  postgres-supervisor-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: scanner_test
+          POSTGRES_USER: scanner
+          POSTGRES_PASSWORD: scanner
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scanner -d scanner_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      SCANNER_ALLOW_LOOPBACK_TEST_DATABASE: "true"
+      SCANNER_TEST_DATABASE_URL: postgresql://scanner:scanner@127.0.0.1:5432/scanner_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install PostgreSQL contract test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt pytest
+      - name: Run disposable PostgreSQL lease-reclaim contract
+        run: python -m pytest -q tests/test_scan_supervisor_postgres_integration.py
