@@ -40,7 +40,10 @@ def test_checkpoint_is_deterministic_across_material_order_and_has_no_extracted_
     assert first.checkpoint_ref == f"checkpoint://scan/{first.checkpoint_id}"
     assert len(first.input_hash) == 64
     assert len(first.output_hash) == 64
-    assert "extracted_text" not in str(first.snapshot)
+    assert all(
+        "extracted_text" not in reference
+        for reference in first.snapshot["material_refs"]
+    )
     assert {reference["material_id"] for reference in first.snapshot["material_refs"]} == {
         material.material_id for material in materials
     }

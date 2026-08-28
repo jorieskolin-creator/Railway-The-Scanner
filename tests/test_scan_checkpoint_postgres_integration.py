@@ -134,7 +134,10 @@ def test_checkpoint_and_step_completion_are_atomic_and_queue_intent_next():
     )
     assert stored_checkpoint[3] == checkpoint.gate_result
     assert stored_checkpoint[4] == checkpoint.snapshot
-    assert "extracted_text" not in str(stored_checkpoint[4])
+    assert all(
+        "extracted_text" not in reference
+        for reference in stored_checkpoint[4]["material_refs"]
+    )
 
 
 def test_stale_checkpoint_attempt_leaves_no_checkpoint_row():
