@@ -242,7 +242,7 @@ Suggested names when 3H closes (cards not specified until then):
 
 1. `3I-J0` Jury-stage retrieval/candidate durability — specified below
 2. `3I-J1` Jury input snapshot from Intent checkpoint — specified below
-3. `3I-J2` Prepare-only Jury adapter
+3. `3I-J2` Prepare-only Jury adapter — specified below
 4. `3I-J3` Jury fenced commit + reclaim
 5. Then the same 1–3 beats for Diagnosis, Foresight, Strategic Synthesis,
    Verification
@@ -370,6 +370,74 @@ resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
 
 ---
 
+## Card 3I-J2 — Prepare-only Jury adapter
+
+**Parent stakeholder step:** 3I (beat 2)
+**Status:** Complete
+**Mirrors:** 3G2 `IntentStageExecutor` (and the 3G1 projection/checkpoint
+builders, which Jury still lacked after 3I-J1's snapshot-only beat)
+
+### In scope
+
+- `backend/scan_jury_checkpoint.py`: project hash-verified Jury inputs into
+  adapter packets, then build a `scanner.jury/v1` checkpoint proposal. Packets
+  may carry cached/fetched excerpts for the existing Jury packet helpers.
+  The checkpoint stores refs and a compact five-Jury result only — not
+  concatenated extracts, raw bytes, or the Intent result payload.
+- `backend/scan_jury_adapter.py`: `JuryStageExecutor.execute(lease)`:
+  1. reject any stage other than `jury_analysis`
+  2. call only `load_verified_jury_inputs`
+  3. build the Jury projection
+  4. wrap existing `scanner_two._prioritize_jury_packets` and
+     `_merge_jury_payloads` (the packet-level Jury helpers). Do not call
+     `x_ray_search`, which still acquires sources and hits models.
+  5. return `StageExecutionResult` with the checkpoint proposal
+- `next_stage` metadata may name `diagnosis` when the gate passed, but only as
+  a proposal field. Nothing is queued.
+- Malformed five-Jury output yields `validation_failed`. Do not invent a new
+  cognitive gate.
+- Adapter has no `complete_step` / persist / claim method.
+
+### Deliberate exclusions
+
+- No scrape, Brave, Firecrawl, Coresignal, or `x_ray_search`.
+- No parallel legacy path and no call into `main.py` scan orchestration.
+- No database transition: after `execute`, the `jury_analysis` step remains
+  leased and `scan_checkpoints` has no new Jury row and no `diagnosis` step.
+- No Jury fenced commit (3I-J3), Supervisor registration, `/scan` change, or
+  Railway setting.
+- Do not start Diagnosis, Foresight, Synthesis, or Verification wrapping.
+
+### Tests
+
+- Hermetic checkpoint: deterministic projection from snapshot-bound inputs;
+  added/omitted/tampered inputs rejected; checkpoint omits extracts/raw bytes;
+  malformed Jury result cannot produce `status=passed`.
+- Hermetic adapter: verified-input path; result matches calling the wrap plus
+  checkpoint builder directly; wrong stage rejected; no persist method; source
+  does not mention scrape/brave/firecrawl/coresignal/`x_ray_search`/`main`.
+- PostgreSQL: attach 3I-J1 snapshot on the pending `jury_analysis` step created
+  by 3H, claim that lease, run the adapter, assert the step stays leased, Jury
+  checkpoint count is 0, and no `diagnosis` step exists.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Same class of proof as 3G2: preparation reads durable Jury input and proposes
+output without moving the state machine. Next card is **3I-J3**.
+
+### Likely files
+
+`backend/scan_jury_checkpoint.py`, `backend/scan_jury_adapter.py`,
+`tests/test_scan_jury_checkpoint.py`, `tests/test_scan_jury_adapter.py`,
+`tests/test_scan_jury_adapter_postgres_integration.py`
+
+Phase 3 exit gate stays the plan's gate: restart after every major stage
+resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -420,13 +488,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-J2 from docs/scanner-reliability-slice-backlog.md
-(Prepare-only Jury adapter). Do not start a Jury commit, Diagnosis, Foresight,
+Specify then implement exactly slice 3I-J3 from docs/scanner-reliability-slice-backlog.md
+(Jury fenced commit + reclaim). Do not start Diagnosis, Foresight,
 Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-J2 exit evidence is recorded.
+3I-J3 exit evidence is recorded.
 ```
 
-After 3I-J2 merges, replace `3I-J2` with `3I-J3` in that prompt. Do not accumulate
-open cards in one run.
+After 3I-J3 merges, replace `3I-J3` with the next specified card in that prompt.
+Do not accumulate open cards in one run.
