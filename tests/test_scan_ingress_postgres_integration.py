@@ -130,7 +130,7 @@ def test_same_idempotency_key_rejects_changed_input_without_creating_more_rows()
     assert (run_count, material_count) == (1, 1)
 
 
-def test_failed_material_validation_rolls_back_the_new_run_and_step():
+def test_database_material_failure_rolls_back_the_new_run_and_step():
     repository = ScanRepository(DATABASE_URL)
     ingress = prepare_scan_ingress(
         company_name="Rollback Contract Test",
@@ -140,9 +140,9 @@ def test_failed_material_validation_rolls_back_the_new_run_and_step():
         uploads=[],
         idempotency_key="ingress-contract-invalid",
     )
-    invalid_material = replace(ingress.materials[0], extraction_status="unknown")
+    invalid_material = replace(ingress.materials[0], origin="unrecognized_origin")
 
-    with pytest.raises(ValueError, match="extraction_status"):
+    with pytest.raises(psycopg.errors.CheckViolation):
         repository.create_run_with_materials(
             run_id=ingress.run_id,
             company_name=ingress.company_name,
