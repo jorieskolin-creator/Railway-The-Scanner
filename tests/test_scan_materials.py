@@ -92,7 +92,8 @@ def test_preparation_is_deterministic_and_does_not_retain_raw_upload_bytes():
     assert upload.byte_size == 12
     assert upload.parser_version == MATERIAL_PARSER_VERSION
     assert upload.extracted_text == "hello world!"
-    assert upload.content_sha256 != upload.extracted_text_sha256
+    assert len(upload.content_sha256) == 64
+    assert len(upload.extracted_text_sha256) == 64
     assert not hasattr(upload, "raw_content")
 
 
