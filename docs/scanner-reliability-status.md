@@ -269,3 +269,31 @@ Verification evidence:
 - Checkpoint contract: [8c38772](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/8c38772f679547627a18d2171f13261b5f212e9a).
 - Boundary assertion correction: [12a3451](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/12a34513bc30794c1883319969099110b0f73844).
 - [Reliability contracts run 33144362428](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33144362428): 127 focused contracts and the full hermetic suite passed (`378 passed, 8 skipped`); eight disposable PostgreSQL durability contracts passed.
+
+
+## Slice 3D — prepare-only material-ingestion adapter
+
+The first stage now has an adapter, while execution remains intentionally
+inactive:
+
+- `MaterialIngestionStageExecutor` reads only hash-verified durable material and
+  builds the deterministic material-ingestion checkpoint.
+- It returns a `StageExecutionResult` carrying that exact checkpoint and
+  queues `intent` only as metadata when the material gate has passed.
+- It does not write a checkpoint, complete a step, claim a lease, invoke an
+  existing cognitive function, start a thread, or register with FastAPI.
+  A blocked material result therefore cannot accidentally advance the flow.
+- Its PostgreSQL contract proves that preparation reads the leased run but
+  leaves the run at `material_ingestion`, the step leased, and the checkpoint
+  table empty until a separate fenced commit explicitly accepts the result.
+
+This isolates stage preparation from stage transition, which is necessary for
+a crash-safe Supervisor.  The next dependency is durable source retrieval:
+the existing Intent stage can fall back to web acquisition when submitted
+material is absent, so that acquisition must become resumable before Intent
+can be wrapped without changing its logic.
+
+Verification evidence:
+
+- Prepare-only adapter commit: [a30c73e](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/a30c73e88a9a212c24a66cfc2c675ab6c329a297).
+- [Reliability contracts run 33147861608](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33147861608): 127 focused contracts and the full hermetic suite passed (`381 passed, 9 skipped`); nine disposable PostgreSQL durability contracts passed.
