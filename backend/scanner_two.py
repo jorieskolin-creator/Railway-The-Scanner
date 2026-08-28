@@ -2274,6 +2274,12 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 # Only current packet verification is authoritative here. Old
                 # verdicts remain confined to verification_history.
                 normalized.update(current_company_verification(packet))
+                # The source passage was just matched against the current packet
+                # above. Do not overwrite that fresh verification with a stale
+                # pre-jury packet flag.
+                normalized["content_verified"] = (
+                    packet.get("content_verified") is True or bool(supporting_passage)
+                )
                 normalized = _inherit_official_context_scope(normalized, packet)
                 normalized["jury_status"] = "completed"
                 normalized = apply_analysis_verification(normalized)

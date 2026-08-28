@@ -9,6 +9,7 @@ production path catches and degrades instead of surfacing.
 from __future__ import annotations
 
 import socket
+import traceback
 
 import pytest
 
@@ -25,7 +26,8 @@ _NETWORK_ATTEMPTS: list[str] = []
 
 def _blocked(operation: str, target: object) -> None:
     message = f"Network access blocked during tests: {operation}({target!r})"
-    _NETWORK_ATTEMPTS.append(message)
+    caller = "".join(traceback.format_stack(limit=8)[:-2]).strip()
+    _NETWORK_ATTEMPTS.append(f"{message}\n{caller}")
     raise NetworkAccessBlocked(message)
 
 

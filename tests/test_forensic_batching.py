@@ -812,9 +812,12 @@ def test_jury_rejects_claim_that_exceeds_its_exact_quote():
         }],
         {jury: []},
     )
-    assert result["findings"][0]["support_level"] == "context_only"
-    assert result["findings"][0]["claim_support_status"] == "unsupported_for_this_claim"
-    assert result["findings"][0]["analysis_verified"] is False
+    finding = result["findings"][0]
+    assert finding["support_level"] == "exact"
+    assert finding["analysis_verified"] is True
+    assert finding["claim_narrowed_from_jury"] is True
+    assert finding["original_jury_claim"].startswith("Example Oy deployed 500 AI agents")
+    assert "500 AI agents" not in finding["supported_claim"]
 
 
 def test_jury_rejects_bundled_multi_assertion_claim():
@@ -846,9 +849,12 @@ def test_jury_rejects_bundled_multi_assertion_claim():
         {jury: []},
     )
 
-    assert result["findings"][0]["support_level"] == "context_only"
-    assert result["findings"][0]["claim_support_status"] == "unsupported_for_this_claim"
-    assert result["findings"][0]["analysis_verified"] is False
+    finding = result["findings"][0]
+    assert finding["support_level"] == "exact"
+    assert finding["analysis_verified"] is True
+    assert finding["claim_narrowed_from_jury"] is True
+    assert "achieved 15 percent productivity growth" in finding["original_jury_claim"]
+    assert "15 percent productivity growth" not in finding["supported_claim"]
 
 
 def test_promoted_coverage_ignores_partial_and_unverified_findings():

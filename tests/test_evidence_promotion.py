@@ -462,7 +462,7 @@ def test_valid_context_only_source_with_overstrong_claim_remains_context_only():
     assert link["original_claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
     assert link["source_context_status"] == "valid_foresight_context"
     assert link["company_specific"] is False
-    assert is_scoped_context_source(link) is False
+    assert is_scoped_context_source(link) is True
 
 
 def test_claim_overreach_does_not_poison_valid_company_context():
