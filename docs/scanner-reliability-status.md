@@ -21,6 +21,18 @@
 | 6 — Transactional final index | Not started | One current pointer; no duplicate final artifact |
 | 7 — Orchestrator decomposition | Not started | Golden checkpoint replay unchanged |
 
+## Operational slice register
+
+Remaining Phase 3 implementation is executed from
+`docs/scanner-reliability-slice-backlog.md`. That register does not change
+plan ideas, trust boundaries, topology, or phase exit gates. It splits the
+stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
+multiple cognitive stages and lose context.
+
+Immediate next card: **3G1 — Intent input projection and output checkpoint
+contract**. Do not start 3G2, 3H, Jury wrapping, Supervisor execution, or
+`POST /scan` in the same change.
+
 ## Slice 0A — baseline integrity
 
 This first slice is deliberately behaviour-preserving:
@@ -355,10 +367,13 @@ adapter is allowed to use it:
   Supervisor loop, lease claim, checkpoint completion, or Railway setting
   changed in this slice.
 
-The next bounded dependency is a **prepare-only Intent adapter**. It must accept
-only a verified immutable Intent input snapshot, invoke no parallel legacy path,
-and return a separately versioned output/checkpoint proposal. Its actual stage
-commit and any authoritative `POST /scan` handoff remain later decisions.
+The next bounded dependency remains a **prepare-only Intent adapter**, now
+split in `docs/scanner-reliability-slice-backlog.md` so it matches the 3C→3D
+size that already worked: **3G1** defines the versioned input projection and
+output checkpoint contract without calling `analyze_intent`; **3G2** is the
+prepare-only adapter that reads `load_verified_intent_inputs` and proposes
+that checkpoint without committing it. The actual stage commit (**3H**) and
+any authoritative `POST /scan` handoff remain later decisions.
 
 Verification evidence:
 

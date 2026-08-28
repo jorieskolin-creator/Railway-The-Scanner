@@ -235,6 +235,10 @@ reclaim; a stale attempt cannot commit.
 Exit gate: restart after each major stage resumes without re-uploading material,
 losing lineage, skipping a gate, or changing a completed immutable snapshot.
 
+Remaining Phase 3 *tasks* (not ideas) are split into one-concern cards in
+`docs/scanner-reliability-slice-backlog.md` so implementation runs stay inside
+the 3A–3F size that already worked.
+
 ### Phase 4 — typed envelopes and deterministic gates
 
 - Introduce versioned stage envelopes at each boundary.
