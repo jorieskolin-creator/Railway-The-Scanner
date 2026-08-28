@@ -432,6 +432,7 @@ def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
     monkeypatch.syspath_prepend("backend")
     sys.modules.pop("buying_potential", None)
     bp = importlib.import_module("buying_potential")
+    monkeypatch.setattr(bp, "_load_modernization_tactics", lambda: [])
 
     payload = bp._build_input_payload(
         {
