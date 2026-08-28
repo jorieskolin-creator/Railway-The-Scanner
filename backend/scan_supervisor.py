@@ -149,6 +149,28 @@ class SourceRetrieval:
 
 
 @dataclass(frozen=True)
+class IntentInputSnapshot:
+    """Immutable manifest binding one Intent attempt to verified durable input.
+
+    It contains only material and retrieval references with hashes and status
+    metadata. It has no Company Evidence, Foresight, claim-support, or
+    publication meaning.
+    """
+
+    snapshot_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    contract_version: str
+    input_hash: str
+    manifest: Mapping[str, Any]
+
+    @property
+    def snapshot_ref(self) -> str:
+        return f"intent-input://scan/{self.snapshot_id}"
+
+
+@dataclass(frozen=True)
 class ScanCheckpoint:
     """Immutable persisted stage output with only references to input material."""
 
@@ -309,6 +331,19 @@ def _material_warnings(value: Any) -> tuple[str, ...]:
     if not isinstance(raw_value, list) or not all(isinstance(item, str) for item in raw_value):
         raise MaterialIntegrityError("Material warnings must be a string list.")
     return tuple(raw_value)
+
+
+
+def _intent_manifest(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise IntentInputSnapshotIntegrityError("Intent input manifest is not valid JSON.") from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise IntentInputSnapshotIntegrityError("Intent input manifest must be a JSON-safe mapping.")
+    return dict(raw_value)
 
 
 def _source_metadata(value: Any) -> Mapping[str, Any]:
@@ -882,6 +917,158 @@ class ScanRepository:
                     )
             persisted.append(stored)
         return persisted
+
+
+    def persist_intent_input_snapshot(
+        self,
+        *,
+        snapshot: IntentInputSnapshot,
+    ) -> Mapping[str, Any]:
+        """Persist one immutable Intent input manifest without stage execution."""
+
+        self._validate_intent_input_snapshot(snapshot)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO intent_input_snapshots (
+                    snapshot_id, run_id, stage_name, attempt, contract_version,
+                    input_hash, manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT DO NOTHING
+                RETURNING snapshot_id, run_id, stage_name, attempt,
+                          contract_version, input_hash, manifest
+                """,
+                (
+                    snapshot.snapshot_id,
+                    snapshot.run_id,
+                    snapshot.stage_name,
+                    snapshot.attempt,
+                    snapshot.contract_version,
+                    snapshot.input_hash,
+                    _json(snapshot.manifest),
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT snapshot_id, run_id, stage_name, attempt,
+                           contract_version, input_hash, manifest
+                    FROM intent_input_snapshots
+                    WHERE snapshot_id = %s
+                       OR (run_id = %s AND stage_name = %s AND attempt = %s)
+                    ORDER BY snapshot_id = %s DESC
+                    LIMIT 1
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.run_id,
+                        snapshot.stage_name,
+                        snapshot.attempt,
+                        snapshot.snapshot_id,
+                    ),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError("Idempotent Intent input snapshot disappeared before it could be read.")
+                expected = {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "run_id": snapshot.run_id,
+                    "stage_name": snapshot.stage_name,
+                    "attempt": snapshot.attempt,
+                    "contract_version": snapshot.contract_version,
+                    "input_hash": snapshot.input_hash,
+                    "manifest": dict(snapshot.manifest),
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "Intent input snapshot already exists for different immutable input."
+                    )
+            return stored
+
+    def load_intent_input_snapshot(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> IntentInputSnapshot:
+        """Load and validate a persisted Intent input manifest."""
+
+        if not run_id or stage_name != "intent" or attempt < 1:
+            raise ValueError("run_id, stage_name='intent', and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_id, run_id, stage_name, attempt,
+                       contract_version, input_hash, manifest
+                FROM intent_input_snapshots
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            raise KeyError(f"Unknown Intent input snapshot: {run_id}/{stage_name}/{attempt}")
+        snapshot = IntentInputSnapshot(
+            snapshot_id=str(row["snapshot_id"]),
+            run_id=str(row["run_id"]),
+            stage_name=str(row["stage_name"]),
+            attempt=int(row["attempt"]),
+            contract_version=str(row["contract_version"]),
+            input_hash=str(row["input_hash"]),
+            manifest=_intent_manifest(row.get("manifest")),
+        )
+        self._validate_intent_input_snapshot(snapshot)
+        return snapshot
+
+    def load_verified_intent_inputs(
+        self,
+        *,
+        run_id: str,
+        attempt: int,
+    ) -> tuple[IntentInputSnapshot, list[ScanMaterial], list[SourceRetrieval]]:
+        """Hydrate only input records that exactly match the immutable manifest."""
+
+        snapshot = self.load_intent_input_snapshot(
+            run_id=run_id,
+            stage_name="intent",
+            attempt=attempt,
+        )
+        materials = self.load_materials(run_id=run_id)
+        retrievals = self.load_source_retrievals(
+            run_id=run_id,
+            stage_name="intent",
+            attempt=attempt,
+        )
+        from scan_intent_snapshot import assert_intent_input_snapshot_matches
+
+        assert_intent_input_snapshot_matches(
+            snapshot,
+            materials=materials,
+            retrievals=retrievals,
+        )
+        return snapshot, materials, retrievals
+
+    def _validate_intent_input_snapshot(self, snapshot: IntentInputSnapshot) -> None:
+        if not all(
+            (
+                snapshot.snapshot_id,
+                snapshot.run_id,
+                snapshot.contract_version,
+                snapshot.input_hash,
+            )
+        ):
+            raise IntentInputSnapshotIntegrityError("Intent input snapshot identity fields are required.")
+        if snapshot.stage_name != "intent" or snapshot.attempt < 1:
+            raise IntentInputSnapshotIntegrityError("Intent input snapshot must bind one positive Intent attempt.")
+        if not _is_sha256_digest(snapshot.input_hash):
+            raise IntentInputSnapshotIntegrityError("Intent input snapshot hash must be a SHA-256 digest.")
+        if not isinstance(snapshot.manifest, Mapping) or not _json_safe(snapshot.manifest):
+            raise IntentInputSnapshotIntegrityError("Intent input manifest must be a JSON-safe mapping.")
+        from scan_intent_snapshot import validate_intent_input_snapshot_manifest
+
+        validate_intent_input_snapshot_manifest(snapshot)
 
     def claim_next_step(
         self,
