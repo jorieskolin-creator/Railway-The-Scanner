@@ -398,3 +398,30 @@ Verification evidence:
 - Projection/checkpoint contract: [53baf9a](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/53baf9a938951bfc4a0f8182bda5d34d8b10c140).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; full hermetic suite `391 passed, 7 skipped` (six new 3G1 contracts; PostgreSQL durability jobs were not required for this slice).
 
+
+## Slice 3G2 — prepare-only Intent adapter
+
+Intent now has a prepare-only adapter while execution remains inactive:
+
+- `IntentStageExecutor` reads only `load_verified_intent_inputs`, builds the 3G1
+  projection, and calls existing `analyze_intent` on that concatenated text.
+- It returns a `StageExecutionResult` carrying the 3G1 checkpoint proposal.
+  `next_stage` may name `jury_analysis` when the gate passed, but only as
+  metadata. Nothing is queued or committed.
+- The adapter has no claim, persist, or `complete_step` method. It does not
+  scrape, import `main.py`, register with FastAPI, or change `POST /scan`.
+- Its PostgreSQL contract proves preparation can read a leased Intent step and
+  leave that step leased, with no Intent checkpoint row and no `jury_analysis`
+  step.
+
+The next bounded dependency is **3H — Intent fenced commit and reclaim**. It
+must persist the 3G2 proposal with the existing fenced checkpoint transaction,
+queue only `jury_analysis`, and prove stale-attempt rollback. Supervisor
+registration and `POST /scan` remain later decisions.
+
+Verification evidence:
+
+- Prepare-only adapter: [c79090f](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/c79090f222876757f1817cff037b651af70ddc3f).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; full hermetic suite `394 passed, 8 skipped` (three new 3G2 hermetic contracts; the disposable PostgreSQL adapter contract is wired into Reliability contracts and skipped without the test DSN).
+
+
