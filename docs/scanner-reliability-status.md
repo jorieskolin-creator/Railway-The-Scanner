@@ -109,6 +109,34 @@ Verification evidence:
 - Foundation commit: [7f130ad](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/7f130ad71f4871e51021301845738bf88e73e051).
 - [Reliability contracts run 33141291533](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33141291533): compilation and duplicate-definition checks passed; 127 focused contracts and 363 hermetic tests passed (61 deprecation warnings).
 
+
+## Slice 2B — disposable PostgreSQL lease-reclaim proof
+
+A dedicated GitHub Actions job now starts PostgreSQL 16 only for the Supervisor
+integration contract. It applies the same migration used by the repository, then
+proves all of the following against the database itself:
+
+1. the first process claims a step with fencing token 1;
+2. another process cannot claim it while that lease is live;
+3. after expiry, a replacement process reclaims the same step with token 2;
+4. the old owner/token cannot commit its checkpoint;
+5. only the reclaimed attempt completes the run and its checkpoint; and
+6. the event stream records both claims and the final completion.
+
+The primary hermetic suite still denies all sockets and DNS. The only exception
+is an explicitly configured test-only `127.0.0.1:5432` PostgreSQL endpoint in
+the separate CI job; no hostname, non-loopback address, alternate port, or
+production DSN is permitted.
+
+Phase 2 remains in progress: FastAPI lifecycle registration, a stage-executor
+adapter, and deployment-time migration handling must be added before this
+repository can own queued production work.
+
+Verification evidence:
+
+- Lease-reclaim commit: [6c1f92c](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/6c1f92ca175af56cc231d88544f2afcc65a6077a).
+- [Reliability contracts run 33141593538](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33141593538): 127 focused contracts passed; 363 hermetic tests passed with one database integration test skipped; the disposable PostgreSQL job passed its lease-reclaim contract.
+
 ## Change rules
 
 - One bounded architectural concern per commit or pull request.
