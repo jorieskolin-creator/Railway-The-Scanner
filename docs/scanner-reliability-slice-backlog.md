@@ -373,7 +373,7 @@ resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
 ## Card 3I-J2 — Prepare-only Jury adapter
 
 **Parent stakeholder step:** 3I (beat 2)
-**Status:** In progress
+**Status:** Complete
 **Mirrors:** 3G2 `IntentStageExecutor` (and the 3G1 projection/checkpoint
 builders, which Jury still lacked after 3I-J1's snapshot-only beat)
 

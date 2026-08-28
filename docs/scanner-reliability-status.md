@@ -29,10 +29,10 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-J2 — prepare-only Jury adapter**.
-Do not start a Jury commit, Diagnosis, Foresight, Supervisor execution, or
-`POST /scan` in the same change. Cards **3G1**, **3G2**, **3H**, **3I-J0**,
-and **3I-J1** are complete.
+Immediate next card: **3I-J3 — Jury fenced commit + reclaim**.
+Do not start Diagnosis, Foresight, Supervisor execution, or `POST /scan` in
+the same change. Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, and
+**3I-J2** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -521,7 +521,7 @@ before a Jury adapter is allowed to use it:
   entity identity, evidence eligibility, claim support, Foresight meaning, or
   Company Summary/publication authority.
 
-Phase 3 is **not** closed. The next bounded dependency is **3I-J2 — prepare-only
+Phase 3 is **not** closed. The next bounded dependency was **3I-J2 — prepare-only
 Jury adapter**. Do not start Diagnosis, Foresight, Synthesis, Verification, or
 request handoff from this slice.
 
@@ -529,5 +529,35 @@ Verification evidence:
 
 - Jury input snapshot: [f68f255](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/f68f2553e58b060ddb25f7b9d4cd5e0ca4ed24b9).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; three new hermetic 3I-J1 contracts passed; two disposable PostgreSQL 3I-J1 durability contracts passed (pending-step attach without claim plus exact hydrate; tampered manifest and extra candidate rejected). Full suite with the test DSN: `431 passed`.
+
+
+## Slice 3I-J2 — prepare-only Jury adapter
+
+Jury now has a prepare-only adapter while execution remains inactive:
+
+- `JuryStageExecutor` reads only `load_verified_jury_inputs`, builds a
+  `scanner.jury-projection/v1` packet view from the 3I-J1 snapshot, and wraps
+  existing `scanner_two._prioritize_jury_packets` and `_merge_jury_payloads`.
+  It does not call `x_ray_search`, scrape, or hit a model.
+- It returns a `StageExecutionResult` carrying a `scanner.jury/v1` checkpoint
+  proposal. `next_stage` may name `diagnosis` when the gate passed, but only as
+  metadata. Nothing is queued or committed. Malformed five-Jury output yields
+  `validation_failed`.
+- Packet excerpts exist only on the projection. The checkpoint stores refs and
+  a compact result; it does not copy extracts, raw bytes, or the Intent payload.
+- The adapter has no claim, persist, or `complete_step` method. It does not
+  import `main.py`, register with FastAPI, or change `POST /scan`.
+- Its PostgreSQL contract proves preparation can read a leased `jury_analysis`
+  step and leave that step leased, with no Jury checkpoint row and no
+  `diagnosis` step.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-J3 — Jury
+fenced commit + reclaim**. Do not start Diagnosis, Foresight, Synthesis,
+Verification, or request handoff from this slice.
+
+Verification evidence:
+
+- Prepare-only Jury adapter: [f3662ba](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/f3662ba4a6cdd56718caab7f4f0317f96c203ee8).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; eleven new hermetic 3I-J2 contracts passed; one disposable PostgreSQL 3I-J2 contract passed (leased `jury_analysis` unchanged, no Jury checkpoint row, no `diagnosis` step). Full suite with the test DSN: `443 passed`.
 
 
