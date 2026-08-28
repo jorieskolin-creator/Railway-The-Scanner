@@ -241,7 +241,7 @@ That is how this program already avoided losing the thread through 3A–3F.
 Suggested names when 3H closes (cards not specified until then):
 
 1. `3I-J0` Jury-stage retrieval/candidate durability — specified below
-2. `3I-J1` Jury input snapshot from Intent checkpoint
+2. `3I-J1` Jury input snapshot from Intent checkpoint — specified below
 3. `3I-J2` Prepare-only Jury adapter
 4. `3I-J3` Jury fenced commit + reclaim
 5. Then the same 1–3 beats for Diagnosis, Foresight, Strategic Synthesis,
@@ -299,6 +299,71 @@ not Company Evidence. Next card is **3I-J1** (Jury input snapshot).
 `backend/scan_jury_candidates.py`, repository persist/load,
 `tests/test_scan_jury_candidates.py`,
 `tests/test_scan_jury_candidates_postgres_integration.py`
+
+Phase 3 exit gate stays the plan's gate: restart after every major stage
+resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
+
+---
+
+## Card 3I-J1 — Jury input snapshot from Intent checkpoint
+
+**Parent stakeholder step:** 3I (beat 1)
+**Status:** Next
+**Mirrors:** 3F immutable Intent input snapshot
+
+### In scope
+
+- New table `jury_input_snapshots` keyed to the `jury_analysis` step/attempt.
+- `build_jury_input_snapshot(...)` from a passed Intent `ScanCheckpoint` plus
+  already-hydrated `JurySourceCandidate` and `jury_analysis` `SourceRetrieval`
+  lists. No cognitive call.
+- Manifest stores only the Intent checkpoint identity (id, ref, attempt,
+  contract, input/output hashes), candidate refs, and Jury-stage retrieval
+  refs. It does not copy extracted text, raw bytes, the Intent result payload,
+  claim support, entity match, Foresight eligibility, or publication authority.
+- Deterministic snapshot ID and input hash. Replay is idempotent; a different
+  manifest for the same attempt is rejected.
+- Hydration reloads the Intent checkpoint, Jury candidates, and Jury-stage
+  retrievals through their hash-verifying repository paths, then requires an
+  exact manifest match. Added, omitted, stale, or tampered input cannot become
+  a best-effort payload for a later adapter.
+- Intent-stage materials and retrievals stay behind the Intent checkpoint;
+  they are not duplicated into the Jury manifest.
+
+### Deliberate exclusions
+
+- Do not call five-Jury cognitive functions or `main.py` scan orchestration.
+- Do not scrape, Brave, Firecrawl, or Coresignal.
+- Do not build a Jury adapter, projection/checkpoint contract, or fenced
+  commit (3I-J2–J3).
+- Do not claim the `jury_analysis` lease, register a Supervisor, or switch
+  `POST /scan`.
+- Do not copy Company Evidence DB eligibility/verification fields into the
+  manifest.
+
+### Tests
+
+- Hermetic: deterministic IDs; refs only (no extracted text / raw bytes /
+  evidence keys); non-passed or wrong-run Intent checkpoint rejected;
+  Intent-stage retrievals rejected; added/omitted/tampered candidates or
+  retrievals cannot match.
+- PostgreSQL: attach snapshot to the pending `jury_analysis` step created by
+  3H, using 3I-J0 candidates and a Jury-stage retrieval; idempotent replay;
+  tampered manifest rejected; extra candidate after persist cannot hydrate;
+  `jury_analysis` remains pending and unclaimed.
+
+### Exit evidence
+
+Jury input is bound to the hash-verified Intent checkpoint plus Jury-stage
+durable inputs, unused by any live path. Next card is **3I-J2** (prepare-only
+Jury adapter).
+
+### Likely files
+
+`backend/migrations/007_jury_input_snapshots.sql`,
+`backend/scan_jury_snapshot.py`, repository persist/load/hydrate,
+`tests/test_scan_jury_snapshot.py`,
+`tests/test_scan_jury_snapshot_postgres_integration.py`
 
 Phase 3 exit gate stays the plan's gate: restart after every major stage
 resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
