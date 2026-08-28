@@ -297,3 +297,36 @@ Verification evidence:
 
 - Prepare-only adapter commit: [a30c73e](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/a30c73e88a9a212c24a66cfc2c675ab6c329a297).
 - [Reliability contracts run 33147861608](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33147861608): 127 focused contracts and the full hermetic suite passed (`381 passed, 9 skipped`); nine disposable PostgreSQL durability contracts passed.
+
+
+## Slice 3E — durable source-retrieval foundation
+
+Source acquisition now has its own immutable, raw-body-free persistence boundary
+before any existing Intent logic is wrapped:
+
+- `004_source_retrievals.sql` adds provenance records keyed to the leased stage
+  attempt: original and transport-canonical URL, retrieval time, HTTP/content
+  metadata, response and extracted-text SHA-256, parser route, readability,
+  outcome, warnings, and extracted text.  Raw response bytes are used only to
+  calculate the response hash and are never stored.
+- URL canonicalization is deliberately transport-only.  It does not establish
+  publisher trust, entity identity, source eligibility, claim support, or
+  equivalence between sources.
+- Reload validates the extracted-text hash, and conflicting reuse of a retrieval
+  ID is rejected.  The PostgreSQL contract proves replay idempotency and rejects
+  tampered persisted text.
+- This is retrieval provenance, not Company Evidence, a Foresight KB record, or
+  a publication artifact.  It does not make a source usable for a company claim.
+- No live request, retrieval client, Intent adapter, Supervisor registration,
+  lease claim, or Railway setting changed in this slice.
+
+The next safe dependency is a durable Intent input snapshot assembled only from
+verified submitted material and retrieval records, followed by a prepare-only
+Intent adapter.  That remains separate from any authoritative `POST /scan`
+handoff, which cannot occur while the legacy in-memory thread can also execute
+the same request.
+
+Verification evidence:
+
+- Source-retrieval foundation: [f1294095](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/f1294095309558df426c40d3649c8354f0eaf2e0).
+- [Reliability contracts run 33149329773](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33149329773): compilation and duplicate-definition guard passed; 127 focused contracts, the full hermetic suite (`383 passed, 11 skipped`), and 11 disposable PostgreSQL durability contracts passed.
