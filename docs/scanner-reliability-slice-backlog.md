@@ -252,7 +252,7 @@ Suggested names when 3H closes (cards not specified until then):
 ## Card 3I-J0 — Jury-stage retrieval and candidate durability
 
 **Parent stakeholder step:** 3I (beat 0)
-**Status:** Next
+**Status:** Complete
 **Mirrors:** 3E durable source-retrieval foundation
 
 ### In scope
@@ -355,13 +355,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-J0 from docs/scanner-reliability-slice-backlog.md
-(Jury-stage retrieval/candidate durability). Do not start a Jury adapter, Jury
+Specify then implement exactly slice 3I-J1 from docs/scanner-reliability-slice-backlog.md
+(Jury input snapshot from Intent checkpoint). Do not start a Jury adapter, Jury
 commit, Diagnosis, Foresight, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-J0 exit evidence is recorded.
+3I-J1 exit evidence is recorded.
 ```
 
-After 3I-J0 merges, replace `3I-J0` with `3I-J1` in that prompt. Do not accumulate
+After 3I-J1 merges, replace `3I-J1` with `3I-J2` in that prompt. Do not accumulate
 open cards in one run.
