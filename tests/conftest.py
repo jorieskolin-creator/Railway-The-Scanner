@@ -26,7 +26,7 @@ _NETWORK_ATTEMPTS: list[str] = []
 
 def _blocked(operation: str, target: object) -> None:
     message = f"Network access blocked during tests: {operation}({target!r})"
-    caller = "".join(traceback.format_stack(limit=8)[:-2]).strip()
+    caller = "".join(traceback.format_stack(limit=20)[:-2]).strip()
     _NETWORK_ATTEMPTS.append(f"{message}\n{caller}")
     raise NetworkAccessBlocked(message)
 
