@@ -780,9 +780,13 @@ def _is_eligible_foresight_context(record: dict) -> tuple[bool, str]:
         return False, "invalid_record"
     if record.get("foresight_context_eligible") is not True:
         return False, "not_context_eligible"
-    status = str(record.get("foresight_signal_status") or record.get("source_audit_status") or "").lower()
-    if any(token in status for token in ("dead", "unreadable", "excluded", "rejected")):
-        return False, status or "excluded"
+    statuses = [
+        str(record.get("foresight_signal_status") or "").lower(),
+        str(record.get("source_audit_status") or "").lower(),
+    ]
+    for status in statuses:
+        if any(token in status for token in ("dead", "unreadable", "excluded", "rejected")):
+            return False, status or "excluded"
     if record.get("source_readable") is False:
         return False, "source_unreadable"
     return True, "eligible"

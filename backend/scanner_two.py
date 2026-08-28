@@ -638,7 +638,7 @@ def _discover_official_domain_urls(domain_hint: str, company_name: str = "", lim
 
     seen = set()
     candidates = []
-    for url in list(seeds) + fetched_links:
+    for url in fetched_links + list(seeds):
         key = _canonical_evidence_url(url)
         if not key or key in seen or _is_non_document_asset_url(url):
             continue
@@ -3057,6 +3057,7 @@ def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str)
             "found": True,
             "sentiment": "neutral",
             "source_status": "fresh_discovery",
+            "trust_state": "candidate_unverified",
             "claim_support_pending": True,
             "acquisition_provider": provider,
             "forensic_provenance": "fresh_acquisition",

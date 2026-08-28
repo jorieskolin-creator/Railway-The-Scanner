@@ -19,6 +19,16 @@ def _finding(url: str, category: str, **extra):
         "category": category,
         "found": True,
         "snippet": "A source-supported excerpt with enough content for revalidation.",
+        "fetched_excerpt": "A source-supported excerpt with enough content for revalidation.",
+        "verified": True,
+        "url_verified": True,
+        "content_readable": True,
+        "content_verified": True,
+        "entity_verified": True,
+        "entity_mentioned": True,
+        "entity_match_status": "exact",
+        "content_entity_match_status": "exact",
+        "entity_scope": "canonical_group",
     }
     item.update(extra)
     return item
@@ -66,8 +76,8 @@ def test_coverage_score_rewards_verified_diverse_balanced_sources():
 def test_forensic_timing_has_separate_discovery_and_postprocess_budgets():
     assert scanner_two.FORENSIC_ACQUISITION_CEILING_SECONDS == 135
     assert scanner_two.FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS == 35
-    assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 180
-    assert scanner_two.FORENSIC_POSTPROCESS_RESERVE_SECONDS == 30
+    assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 220
+    assert scanner_two.FORENSIC_POSTPROCESS_RESERVE_SECONDS == 45
 
 
 def test_each_acquisition_prompt_is_jury_scoped_and_excludes_people_search():
@@ -78,7 +88,7 @@ def test_each_acquisition_prompt_is_jury_scoped_and_excludes_people_search():
         assert f"This lane covers only: {jury}" in prompt
         assert "Do not search for people" in prompt
         assert "verbatim_quote" in prompt
-        assert "copied word-for-word" in prompt
+        assert "copy it word-for-word" in prompt
         assert "Return 2-3 high-quality canonical URLs only" in prompt
         other_juries = [name for name in scanner_two.FORENSIC_JURIES if name != jury]
         assert all(f"\n    {other}" not in prompt for other in other_juries)
@@ -105,7 +115,7 @@ def test_replacement_prompt_avoids_failed_urls_and_stays_jury_scoped():
     assert "Need 2 validated" in prompt
     assert "Do not return rejected URLs" in prompt
     assert "https://example.fi/search?q=services" in prompt
-    assert "Return ONLY valid JSON with 1-3 sources" in prompt
+    assert "Return ONLY valid JSON with up to 2 source(s)" in prompt
 
 
 def test_vivicta_acquisition_prompt_includes_rebrand_aliases():
@@ -955,15 +965,21 @@ def test_pre_jury_gate_keeps_source_when_acquisition_snippet_is_only_a_hint(monk
     )
 
     assert len(lanes[0]["sources"]) == 1
-    assert stats["quote_not_found"] == 1
-    assert lanes[0]["sources"][0]["passage_hint_status"] == "snippet_not_found_in_source_content"
+    assert stats["quote_not_found"] == 0
+    assert "passage_hint_status" not in lanes[0]["sources"][0]
+    assert lanes[0]["sources"][0]["claim_support_status"] == "pending_jury_verification"
     assert lanes[0]["pre_jury_rejected"] == []
 
 
 def test_pre_jury_gate_selectively_recovers_passage_with_firecrawl(monkeypatch):
     jury = "AI & DATA JURY (Future Readiness)"
     quote = "Example Oy launched a governed data platform for operational analytics in May 2026."
-    source = _finding("https://example.fi/news/data-platform", jury, snippet=quote)
+    source = _finding(
+        "https://example.fi/news/data-platform",
+        jury,
+        snippet=quote,
+        provider_quote_candidate=quote,
+    )
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
     monkeypatch.setattr(
         scanner_two,

@@ -63,15 +63,15 @@ def test_supported_primary_with_missing_quote_triggers_sonnet_and_blocks_disagre
     result = scv._check_relevance(
         "https://example.com/news",
         "Example Corp modernized its customer operations platform.",
-        model_chain=("gpt-5.4", "claude-sonnet-4-6"),
+        model_chain=("gpt-5.4", "scv.CLAUDE_SONNET_MODEL"),
         company_name="Example Corp",
         company_domain="https://example.com",
         source_item={"url": "https://example.com/news", "source_credibility": "high"},
     )
 
-    assert calls == ["gpt-5.4", "claude-sonnet-4-6"]
+    assert calls == ["gpt-5.4", "scv.CLAUDE_SONNET_MODEL"]
     assert result["claim_support_status"] == "unsupported"
-    assert result["verification_reviewed_by"] == "claude-sonnet-4-6"
+    assert result["verification_reviewed_by"] == "scv.CLAUDE_SONNET_MODEL"
     assert result["verification_disagreement"] is True
     assert result["verification_review_reason"] == "gpt_supported_but_evidence_controls_are_weak"
 
@@ -159,19 +159,19 @@ def test_high_value_unsupported_primary_can_be_promoted_by_safe_second_opinion(m
     result = scv._check_relevance(
         "https://example.com/annual-report",
         "Example Corp reported 2024 revenue of 10 million euros.",
-        model_chain=("gpt-5.4", "claude-sonnet-4-6"),
+        model_chain=("gpt-5.4", "scv.CLAUDE_SONNET_MODEL"),
         company_name="Example Corp",
         company_domain="https://example.com",
         source_item={"url": "https://example.com/annual-report", "source_type": "annual_report"},
     )
 
-    assert calls == ["gpt-5.4", "claude-sonnet-4-6"]
+    assert calls == ["gpt-5.4", "scv.CLAUDE_SONNET_MODEL"]
     assert result["claim_support_status"] == "supported"
     assert result["relevant"] is True
-    assert result["verification_model"] == "claude-sonnet-4-6"
+    assert result["verification_model"] == "scv.CLAUDE_SONNET_MODEL"
     assert result["verification_disagreement"] is True
     assert result["primary_verification_model"] == "gpt-5.4"
-    assert result["secondary_verification_model"] == "claude-sonnet-4-6"
+    assert result["secondary_verification_model"] == "scv.CLAUDE_SONNET_MODEL"
 
 
 def test_high_value_disagreement_stays_unsupported_without_entity_proof(monkeypatch):
@@ -198,7 +198,7 @@ def test_high_value_disagreement_stays_unsupported_without_entity_proof(monkeypa
     result = scv._check_relevance(
         "https://credible-news.example/cloud",
         "Example Corp modernized its cloud platform.",
-        model_chain=("gpt-5.4", "claude-sonnet-4-6"),
+        model_chain=("gpt-5.4", "scv.CLAUDE_SONNET_MODEL"),
         company_name="Example Corp",
         company_domain="https://example.com",
         source_item={"url": "https://credible-news.example/cloud", "source_credibility": "high"},
@@ -206,7 +206,7 @@ def test_high_value_disagreement_stays_unsupported_without_entity_proof(monkeypa
 
     assert result["claim_support_status"] == "unsupported"
     assert result["entity_verified"] is False
-    assert result["verification_reviewed_by"] == "claude-sonnet-4-6"
+    assert result["verification_reviewed_by"] == "scv.CLAUDE_SONNET_MODEL"
     assert result["verification_review_reason"] == "high_value_source_not_supported_by_primary"
 
 
@@ -226,7 +226,7 @@ def test_wrong_entity_short_circuits_before_model_review(monkeypatch):
     result = scv._check_relevance(
         "https://wrong-example.com/news",
         "Example Corp modernized its platform.",
-        model_chain=("gpt-5.4", "claude-sonnet-4-6"),
+        model_chain=("gpt-5.4", "scv.CLAUDE_SONNET_MODEL"),
         company_name="Example Corp",
         company_domain="https://example.com",
         source_item={"url": "https://wrong-example.com/news", "source_credibility": "high"},

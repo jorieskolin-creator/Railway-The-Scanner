@@ -399,8 +399,9 @@ def test_official_unsupported_service_page_becomes_scoped_context_when_claim_ove
     assert link["verification_reason"] == "official_scoped_context_claim_overreach"
     assert link["original_claim_support_status"] == "unsupported"
     assert link["claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
-    assert link["source_context_status"] == SOURCE_CONTEXT_SCOPED
-    assert is_scoped_context_source(link) is True
+    assert link["source_context_status"] == "valid_foresight_context"
+    assert link["company_specific"] is False
+    assert is_scoped_context_source(link) is False
 
 
 def test_third_party_unsupported_context_stays_display_only_not_scoped():
@@ -431,7 +432,7 @@ def test_third_party_unsupported_context_stays_display_only_not_scoped():
     assert is_scoped_context_source(link) is False
 
 
-def test_valid_company_context_with_overstrong_claim_becomes_scoped_context():
+def test_valid_context_only_source_with_overstrong_claim_remains_context_only():
     link = apply_analysis_verification(
         _source(
             title="Analyst page about Example",

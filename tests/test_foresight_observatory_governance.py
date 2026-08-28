@@ -101,7 +101,7 @@ def test_verification_failure_is_unavailable_not_verified(monkeypatch):
     def fail(*args, **kwargs):
         raise TimeoutError("verification timed out")
 
-    monkeypatch.setattr(observatory, "call_json_model_chain", fail)
+    monkeypatch.setattr(observatory, "_call_observatory_json", fail)
     result = observatory._verify_with_models("Essay", "Sources", "Global")
 
     assert result["passed"] is False

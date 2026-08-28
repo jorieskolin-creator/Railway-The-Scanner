@@ -425,7 +425,7 @@ def test_prh_identity_parses_business_id_and_filters_noisy_aliases(monkeypatch):
     assert "02468125" in identity["identifiers"]
     assert "CA GROUP" not in identity["names"]
     assert "Avia College" not in identity["names"]
-    assert {"name": "CA GROUP", "reason": "alias_not_specific_to_scanned_company"} in identity["prh_aliases_skipped"]
+    assert {"name": "CA GROUP", "reason": "alias_too_short_for_fallback_search"} in identity["prh_aliases_skipped"]
 
 
 def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):

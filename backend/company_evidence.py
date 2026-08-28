@@ -1519,9 +1519,13 @@ def _as_records(data: Any) -> list[dict]:
         records = []
         for item in values:
             if isinstance(item, dict):
-                source = item.get("_source") if isinstance(item.get("_source"), dict) else item
+                source_payload = item.get("_source")
+                source = source_payload if isinstance(source_payload, dict) else item
                 if source:
-                    records.append(source)
+                    record = dict(source)
+                    if isinstance(source_payload, dict) and item.get("_id"):
+                        record.setdefault("id", item.get("_id"))
+                    records.append(record)
         return records
     if isinstance(data, dict):
         if isinstance(data.get("data"), dict):

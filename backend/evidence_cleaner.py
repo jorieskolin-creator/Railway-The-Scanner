@@ -205,7 +205,7 @@ def _build_stats(data: dict) -> dict[str, Any]:
             elif link.get("promotion_status") == "excluded":
                 stats["excluded"] += 1
                 field_stats["excluded"] += 1
-            if link.get("claim_support_status") == "unsupported":
+            if link.get("claim_support_status") in {"unsupported", "unsupported_for_this_claim"}:
                 stats["unsupported"] += 1
                 field_stats["unsupported"] += 1
             if link.get("claim_support_status") == "unchecked":
@@ -225,7 +225,7 @@ def _build_stats(data: dict) -> dict[str, Any]:
             elif content_entity_status in {"wrong", "weak", "unknown", ""} and link.get("company_specific") is not False:
                 stats["entity_failed"] += 1
                 field_stats["entity_failed"] += 1
-            if link.get("claim_support_status") in {"unsupported", "partial", "unavailable"}:
+            if link.get("claim_support_status") in {"unsupported", "unsupported_for_this_claim", "partial", "unavailable"}:
                 stats["claim_failed"] += 1
                 field_stats["claim_failed"] += 1
             if link.get("quote_mismatch") is True:
