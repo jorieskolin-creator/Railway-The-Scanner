@@ -330,3 +330,37 @@ Verification evidence:
 
 - Source-retrieval foundation: [f1294095](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/f1294095309558df426c40d3649c8354f0eaf2e0).
 - [Reliability contracts run 33149329773](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33149329773): compilation and duplicate-definition guard passed; 127 focused contracts, the full hermetic suite (`383 passed, 11 skipped`), and 11 disposable PostgreSQL durability contracts passed.
+
+
+## Slice 3F — immutable Intent input snapshot
+
+The next cognitive stage can now be bound to exact durable input before an Intent
+adapter is allowed to use it:
+
+- `005_intent_input_snapshots.sql` stores one immutable manifest per
+  `run / intent / attempt`. It contains only material and source-retrieval
+  references, hashes, parser/status metadata, and retrieval provenance.
+  Extracted text and raw response bytes remain in their respective durable
+  stores and are not copied into the manifest.
+- The manifest has a deterministic ID and input hash. Replays are idempotent;
+  a different manifest for the same attempt is rejected.
+- Hydration reloads submitted material and Intent-attempt retrievals through
+  their hash-verifying repository paths, then requires an exact manifest match.
+  Added, omitted, stale, or tampered input cannot become a best-effort payload
+  for the future adapter.
+- The manifest is operational lineage only. It does not grant source trust,
+  entity identity, evidence eligibility, claim support, Foresight meaning, or
+  Company Summary/publication authority.
+- No live acquisition client, existing Intent function, route handoff,
+  Supervisor loop, lease claim, checkpoint completion, or Railway setting
+  changed in this slice.
+
+The next bounded dependency is a **prepare-only Intent adapter**. It must accept
+only a verified immutable Intent input snapshot, invoke no parallel legacy path,
+and return a separately versioned output/checkpoint proposal. Its actual stage
+commit and any authoritative `POST /scan` handoff remain later decisions.
+
+Verification evidence:
+
+- Snapshot foundation: [18e8f11e](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/18e8f11e516b235279304f8df47c8df81e086599); contract corrections: [14928c67](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/14928c674d8b845b8c6dac293830ac37e3b1e8b7), [d0da5eba](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/d0da5ebaedd514345e8f52f3a72e5ac6baff63c5), [fe9ed988](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/fe9ed988fec192378f1dd99cf033c0c1ca332c06), and [ebffbce5](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/ebffbce5712e4b4bfb7d9d35a57eaa1cdadb6cb7).
+- [Reliability contracts run 33153940507](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/33153940507): compilation and duplicate-definition guard passed; 127 focused contracts, the full hermetic suite (`385 passed, 13 skipped`), and 13 disposable PostgreSQL durability contracts passed.
