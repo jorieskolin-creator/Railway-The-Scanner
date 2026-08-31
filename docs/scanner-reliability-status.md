@@ -29,10 +29,10 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-D1 — Diagnosis input snapshot** (specify after this
-evidence; do not implement in the same change as 3I-J3). Do not start
+Immediate next card: **3I-D2 — prepare-only Diagnosis adapter** (specify after
+this evidence; do not implement in the same change as 3I-D1). Do not start
 Foresight, Supervisor execution, or `POST /scan`. Cards **3G1**, **3G2**,
-**3H**, **3I-J0**, **3I-J1**, **3I-J2**, and **3I-J3** are complete.
+**3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**, and **3I-D1** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -579,14 +579,45 @@ while live execution remains inactive:
 - This slice does not register a Supervisor loop, switch `POST /scan`, apply a
   Railway migration, or wrap Diagnosis, Foresight, Synthesis, or Verification.
 
-Phase 3 is **not** closed. The next bounded dependency is Diagnosis beat 1:
-an input snapshot from the passed Jury checkpoint, specified after this
-evidence and implemented as its own card. Do not start Diagnosis wrapping,
-Foresight, Synthesis, Verification, or request handoff from this slice.
+Phase 3 is **not** closed. The next bounded dependency was **3I-D1 — Diagnosis
+input snapshot**. Do not start Diagnosis wrapping, Foresight, Synthesis,
+Verification, or request handoff from this slice.
 
 Verification evidence:
 
 - Fenced Jury commit: [d157b2b](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/d157b2b742df0146f1d21ec5d06b22095a36625d).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; six new hermetic 3I-J3 contracts passed; five disposable PostgreSQL 3I-J3 durability contracts passed (happy-path queue, stale reclaim, identical replay, malformed rejection, restart hash/gate). Full suite with the test DSN: `454 passed`.
+
+
+## Slice 3I-D1 — Diagnosis input snapshot from Jury checkpoint
+
+The pending `diagnosis` step can now be bound to exact durable Jury output
+before a Diagnosis adapter is allowed to use it:
+
+- `008_diagnosis_input_snapshots.sql` stores one immutable manifest per
+  `run / diagnosis / attempt`. It contains only the passed Jury checkpoint
+  identity (id, ref, attempt, contract, input/output hashes). Extracted text,
+  raw bytes, Jury findings, and Intent payloads are not copied into the
+  manifest.
+- The manifest has a deterministic ID and input hash. Replays are idempotent;
+  a different manifest for the same attempt is rejected.
+- Hydration reloads the Jury checkpoint through its hash-verifying repository
+  path and requires an exact manifest match. A non-passed, wrong-run, Intent,
+  or tampered Jury checkpoint cannot become a best-effort Diagnosis payload.
+- The snapshot attaches without claiming the `diagnosis` lease. This slice
+  does not call Diagnosis generation, scrape, build a Diagnosis adapter or
+  commit, register a Supervisor, or switch `POST /scan`.
+- Diagnosis has no separate retrieval/candidate store. It does not acquire
+  sources; the passed Jury checkpoint is the durable input.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-D2 — prepare-only
+Diagnosis adapter**. Do not start Foresight, Synthesis, Verification, or
+request handoff from this slice.
+
+Verification evidence:
+
+- Diagnosis input snapshot: [89b7e3c](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/89b7e3c).
+- Duplicate-definition guard passed; 127 focused trust contracts passed; four new hermetic 3I-D1 contracts passed. Two disposable PostgreSQL 3I-D1 durability contracts are added to CI (pending-step attach without claim plus exact hydrate; tampered manifest and swapped Jury hash rejected). Full hermetic suite without the test DSN: `428 passed, 14 skipped`.
+
 
 
