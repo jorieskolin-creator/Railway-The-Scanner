@@ -624,6 +624,66 @@ resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
 
 ---
 
+## Card 3I-D3 — Diagnosis fenced commit + reclaim
+
+**Parent stakeholder step:** 3I (Diagnosis beat 3)
+**Status:** Complete
+**Mirrors:** 3I-J3 `commit_jury_stage` / 3H `commit_intent_stage`
+
+### In scope
+
+- New module `backend/scan_diagnosis_commit.py` with `commit_diagnosis_stage`.
+- Persist a passed 3I-D2 proposal with existing `complete_step_with_checkpoint`.
+- Queue only the already-defined next stage name `foresight`.
+- Stale fencing token rolls back the Diagnosis checkpoint insert and does not
+  advance the run.
+- Process-kill / lease-reclaim proof for the `diagnosis` step, reusing the
+  3I-J3 disposable-PostgreSQL pattern.
+- Restart from the Diagnosis checkpoint must not re-hash different inputs or
+  skip the Diagnosis gate. Identical replay of the same passed checkpoint is
+  idempotent.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Foresight.
+
+### Deliberate exclusions
+
+- No Foresight adapter, Foresight snapshot, or Foresight cognitive call.
+- No Strategic Synthesis or Verification wrapping.
+- No Supervisor loop registration.
+- No `POST /scan` switch.
+- No Railway migration/enablement.
+- No scrape, Brave, Firecrawl, Coresignal, models, or `main.py` scan
+  orchestration.
+- No Phase 4 envelope validator beyond what 3I-D2 already stored.
+
+### Tests
+
+- Hermetic: passed proposal queues `foresight` metadata through the commit
+  helper; identical replay does not complete again; a different existing
+  checkpoint is rejected; malformed/blocked proposal cannot be committed;
+  default wrap fixture remains unchanged; module source does not register live
+  paths or generate Foresight.
+- PostgreSQL: happy-path commit queues `foresight`; stale owner cannot commit
+  and reclaiming owner can; replay of the same passed checkpoint is
+  idempotent; malformed/blocked proposal cannot complete the step; restart
+  reload keeps Diagnosis hashes and the passed gate, and tampered Jury input
+  cannot hydrate.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Diagnosis is the third cognitive stage with a crash-safe durable boundary.
+Phase 3 is **not** closed. Next work is **3I-F1** (Foresight input snapshot),
+written after 3I-D3 evidence exists — not in this slice.
+
+### Likely files
+
+`backend/scan_diagnosis_commit.py`, `tests/test_scan_diagnosis_commit.py`,
+`tests/test_scan_diagnosis_commit_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -674,13 +734,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-D3 from docs/scanner-reliability-slice-backlog.md
-(Diagnosis fenced commit + reclaim). Do not start Foresight, Synthesis,
+Specify then implement exactly slice 3I-F1 from docs/scanner-reliability-slice-backlog.md
+(Foresight input snapshot). Do not start Foresight wrapping, Synthesis,
 Verification, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-D3 exit evidence is recorded.
+3I-F1 exit evidence is recorded.
 ```
 
-After 3I-D3 merges, replace `3I-D3` with the next specified card in that prompt.
+After 3I-F1 merges, replace `3I-F1` with the next specified card in that prompt.
 Do not accumulate open cards in one run.

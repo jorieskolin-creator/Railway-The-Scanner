@@ -29,11 +29,11 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-D3 — Diagnosis fenced commit + reclaim** (specify after
-this evidence; do not implement in the same change as 3I-D2). Do not start
-Foresight, Supervisor execution, or `POST /scan`. Cards **3G1**, **3G2**,
-**3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, and **3I-D2**
-are complete.
+Immediate next card: **3I-F1 — Foresight input snapshot** (specify after this
+evidence; do not implement in the same change as 3I-D3). Do not start Foresight
+wrapping, Synthesis, Verification, Supervisor execution, or `POST /scan`.
+Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
+**3I-D1**, **3I-D2**, and **3I-D3** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -642,9 +642,9 @@ Diagnosis now has a prepare-only adapter while execution remains inactive:
   step and leave that step leased, with no Diagnosis checkpoint row and no
   `foresight` step.
 
-Phase 3 is **not** closed. The next bounded dependency is **3I-D3 — Diagnosis
-fenced commit + reclaim**. Do not start Foresight, Synthesis, Verification, or
-request handoff from this slice.
+Phase 3 is **not** closed. The next bounded dependency was **3I-D3 — Diagnosis
+fenced commit + reclaim**. Do not start Foresight wrapping, Synthesis,
+Verification, or request handoff from that slice.
 
 Verification evidence:
 
@@ -655,6 +655,36 @@ Verification evidence:
   checkpoint row, no `foresight` step). Duplicate-definition guard passed; 127
   focused trust contracts passed. Full hermetic suite without the test DSN:
   `438 passed, 15 skipped`.
+
+
+## Slice 3I-D3 — Diagnosis fenced commit + reclaim
+
+The prepare-only Diagnosis proposal can now be committed under the current
+lease owner and fencing token:
+
+- `commit_diagnosis_stage` persists a passed 3I-D2 checkpoint with existing
+  `complete_step_with_checkpoint` and queues only `foresight`.
+- Identical replay of the same passed checkpoint is idempotent. A different
+  checkpoint for the same attempt is rejected. `validation_failed` proposals
+  cannot complete the step or queue Foresight.
+- A stale fencing token cannot insert the Diagnosis checkpoint. After lease
+  expiry a replacement owner can reclaim the `diagnosis` step, prepare again,
+  and commit. Restart reload keeps Diagnosis hashes and the passed gate;
+  tampered Jury output cannot hydrate.
+- This slice does not register a Supervisor loop, switch `POST /scan`, apply a
+  Railway migration, or wrap Foresight, Synthesis, or Verification.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-F1 — Foresight
+input snapshot**. Do not start Foresight wrapping, Synthesis, Verification, or
+request handoff from this slice.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; 127 focused trust contracts passed; six
+  new hermetic 3I-D3 contracts passed. Five disposable PostgreSQL 3I-D3
+  durability contracts are added to CI (happy-path queue, stale reclaim,
+  identical replay, malformed rejection, restart hash/gate). Full hermetic
+  suite without the test DSN: `444 passed, 16 skipped`.
 
 
 
