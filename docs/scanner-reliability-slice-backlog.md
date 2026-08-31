@@ -550,6 +550,75 @@ is **not** closed. Next card is **3I-D2** (prepare-only Diagnosis adapter).
 `tests/test_scan_diagnosis_snapshot.py`,
 `tests/test_scan_diagnosis_snapshot_postgres_integration.py`
 
+---
+
+## Card 3I-D2 — Prepare-only Diagnosis adapter
+
+**Parent stakeholder step:** 3I (Diagnosis beat 2)
+**Status:** Complete
+**Mirrors:** 3I-J2 `JuryStageExecutor` / 3G2 `IntentStageExecutor`
+
+### In scope
+
+- New `backend/scan_diagnosis_checkpoint.py` with:
+  - `build_diagnosis_input_projection(...)` from a verified 3I-D1 snapshot plus
+    the hydrated passed Jury checkpoint.
+  - `build_diagnosis_checkpoint(...)` from that projection plus a
+    caller-supplied Diagnosis result mapping.
+- New `DiagnosisStageExecutor` in `backend/scan_diagnosis_adapter.py`.
+- `execute(lease)`:
+  1. reject any stage other than `diagnosis`
+  2. call only `load_verified_diagnosis_inputs`
+  3. build the 3I-D2 projection
+  4. wrap existing Jury output into a Diagnosis result without calling a model
+     (injectable analyzer; default is an empty valid payload)
+  5. return `StageExecutionResult` with the checkpoint proposal
+- Projection may hold the compact Jury result as adapter-facing input. The
+  checkpoint stores refs and a compact Diagnosis result only:
+  `diagnostic_summary`, `evidence_based_risks`, `reality_score`, `archetype`.
+- `next_stage` metadata may name `foresight` when the gate passed, but only as
+  a proposal field. Nothing is queued.
+- Adapter has no `complete_step` / persist / claim method.
+- Malformed Diagnosis output yields `validation_failed` and is not stored.
+
+### Deliberate exclusions
+
+- Do not call `main.py` scan orchestration, models, scrape, Brave, Firecrawl,
+  or Coresignal.
+- Do not generate Foresight, Strategic Synthesis, or Verification.
+- Do not write PostgreSQL or add a migration.
+- No database transition: after `execute`, the diagnosis step remains leased
+  and `scan_checkpoints` has no new Diagnosis row and no `foresight` step.
+- No Supervisor registration, `POST /scan` change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_diagnosis_checkpoint.py` (hermetic): deterministic
+  projection from snapshot-bound Jury checkpoint; added/omitted/tampered Jury
+  checkpoint cannot project; checkpoint hashes are stable; snapshot has no
+  Jury finding text/raw bytes; malformed Diagnosis result cannot pass.
+- `tests/test_scan_diagnosis_adapter.py` (hermetic): snapshot-only inputs;
+  default wrap returns a passed empty valid Diagnosis; wrong stage rejected;
+  malformed injected result cannot name `foresight`; no persist method.
+- `tests/test_scan_diagnosis_adapter_postgres_integration.py`: persist 3I-D1
+  snapshot, claim a `diagnosis` lease, run the adapter, assert run/step
+  unchanged, Diagnosis checkpoint count is 0, and no `foresight` step exists.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Same class of proof as 3I-J2: preparation reads durable Jury output and
+proposes Diagnosis output without moving the state machine. Phase 3 is **not**
+closed. Next card is **3I-D3** (Diagnosis fenced commit + reclaim).
+
+### Likely files
+
+`backend/scan_diagnosis_checkpoint.py`, `backend/scan_diagnosis_adapter.py`,
+`tests/test_scan_diagnosis_checkpoint.py`,
+`tests/test_scan_diagnosis_adapter.py`,
+`tests/test_scan_diagnosis_adapter_postgres_integration.py`
+
 Phase 3 exit gate stays the plan's gate: restart after every major stage
 resumes without re-upload, lost lineage, skipped gate, or mutated snapshot.
 
@@ -605,13 +674,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-D2 from docs/scanner-reliability-slice-backlog.md
-(prepare-only Diagnosis adapter). Do not start Foresight, Synthesis,
+Specify then implement exactly slice 3I-D3 from docs/scanner-reliability-slice-backlog.md
+(Diagnosis fenced commit + reclaim). Do not start Foresight, Synthesis,
 Verification, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-D2 exit evidence is recorded.
+3I-D3 exit evidence is recorded.
 ```
 
-After 3I-D2 merges, replace `3I-D2` with the next specified card in that prompt.
+After 3I-D3 merges, replace `3I-D3` with the next specified card in that prompt.
 Do not accumulate open cards in one run.

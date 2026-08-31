@@ -29,10 +29,11 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-D2 — prepare-only Diagnosis adapter** (specify after
-this evidence; do not implement in the same change as 3I-D1). Do not start
+Immediate next card: **3I-D3 — Diagnosis fenced commit + reclaim** (specify after
+this evidence; do not implement in the same change as 3I-D2). Do not start
 Foresight, Supervisor execution, or `POST /scan`. Cards **3G1**, **3G2**,
-**3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**, and **3I-D1** are complete.
+**3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, and **3I-D2**
+are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -610,7 +611,7 @@ before a Diagnosis adapter is allowed to use it:
 - Diagnosis has no separate retrieval/candidate store. It does not acquire
   sources; the passed Jury checkpoint is the durable input.
 
-Phase 3 is **not** closed. The next bounded dependency is **3I-D2 — prepare-only
+Phase 3 is **not** closed. The next bounded dependency was **3I-D2 — prepare-only
 Diagnosis adapter**. Do not start Foresight, Synthesis, Verification, or
 request handoff from this slice.
 
@@ -618,6 +619,42 @@ Verification evidence:
 
 - Diagnosis input snapshot: [89b7e3c](https://github.com/jorieskolin-creator/Railway-The-Scanner/commit/89b7e3c).
 - Duplicate-definition guard passed; 127 focused trust contracts passed; four new hermetic 3I-D1 contracts passed. Two disposable PostgreSQL 3I-D1 durability contracts are added to CI (pending-step attach without claim plus exact hydrate; tampered manifest and swapped Jury hash rejected). Full hermetic suite without the test DSN: `428 passed, 14 skipped`.
+
+
+## Slice 3I-D2 — prepare-only Diagnosis adapter
+
+Diagnosis now has a prepare-only adapter while execution remains inactive:
+
+- `DiagnosisStageExecutor` reads only `load_verified_diagnosis_inputs`, builds a
+  `scanner.diagnosis-projection/v1` view from the 3I-D1 snapshot, and wraps the
+  compact Jury result into a Diagnosis proposal without calling a model.
+- It returns a `StageExecutionResult` carrying a `scanner.diagnosis/v1`
+  checkpoint proposal. `next_stage` may name `foresight` when the gate passed,
+  but only as metadata. Nothing is queued or committed. Malformed Diagnosis
+  output yields `validation_failed`.
+- Compact Jury findings exist only on the projection. The checkpoint stores
+  refs and a compact Diagnosis result (`diagnostic_summary`,
+  `evidence_based_risks`, `reality_score`, `archetype`); it does not copy Jury
+  quotes, extracts, raw bytes, or Intent payload.
+- The adapter has no claim, persist, or `complete_step` method. It does not
+  import `main.py`, register with FastAPI, or change `POST /scan`.
+- Its PostgreSQL contract proves preparation can read a leased `diagnosis`
+  step and leave that step leased, with no Diagnosis checkpoint row and no
+  `foresight` step.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-D3 — Diagnosis
+fenced commit + reclaim**. Do not start Foresight, Synthesis, Verification, or
+request handoff from this slice.
+
+Verification evidence:
+
+- Prepare-only Diagnosis adapter tests: ten new hermetic 3I-D2 contracts passed
+  (`tests/test_scan_diagnosis_checkpoint.py`,
+  `tests/test_scan_diagnosis_adapter.py`). One disposable PostgreSQL 3I-D2
+  contract is added to CI (leased `diagnosis` unchanged, no Diagnosis
+  checkpoint row, no `foresight` step). Duplicate-definition guard passed; 127
+  focused trust contracts passed. Full hermetic suite without the test DSN:
+  `438 passed, 15 skipped`.
 
 
 
