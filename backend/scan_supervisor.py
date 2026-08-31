@@ -47,6 +47,10 @@ class JuryInputSnapshotIntegrityError(RuntimeError):
     """Raised when an immutable Jury input manifest is malformed or mismatched."""
 
 
+class DiagnosisInputSnapshotIntegrityError(RuntimeError):
+    """Raised when an immutable Diagnosis input manifest is malformed or mismatched."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -217,6 +221,27 @@ class JuryInputSnapshot:
     @property
     def snapshot_ref(self) -> str:
         return f"jury-input://scan/{self.snapshot_id}"
+
+
+@dataclass(frozen=True)
+class DiagnosisInputSnapshot:
+    """Immutable manifest binding one Diagnosis attempt to a passed Jury checkpoint.
+
+    It contains only the upstream Jury checkpoint identity. It has no Company
+    Evidence, Foresight, claim-support, or publication meaning.
+    """
+
+    snapshot_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    contract_version: str
+    input_hash: str
+    manifest: Mapping[str, Any]
+
+    @property
+    def snapshot_ref(self) -> str:
+        return f"diagnosis-input://scan/{self.snapshot_id}"
 
 
 @dataclass(frozen=True)
@@ -407,7 +432,20 @@ def _jury_manifest(value: Any) -> Mapping[str, Any]:
     return dict(raw_value)
 
 
-def _source_metadata(value: Any) -> Mapping[str, Any]:
+def _diagnosis_manifest(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input manifest is not valid JSON."
+            ) from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise DiagnosisInputSnapshotIntegrityError(
+            "Diagnosis input manifest must be a JSON-safe mapping."
+        )
+    return dict(raw_value)
     raw_value = value
     if isinstance(raw_value, str):
         try:
@@ -1531,6 +1569,180 @@ class ScanRepository:
         from scan_jury_snapshot import validate_jury_input_snapshot_manifest
 
         validate_jury_input_snapshot_manifest(snapshot)
+
+    def persist_diagnosis_input_snapshot(
+        self,
+        *,
+        snapshot: DiagnosisInputSnapshot,
+    ) -> Mapping[str, Any]:
+        """Persist one immutable Diagnosis input manifest without stage execution."""
+
+        self._validate_diagnosis_input_snapshot(snapshot)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO diagnosis_input_snapshots (
+                    snapshot_id, run_id, stage_name, attempt, contract_version,
+                    input_hash, manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT DO NOTHING
+                RETURNING snapshot_id, run_id, stage_name, attempt,
+                          contract_version, input_hash, manifest
+                """,
+                (
+                    snapshot.snapshot_id,
+                    snapshot.run_id,
+                    snapshot.stage_name,
+                    snapshot.attempt,
+                    snapshot.contract_version,
+                    snapshot.input_hash,
+                    _json(snapshot.manifest),
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT snapshot_id, run_id, stage_name, attempt,
+                           contract_version, input_hash, manifest
+                    FROM diagnosis_input_snapshots
+                    WHERE snapshot_id = %s
+                       OR (run_id = %s AND stage_name = %s AND attempt = %s)
+                    ORDER BY snapshot_id = %s DESC
+                    LIMIT 1
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.run_id,
+                        snapshot.stage_name,
+                        snapshot.attempt,
+                        snapshot.snapshot_id,
+                    ),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError(
+                        "Idempotent Diagnosis input snapshot disappeared before it could be read."
+                    )
+                expected = {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "run_id": snapshot.run_id,
+                    "stage_name": snapshot.stage_name,
+                    "attempt": snapshot.attempt,
+                    "contract_version": snapshot.contract_version,
+                    "input_hash": snapshot.input_hash,
+                    "manifest": dict(snapshot.manifest),
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "Diagnosis input snapshot already exists for different immutable input."
+                    )
+            return stored
+
+    def load_diagnosis_input_snapshot(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> DiagnosisInputSnapshot:
+        """Load and validate a persisted Diagnosis input manifest."""
+
+        if not run_id or stage_name != "diagnosis" or attempt < 1:
+            raise ValueError("run_id, stage_name='diagnosis', and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_id, run_id, stage_name, attempt,
+                       contract_version, input_hash, manifest
+                FROM diagnosis_input_snapshots
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            raise KeyError(f"Unknown Diagnosis input snapshot: {run_id}/{stage_name}/{attempt}")
+        snapshot = DiagnosisInputSnapshot(
+            snapshot_id=str(row["snapshot_id"]),
+            run_id=str(row["run_id"]),
+            stage_name=str(row["stage_name"]),
+            attempt=int(row["attempt"]),
+            contract_version=str(row["contract_version"]),
+            input_hash=str(row["input_hash"]),
+            manifest=_diagnosis_manifest(row.get("manifest")),
+        )
+        self._validate_diagnosis_input_snapshot(snapshot)
+        return snapshot
+
+    def load_verified_diagnosis_inputs(
+        self,
+        *,
+        run_id: str,
+        attempt: int,
+    ) -> tuple[DiagnosisInputSnapshot, ScanCheckpoint]:
+        """Hydrate only the Jury checkpoint that exactly matches the manifest."""
+
+        snapshot = self.load_diagnosis_input_snapshot(
+            run_id=run_id,
+            stage_name="diagnosis",
+            attempt=attempt,
+        )
+        jury_ref = snapshot.manifest.get("jury_checkpoint_ref")
+        if not isinstance(jury_ref, Mapping):
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input snapshot is missing its Jury checkpoint ref."
+            )
+        try:
+            jury_attempt = int(jury_ref.get("attempt"))
+        except (TypeError, ValueError) as error:
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input snapshot Jury checkpoint attempt is invalid."
+            ) from error
+        checkpoint = self.load_checkpoint(
+            run_id=run_id,
+            stage_name="jury_analysis",
+            attempt=jury_attempt,
+        )
+        if checkpoint is None:
+            raise DiagnosisInputSnapshotIntegrityError(
+                f"Unknown Jury checkpoint for Diagnosis input: {run_id}/jury_analysis/{jury_attempt}"
+            )
+        from scan_diagnosis_snapshot import assert_diagnosis_input_snapshot_matches
+
+        assert_diagnosis_input_snapshot_matches(
+            snapshot,
+            jury_checkpoint=checkpoint,
+        )
+        return snapshot, checkpoint
+
+    def _validate_diagnosis_input_snapshot(self, snapshot: DiagnosisInputSnapshot) -> None:
+        if not all(
+            (
+                snapshot.snapshot_id,
+                snapshot.run_id,
+                snapshot.contract_version,
+                snapshot.input_hash,
+            )
+        ):
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input snapshot identity fields are required."
+            )
+        if snapshot.stage_name != "diagnosis" or snapshot.attempt < 1:
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input snapshot must bind one positive diagnosis attempt."
+            )
+        if not _is_sha256_digest(snapshot.input_hash):
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input snapshot hash must be a SHA-256 digest."
+            )
+        if not isinstance(snapshot.manifest, Mapping) or not _json_safe(snapshot.manifest):
+            raise DiagnosisInputSnapshotIntegrityError(
+                "Diagnosis input manifest must be a JSON-safe mapping."
+            )
+        from scan_diagnosis_snapshot import validate_diagnosis_input_snapshot_manifest
+
+        validate_diagnosis_input_snapshot_manifest(snapshot)
 
     def claim_next_step(
         self,
