@@ -830,6 +830,66 @@ closed. Next card is **3I-F3** (Foresight fenced commit + reclaim). Specify
 
 ---
 
+## Card 3I-F3 — Foresight fenced commit + reclaim
+
+**Parent stakeholder step:** 3I (Foresight beat 3)
+**Status:** Complete
+**Mirrors:** 3I-D3 `commit_diagnosis_stage` / 3I-J3 `commit_jury_stage` / 3H `commit_intent_stage`
+
+### In scope
+
+- New module `backend/scan_foresight_commit.py` with `commit_foresight_stage`.
+- Persist a passed 3I-F2 proposal with existing `complete_step_with_checkpoint`.
+- Queue only the already-defined next stage name `strategic_synthesis`.
+- Stale fencing token rolls back the Foresight checkpoint insert and does not
+  advance the run.
+- Process-kill / lease-reclaim proof for the `foresight` step, reusing the
+  3I-D3 disposable-PostgreSQL pattern.
+- Restart from the Foresight checkpoint must not re-hash different inputs or
+  skip the Foresight gate. Identical replay of the same passed checkpoint is
+  idempotent.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Strategic Synthesis.
+
+### Deliberate exclusions
+
+- No Strategic Synthesis adapter, snapshot, or cognitive call.
+- No Verification wrapping.
+- No Supervisor loop registration.
+- No `POST /scan` switch.
+- No Railway migration/enablement.
+- No scrape, Brave, Firecrawl, Coresignal, models, `generate_foresight`,
+  `foresight_harvester`, `kb_versions`, or `main.py` scan orchestration.
+- No Phase 4 envelope validator beyond what 3I-F2 already stored.
+
+### Tests
+
+- Hermetic: passed proposal queues `strategic_synthesis` metadata through the
+  commit helper; identical replay does not complete again; a different existing
+  checkpoint is rejected; malformed/blocked proposal cannot be committed;
+  default wrap fixture remains unchanged; module source does not register live
+  paths or generate Foresight.
+- PostgreSQL: happy-path commit queues `strategic_synthesis`; stale owner
+  cannot commit and reclaiming owner can; replay of the same passed checkpoint
+  is idempotent; malformed/blocked proposal cannot complete the step; restart
+  reload keeps Foresight hashes and the passed gate, and tampered Diagnosis
+  input cannot hydrate.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Foresight is the fourth cognitive stage with a crash-safe durable boundary.
+Phase 3 is **not** closed. Next work is **3I-S1** (Strategic Synthesis input
+snapshot), written after 3I-F3 evidence exists — not in this slice.
+
+### Likely files
+
+`backend/scan_foresight_commit.py`, `tests/test_scan_foresight_commit.py`,
+`tests/test_scan_foresight_commit_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -880,13 +940,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-F3 from docs/scanner-reliability-slice-backlog.md
-(Foresight fenced commit + reclaim). Do not start Strategic Synthesis,
-Verification, Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-S1 from docs/scanner-reliability-slice-backlog.md
+(Strategic Synthesis input snapshot). Do not start a Synthesis adapter,
+Synthesis commit, Verification, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-F3 exit evidence is recorded.
+3I-S1 exit evidence is recorded.
 ```
 
-After 3I-F3 merges, replace `3I-F3` with the next specified card in that prompt.
+After 3I-S1 merges, replace `3I-S1` with the next specified card in that prompt.
 Do not accumulate open cards in one run.
