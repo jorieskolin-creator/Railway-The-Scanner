@@ -956,6 +956,84 @@ implement it here.
 
 ---
 
+## Card 3I-S2 — Prepare-only Strategic Synthesis adapter
+
+**Parent stakeholder step:** 3I (Strategic Synthesis beat 2)
+**Status:** Complete
+**Mirrors:** 3I-F2 `ForesightStageExecutor` / 3I-D2 `DiagnosisStageExecutor`
+
+### In scope
+
+- New `backend/scan_synthesis_checkpoint.py` with:
+  - `build_synthesis_input_projection(...)` from a verified 3I-S1 snapshot plus
+    the hydrated passed Foresight checkpoint.
+  - `build_synthesis_checkpoint(...)` from that projection plus a
+    caller-supplied Synthesis result mapping.
+- New `SynthesisStageExecutor` in `backend/scan_synthesis_adapter.py`.
+- `execute(lease)`:
+  1. reject any stage other than `strategic_synthesis`
+  2. call only `load_verified_synthesis_inputs`
+  3. build the 3I-S2 projection
+  4. wrap existing Foresight output into a Synthesis result without calling a
+     model (injectable analyzer; default is an empty valid payload)
+  5. return `StageExecutionResult` with the checkpoint proposal
+- Projection may hold the compact Foresight result as adapter-facing input.
+  The checkpoint stores refs and a compact Synthesis result only:
+  `strategic_synthesis`. Foresight KB records, Foresight payload text,
+  Diagnosis payload, Jury findings, and extracted text are not stored on the
+  checkpoint.
+- `next_stage` metadata may name `verification` when the gate passed, but only
+  as a proposal field. Nothing is queued.
+- Adapter has no `complete_step` / persist / claim method.
+- Malformed Synthesis output yields `validation_failed` and is not stored.
+
+### Deliberate exclusions
+
+- Do not call Strategic Synthesis generation, `main.py` scan orchestration,
+  models, scrape, Brave, Firecrawl, Coresignal, `generate_foresight`,
+  `strategic_foresight`, or `foresight_harvester`.
+- Do not persist `kb_versions` or copy Foresight KB content into the run.
+- Do not wrap Verification.
+- Do not write PostgreSQL or add a migration.
+- No database transition: after `execute`, the `strategic_synthesis` step
+  remains leased and `scan_checkpoints` has no new Synthesis row and no
+  `verification` step.
+- No Synthesis fenced commit (3I-S3), Supervisor registration, `POST /scan`
+  change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_synthesis_checkpoint.py` (hermetic): deterministic
+  projection from snapshot-bound Foresight checkpoint; added/omitted/tampered
+  Foresight checkpoint cannot project; checkpoint hashes are stable; snapshot
+  has no Foresight/Diagnosis/Jury/KB text or raw bytes; malformed Synthesis
+  result cannot pass.
+- `tests/test_scan_synthesis_adapter.py` (hermetic): snapshot-only inputs;
+  default wrap returns a passed empty valid Synthesis; wrong stage rejected;
+  malformed injected result cannot name `verification`; no persist method.
+- `tests/test_scan_synthesis_adapter_postgres_integration.py`: persist 3I-S1
+  snapshot, claim a `strategic_synthesis` lease, run the adapter, assert
+  run/step unchanged, Synthesis checkpoint count is 0, and no `verification`
+  step exists.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Same class of proof as 3I-F2: preparation reads durable Foresight output and
+proposes Synthesis output without moving the state machine. Phase 3 is **not**
+closed. Next card is **3I-S3** (Strategic Synthesis fenced commit + reclaim).
+Specify 3I-S3 after this evidence; do not implement it here.
+
+### Likely files
+
+`backend/scan_synthesis_checkpoint.py`, `backend/scan_synthesis_adapter.py`,
+`tests/test_scan_synthesis_checkpoint.py`,
+`tests/test_scan_synthesis_adapter.py`,
+`tests/test_scan_synthesis_adapter_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -1006,13 +1084,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-S2 from docs/scanner-reliability-slice-backlog.md
-(prepare-only Strategic Synthesis adapter). Do not start a Synthesis commit,
-Verification, Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-S3 from docs/scanner-reliability-slice-backlog.md
+(Strategic Synthesis fenced commit + reclaim). Do not start Verification,
+Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-S2 exit evidence is recorded.
+3I-S3 exit evidence is recorded.
 ```
 
-After 3I-S2 merges, replace `3I-S2` with the next specified card in that prompt.
+After 3I-S3 merges, replace `3I-S3` with the next specified card in that prompt.
 Do not accumulate open cards in one run.
