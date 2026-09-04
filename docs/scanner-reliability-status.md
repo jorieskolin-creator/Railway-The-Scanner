@@ -29,13 +29,12 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-F2 — Prepare-only Foresight adapter** (specify after
-this evidence; do not implement in the same change as 3I-F1). Do not start
-Foresight wrapping beyond the input snapshot, Synthesis, Verification,
-Supervisor execution, or `POST /scan`. Cards **3G1**, **3G2**, **3H**,
-**3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**,
-and **3I-F1** are complete. The post-3I-D3 `postgres-supervisor-contracts`
-NameError hotfix is merged.
+Immediate next card: **3I-F3 — Foresight fenced commit + reclaim** (specify
+after this evidence; do not implement in the same change as 3I-F2). Do not
+start Strategic Synthesis, Verification, Supervisor execution, or `POST /scan`.
+Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
+**3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, and **3I-F2** are complete. The
+post-3I-D3 `postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
 
@@ -745,6 +744,42 @@ Verification evidence:
 - Two disposable PostgreSQL 3I-F1 contracts passed (persist without claiming,
   exact hydrate, tampered manifest and swapped Diagnosis hash rejected). Local
   replay of `postgres-supervisor-contracts` including the new file: `40 passed`.
+
+
+## Slice 3I-F2 — Prepare-only Foresight adapter
+
+Foresight can now be prepared from the verified Diagnosis checkpoint without
+moving the state machine:
+
+- `build_foresight_input_projection` binds the 3I-F1 snapshot to the compact
+  Diagnosis result. `build_foresight_checkpoint` stores refs and a compact
+  Foresight result only (`dimension_forces`, `cross_impact_chain`,
+  `scenarios`, `climate_exposure`).
+- `ForesightStageExecutor` hydrates only `load_verified_foresight_inputs` and
+  wraps Diagnosis output into an empty valid Foresight payload. It does not
+  call `generate_foresight`, the harvester, or models.
+- `next_stage` may name `strategic_synthesis` when the gate passed, but only as
+  proposal metadata. The adapter has no persist, claim, or complete method.
+- Malformed Foresight output yields `validation_failed` and cannot name
+  Synthesis. Foresight KB records, Diagnosis payload text, and extracted text
+  are not stored on the checkpoint.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-F3 — Foresight
+fenced commit + reclaim**. Do not start Strategic Synthesis, Verification, or
+request handoff from this slice.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Ten new hermetic 3I-F2 contracts passed
+  (`tests/test_scan_foresight_checkpoint.py`,
+  `tests/test_scan_foresight_adapter.py`). Full hermetic suite without the
+  test DSN: `460 passed, 41 skipped`.
+- One disposable PostgreSQL 3I-F2 contract passed (leased `foresight`
+  unchanged, no Foresight checkpoint row, no `strategic_synthesis` step).
+  Local replay of `postgres-supervisor-contracts` including the new file:
+  `41 passed`.
 
 
 
