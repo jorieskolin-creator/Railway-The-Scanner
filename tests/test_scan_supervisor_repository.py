@@ -17,8 +17,10 @@ from scan_supervisor import (  # noqa: E402
     ScanRepository,
     ScanSupervisorConfigurationError,
     ScanSupervisorSettings,
+    SourceRetrievalIntegrityError,
     StaleLeaseError,
     StepLease,
+    _source_metadata,
 )
 
 
@@ -187,3 +189,21 @@ def test_execution_migration_keeps_operational_state_separate_from_evidence():
     assert "fencing_token bigint not null" in migration
     assert "evidence_records" not in migration
     assert "foresight_signals" not in migration
+
+
+def test_source_metadata_helper_parses_mapping_and_json_string():
+    assert _source_metadata({"provider": "test", "content_length": 39}) == {
+        "provider": "test",
+        "content_length": 39,
+    }
+    assert _source_metadata('{"provider": "test", "content_length": 39}') == {
+        "provider": "test",
+        "content_length": 39,
+    }
+
+
+def test_source_metadata_helper_rejects_invalid_payloads():
+    with pytest.raises(SourceRetrievalIntegrityError, match="not valid JSON"):
+        _source_metadata("{")
+    with pytest.raises(SourceRetrievalIntegrityError, match="JSON-safe mapping"):
+        _source_metadata(["not", "a", "mapping"])

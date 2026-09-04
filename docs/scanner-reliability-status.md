@@ -33,7 +33,8 @@ Immediate next card: **3I-F1 — Foresight input snapshot** (specify after this
 evidence; do not implement in the same change as 3I-D3). Do not start Foresight
 wrapping, Synthesis, Verification, Supervisor execution, or `POST /scan`.
 Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
-**3I-D1**, **3I-D2**, and **3I-D3** are complete.
+**3I-D1**, **3I-D2**, and **3I-D3** are complete. The post-3I-D3
+`postgres-supervisor-contracts` NameError is a CI hotfix, not a product slice.
 
 ## Slice 0A — baseline integrity
 
@@ -685,6 +686,27 @@ Verification evidence:
   durability contracts are added to CI (happy-path queue, stale reclaim,
   identical replay, malformed rejection, restart hash/gate). Full hermetic
   suite without the test DSN: `444 passed, 16 skipped`.
+
+
+## CI hotfix — restore `_source_metadata` on `reliability-v2`
+
+This is not a product slice and does not change cognitive flow, `/scan`,
+Supervisor enablement, or Railway settings.
+
+After 3I-D1 (`89b7e3c`), `_diagnosis_manifest` replaced the
+`_source_metadata` definition while leaving that helper's body as unreachable
+code after `return`. `load_source_retrievals` still called `_source_metadata`,
+so disposable PostgreSQL contracts failed with `NameError` on every
+`reliability-v2` push from 3I-D1 through 3I-D3. Hermetic tests did not hit
+that load path, which is why focused-contracts stayed green and Railway
+Wait-for-CI skipped.
+
+This hotfix restores `_source_metadata` as its own function and adds two
+hermetic repository contracts so focused CI fails if the helper disappears
+again. It does not wrap Foresight or start 3I-F1.
+
+Verification evidence: recorded after local hermetic proof and GitHub
+Reliability contracts on this branch.
 
 
 
