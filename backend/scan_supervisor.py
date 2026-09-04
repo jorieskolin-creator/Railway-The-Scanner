@@ -446,6 +446,9 @@ def _diagnosis_manifest(value: Any) -> Mapping[str, Any]:
             "Diagnosis input manifest must be a JSON-safe mapping."
         )
     return dict(raw_value)
+
+
+def _source_metadata(value: Any) -> Mapping[str, Any]:
     raw_value = value
     if isinstance(raw_value, str):
         try:
