@@ -890,6 +890,72 @@ snapshot), written after 3I-F3 evidence exists — not in this slice.
 
 ---
 
+## Card 3I-S1 — Strategic Synthesis input snapshot from Foresight checkpoint
+
+**Parent stakeholder step:** 3I (Strategic Synthesis beat 1)
+**Status:** Complete
+**Mirrors:** 3I-F1 Foresight input snapshot
+
+Strategic Synthesis does not get a 3E/3I-J0 retrieval beat. It does not
+acquire sources and it does not copy Foresight KB content into the run. Its
+durable input is the passed Foresight checkpoint already queued by 3I-F3.
+
+### In scope
+
+- New module `backend/scan_synthesis_snapshot.py`.
+- `010_synthesis_input_snapshots.sql` stores one immutable manifest per
+  `run / strategic_synthesis / attempt`. The manifest contains only the passed
+  Foresight checkpoint identity: id, ref, attempt, contract, input/output
+  hashes. Extracted text, raw bytes, Foresight result payload, Diagnosis
+  result payload, Jury findings, Intent results, candidate excerpts, and
+  Foresight KB records are not copied into the manifest.
+- Deterministic ID and input hash. Replays are idempotent; a different
+  manifest for the same attempt is rejected.
+- Hydration reloads the Foresight checkpoint through the hash-verifying
+  repository path and requires an exact manifest match. A non-passed,
+  wrong-run, or tampered Foresight checkpoint cannot become a best-effort
+  Synthesis payload.
+- Persist/load attach without claiming the `strategic_synthesis` lease.
+- Thin `ScanRepository` types/methods only. No Synthesis adapter, commit, or
+  cognitive call.
+
+### Deliberate exclusions
+
+- Do not call Strategic Synthesis generation, `main.py` scan orchestration,
+  models, `generate_foresight`, `strategic_foresight`, or `foresight_harvester`.
+- Do not scrape, acquire, or invent Synthesis-stage retrievals/candidates.
+- Do not persist KB content or create a `kb_versions` table.
+- Do not start a prepare-only Synthesis adapter or fenced commit (3I-S2–S3).
+- Do not wrap Verification.
+- No Supervisor registration, `POST /scan` change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_synthesis_snapshot.py` (hermetic): deterministic refs-only
+  manifest; rejects non-passed / wrong-run / Diagnosis-stage checkpoints;
+  added/omitted/tampered Foresight checkpoint cannot match.
+- `tests/test_scan_synthesis_snapshot_postgres_integration.py`: persist on the
+  pending `strategic_synthesis` step created by 3I-F3 without claiming; exact
+  hydrate; tampered manifest and swapped Foresight hashes rejected.
+- Add the PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml`.
+
+### Exit evidence
+
+Strategic Synthesis can be bound to exact Foresight output before an adapter
+exists. Phase 3 is **not** closed. Next card is **3I-S2** (prepare-only
+Strategic Synthesis adapter). Specify 3I-S2 after this evidence; do not
+implement it here.
+
+### Likely files
+
+`backend/migrations/010_synthesis_input_snapshots.sql`,
+`backend/scan_synthesis_snapshot.py`, `backend/scan_supervisor.py`,
+`tests/test_scan_synthesis_snapshot.py`,
+`tests/test_scan_synthesis_snapshot_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -940,13 +1006,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-S1 from docs/scanner-reliability-slice-backlog.md
-(Strategic Synthesis input snapshot). Do not start a Synthesis adapter,
-Synthesis commit, Verification, Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-S2 from docs/scanner-reliability-slice-backlog.md
+(prepare-only Strategic Synthesis adapter). Do not start a Synthesis commit,
+Verification, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-S1 exit evidence is recorded.
+3I-S2 exit evidence is recorded.
 ```
 
-After 3I-S1 merges, replace `3I-S1` with the next specified card in that prompt.
+After 3I-S2 merges, replace `3I-S2` with the next specified card in that prompt.
 Do not accumulate open cards in one run.
