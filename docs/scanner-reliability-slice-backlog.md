@@ -684,6 +684,73 @@ written after 3I-D3 evidence exists — not in this slice.
 
 ---
 
+## Card 3I-F1 — Foresight input snapshot from Diagnosis checkpoint
+
+**Parent stakeholder step:** 3I (Foresight beat 1)
+**Status:** Complete
+**Mirrors:** 3I-D1 Diagnosis input snapshot
+
+Foresight does not get a 3E/3I-J0 retrieval beat in this card. It does not
+acquire company sources and it does not copy Foresight KB content into the
+run. Its durable input is the passed Diagnosis checkpoint already queued by
+3I-D3. Plan table `kb_versions` stays a later concern so this card cannot
+pull Phase 4 or wrap Foresight generation.
+
+### In scope
+
+- New module `backend/scan_foresight_snapshot.py`.
+- `009_foresight_input_snapshots.sql` stores one immutable manifest per
+  `run / foresight / attempt`. The manifest contains only the passed Diagnosis
+  checkpoint identity: id, ref, attempt, contract, input/output hashes.
+  Extracted text, raw bytes, Diagnosis result payload, Jury findings, Intent
+  results, candidate excerpts, and Foresight KB records are not copied into
+  the manifest.
+- Deterministic ID and input hash. Replays are idempotent; a different
+  manifest for the same attempt is rejected.
+- Hydration reloads the Diagnosis checkpoint through the hash-verifying
+  repository path and requires an exact manifest match. A non-passed,
+  wrong-run, or tampered Diagnosis checkpoint cannot become a best-effort
+  Foresight payload.
+- Persist/load attach without claiming the `foresight` lease.
+- Thin `ScanRepository` types/methods only. No Foresight adapter, commit, or
+  cognitive call.
+
+### Deliberate exclusions
+
+- Do not call `strategic_foresight`, `foresight_harvester`, `main.py` scan
+  orchestration, or models.
+- Do not scrape, acquire, or invent Foresight-stage retrievals/candidates.
+- Do not persist KB content or create a `kb_versions` table.
+- Do not start a prepare-only Foresight adapter or fenced commit (3I-F2–F3).
+- Do not wrap Strategic Synthesis or Verification.
+- No Supervisor registration, `POST /scan` change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_foresight_snapshot.py` (hermetic): deterministic refs-only
+  manifest; rejects non-passed / wrong-run / Jury-stage checkpoints;
+  added/omitted/tampered Diagnosis checkpoint cannot match.
+- `tests/test_scan_foresight_snapshot_postgres_integration.py`: persist on the
+  pending `foresight` step created by 3I-D3 without claiming; exact hydrate;
+  tampered manifest and swapped Diagnosis hashes rejected.
+- Add the PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml`.
+
+### Exit evidence
+
+Foresight can be bound to exact Diagnosis output before an adapter exists.
+Phase 3 is **not** closed. Next card is **3I-F2** (prepare-only Foresight
+adapter). Specify 3I-F2 after this evidence; do not implement it here.
+
+### Likely files
+
+`backend/migrations/009_foresight_input_snapshots.sql`,
+`backend/scan_foresight_snapshot.py`, `backend/scan_supervisor.py`,
+`tests/test_scan_foresight_snapshot.py`,
+`tests/test_scan_foresight_snapshot_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -734,13 +801,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-F1 from docs/scanner-reliability-slice-backlog.md
-(Foresight input snapshot). Do not start Foresight wrapping, Synthesis,
-Verification, Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-F2 from docs/scanner-reliability-slice-backlog.md
+(prepare-only Foresight adapter). Do not start Foresight fenced commit,
+Synthesis, Verification, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-F1 exit evidence is recorded.
+3I-F2 exit evidence is recorded.
 ```
 
-After 3I-F1 merges, replace `3I-F1` with the next specified card in that prompt.
+After 3I-F2 merges, replace `3I-F2` with the next specified card in that prompt.
 Do not accumulate open cards in one run.

@@ -51,6 +51,10 @@ class DiagnosisInputSnapshotIntegrityError(RuntimeError):
     """Raised when an immutable Diagnosis input manifest is malformed or mismatched."""
 
 
+class ForesightInputSnapshotIntegrityError(RuntimeError):
+    """Raised when an immutable Foresight input manifest is malformed or mismatched."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -242,6 +246,28 @@ class DiagnosisInputSnapshot:
     @property
     def snapshot_ref(self) -> str:
         return f"diagnosis-input://scan/{self.snapshot_id}"
+
+
+@dataclass(frozen=True)
+class ForesightInputSnapshot:
+    """Immutable manifest binding one Foresight attempt to a passed Diagnosis checkpoint.
+
+    It contains only the upstream Diagnosis checkpoint identity. It has no
+    Company Evidence, Foresight Knowledge Base content, claim-support, or
+    publication meaning.
+    """
+
+    snapshot_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    contract_version: str
+    input_hash: str
+    manifest: Mapping[str, Any]
+
+    @property
+    def snapshot_ref(self) -> str:
+        return f"foresight-input://scan/{self.snapshot_id}"
 
 
 @dataclass(frozen=True)
@@ -444,6 +470,22 @@ def _diagnosis_manifest(value: Any) -> Mapping[str, Any]:
     if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
         raise DiagnosisInputSnapshotIntegrityError(
             "Diagnosis input manifest must be a JSON-safe mapping."
+        )
+    return dict(raw_value)
+
+
+def _foresight_manifest(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input manifest is not valid JSON."
+            ) from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise ForesightInputSnapshotIntegrityError(
+            "Foresight input manifest must be a JSON-safe mapping."
         )
     return dict(raw_value)
 
@@ -1746,6 +1788,180 @@ class ScanRepository:
         from scan_diagnosis_snapshot import validate_diagnosis_input_snapshot_manifest
 
         validate_diagnosis_input_snapshot_manifest(snapshot)
+
+    def persist_foresight_input_snapshot(
+        self,
+        *,
+        snapshot: ForesightInputSnapshot,
+    ) -> Mapping[str, Any]:
+        """Persist one immutable Foresight input manifest without stage execution."""
+
+        self._validate_foresight_input_snapshot(snapshot)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO foresight_input_snapshots (
+                    snapshot_id, run_id, stage_name, attempt, contract_version,
+                    input_hash, manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT DO NOTHING
+                RETURNING snapshot_id, run_id, stage_name, attempt,
+                          contract_version, input_hash, manifest
+                """,
+                (
+                    snapshot.snapshot_id,
+                    snapshot.run_id,
+                    snapshot.stage_name,
+                    snapshot.attempt,
+                    snapshot.contract_version,
+                    snapshot.input_hash,
+                    _json(snapshot.manifest),
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT snapshot_id, run_id, stage_name, attempt,
+                           contract_version, input_hash, manifest
+                    FROM foresight_input_snapshots
+                    WHERE snapshot_id = %s
+                       OR (run_id = %s AND stage_name = %s AND attempt = %s)
+                    ORDER BY snapshot_id = %s DESC
+                    LIMIT 1
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.run_id,
+                        snapshot.stage_name,
+                        snapshot.attempt,
+                        snapshot.snapshot_id,
+                    ),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError(
+                        "Idempotent Foresight input snapshot disappeared before it could be read."
+                    )
+                expected = {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "run_id": snapshot.run_id,
+                    "stage_name": snapshot.stage_name,
+                    "attempt": snapshot.attempt,
+                    "contract_version": snapshot.contract_version,
+                    "input_hash": snapshot.input_hash,
+                    "manifest": dict(snapshot.manifest),
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "Foresight input snapshot already exists for different immutable input."
+                    )
+            return stored
+
+    def load_foresight_input_snapshot(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> ForesightInputSnapshot:
+        """Load and validate a persisted Foresight input manifest."""
+
+        if not run_id or stage_name != "foresight" or attempt < 1:
+            raise ValueError("run_id, stage_name='foresight', and a positive attempt are required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_id, run_id, stage_name, attempt,
+                       contract_version, input_hash, manifest
+                FROM foresight_input_snapshots
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            raise KeyError(f"Unknown Foresight input snapshot: {run_id}/{stage_name}/{attempt}")
+        snapshot = ForesightInputSnapshot(
+            snapshot_id=str(row["snapshot_id"]),
+            run_id=str(row["run_id"]),
+            stage_name=str(row["stage_name"]),
+            attempt=int(row["attempt"]),
+            contract_version=str(row["contract_version"]),
+            input_hash=str(row["input_hash"]),
+            manifest=_foresight_manifest(row.get("manifest")),
+        )
+        self._validate_foresight_input_snapshot(snapshot)
+        return snapshot
+
+    def load_verified_foresight_inputs(
+        self,
+        *,
+        run_id: str,
+        attempt: int,
+    ) -> tuple[ForesightInputSnapshot, ScanCheckpoint]:
+        """Hydrate only the Diagnosis checkpoint that exactly matches the manifest."""
+
+        snapshot = self.load_foresight_input_snapshot(
+            run_id=run_id,
+            stage_name="foresight",
+            attempt=attempt,
+        )
+        diagnosis_ref = snapshot.manifest.get("diagnosis_checkpoint_ref")
+        if not isinstance(diagnosis_ref, Mapping):
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input snapshot is missing its Diagnosis checkpoint ref."
+            )
+        try:
+            diagnosis_attempt = int(diagnosis_ref.get("attempt"))
+        except (TypeError, ValueError) as error:
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input snapshot Diagnosis checkpoint attempt is invalid."
+            ) from error
+        checkpoint = self.load_checkpoint(
+            run_id=run_id,
+            stage_name="diagnosis",
+            attempt=diagnosis_attempt,
+        )
+        if checkpoint is None:
+            raise ForesightInputSnapshotIntegrityError(
+                f"Unknown Diagnosis checkpoint for Foresight input: {run_id}/diagnosis/{diagnosis_attempt}"
+            )
+        from scan_foresight_snapshot import assert_foresight_input_snapshot_matches
+
+        assert_foresight_input_snapshot_matches(
+            snapshot,
+            diagnosis_checkpoint=checkpoint,
+        )
+        return snapshot, checkpoint
+
+    def _validate_foresight_input_snapshot(self, snapshot: ForesightInputSnapshot) -> None:
+        if not all(
+            (
+                snapshot.snapshot_id,
+                snapshot.run_id,
+                snapshot.contract_version,
+                snapshot.input_hash,
+            )
+        ):
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input snapshot identity fields are required."
+            )
+        if snapshot.stage_name != "foresight" or snapshot.attempt < 1:
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input snapshot must bind one positive foresight attempt."
+            )
+        if not _is_sha256_digest(snapshot.input_hash):
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input snapshot hash must be a SHA-256 digest."
+            )
+        if not isinstance(snapshot.manifest, Mapping) or not _json_safe(snapshot.manifest):
+            raise ForesightInputSnapshotIntegrityError(
+                "Foresight input manifest must be a JSON-safe mapping."
+            )
+        from scan_foresight_snapshot import validate_foresight_input_snapshot_manifest
+
+        validate_foresight_input_snapshot_manifest(snapshot)
 
     def claim_next_step(
         self,
