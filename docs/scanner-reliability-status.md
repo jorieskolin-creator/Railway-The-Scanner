@@ -705,8 +705,15 @@ This hotfix restores `_source_metadata` as its own function and adds two
 hermetic repository contracts so focused CI fails if the helper disappears
 again. It does not wrap Foresight or start 3I-F1.
 
-Verification evidence: recorded after local hermetic proof and GitHub
-Reliability contracts on this branch.
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Full hermetic suite without claiming GitHub CI yet: `446 passed, 16 skipped`
+  (two new `_source_metadata` contracts).
+- Local replay of `postgres-supervisor-contracts` (same file list as
+  `.github/workflows/reliability-contracts.yml`): `38 passed`. That job was
+  `28 failed, 10 passed` on `reliability-v2` HEAD `1e64fca`.
 
 
 
