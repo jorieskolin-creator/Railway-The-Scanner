@@ -29,12 +29,13 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-F1 — Foresight input snapshot** (specify after this
-evidence; do not implement in the same change as 3I-D3). Do not start Foresight
-wrapping, Synthesis, Verification, Supervisor execution, or `POST /scan`.
-Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
-**3I-D1**, **3I-D2**, and **3I-D3** are complete. The post-3I-D3
-`postgres-supervisor-contracts` NameError is a CI hotfix, not a product slice.
+Immediate next card: **3I-F2 — Prepare-only Foresight adapter** (specify after
+this evidence; do not implement in the same change as 3I-F1). Do not start
+Foresight wrapping beyond the input snapshot, Synthesis, Verification,
+Supervisor execution, or `POST /scan`. Cards **3G1**, **3G2**, **3H**,
+**3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**,
+and **3I-F1** are complete. The post-3I-D3 `postgres-supervisor-contracts`
+NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
 
@@ -714,6 +715,37 @@ Verification evidence:
 - Local replay of `postgres-supervisor-contracts` (same file list as
   `.github/workflows/reliability-contracts.yml`): `38 passed`. That job was
   `28 failed, 10 passed` on `reliability-v2` HEAD `1e64fca`.
+
+
+## Slice 3I-F1 — Foresight input snapshot from Diagnosis checkpoint
+
+Foresight can now be bound to exact Diagnosis output before an adapter exists:
+
+- `build_foresight_input_snapshot` stores only the passed Diagnosis checkpoint
+  identity (id, ref, attempt, contract, input/output hashes).
+- Persist/load attach to the pending `foresight` step queued by 3I-D3 without
+  claiming the lease.
+- Hydration reloads the Diagnosis checkpoint through the hash-verifying path
+  and rejects a non-passed, wrong-run, or tampered Diagnosis checkpoint.
+- The manifest does not copy Diagnosis result payload, Jury findings, extracted
+  text, or Foresight KB content. This slice does not wrap Foresight generation,
+  persist `kb_versions`, switch `POST /scan`, or register a Supervisor loop.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-F2 — Prepare-only
+Foresight adapter**. Do not start Foresight wrapping, Synthesis, Verification,
+or request handoff from this slice.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Four new hermetic 3I-F1 contracts passed
+  (`tests/test_scan_foresight_snapshot.py`). Full hermetic suite without the
+  test DSN: `450 passed, 40 skipped`.
+- Two disposable PostgreSQL 3I-F1 contracts passed (persist without claiming,
+  exact hydrate, tampered manifest and swapped Diagnosis hash rejected). Local
+  replay of `postgres-supervisor-contracts` including the new file: `40 passed`.
+
 
 
 
