@@ -735,8 +735,17 @@ Phase 3 is **not** closed. The next bounded dependency is **3I-F2 — Prepare-on
 Foresight adapter**. Do not start Foresight wrapping, Synthesis, Verification,
 or request handoff from this slice.
 
-Verification evidence: recorded after local hermetic and disposable PostgreSQL
-proof on this branch.
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Four new hermetic 3I-F1 contracts passed
+  (`tests/test_scan_foresight_snapshot.py`). Full hermetic suite without the
+  test DSN: `450 passed, 40 skipped`.
+- Two disposable PostgreSQL 3I-F1 contracts passed (persist without claiming,
+  exact hydrate, tampered manifest and swapped Diagnosis hash rejected). Local
+  replay of `postgres-supervisor-contracts` including the new file: `40 passed`.
+
 
 
 
