@@ -751,6 +751,85 @@ adapter). Specify 3I-F2 after this evidence; do not implement it here.
 
 ---
 
+## Card 3I-F2 — Prepare-only Foresight adapter
+
+**Parent stakeholder step:** 3I (Foresight beat 2)
+**Status:** Complete
+**Mirrors:** 3I-D2 `DiagnosisStageExecutor` / 3I-J2 `JuryStageExecutor`
+
+### In scope
+
+- New `backend/scan_foresight_checkpoint.py` with:
+  - `build_foresight_input_projection(...)` from a verified 3I-F1 snapshot plus
+    the hydrated passed Diagnosis checkpoint.
+  - `build_foresight_checkpoint(...)` from that projection plus a
+    caller-supplied Foresight result mapping.
+- New `ForesightStageExecutor` in `backend/scan_foresight_adapter.py`.
+- `execute(lease)`:
+  1. reject any stage other than `foresight`
+  2. call only `load_verified_foresight_inputs`
+  3. build the 3I-F2 projection
+  4. wrap existing Diagnosis output into a Foresight result without calling a
+     model, harvester, or `generate_foresight` (injectable analyzer; default is
+     an empty valid payload)
+  5. return `StageExecutionResult` with the checkpoint proposal
+- Projection may hold the compact Diagnosis result as adapter-facing input.
+  The checkpoint stores refs and a compact Foresight result only:
+  `dimension_forces`, `cross_impact_chain`, `scenarios`, `climate_exposure`.
+  Foresight KB records, Diagnosis payload text, Jury findings, and extracted
+  text are not stored on the checkpoint.
+- `next_stage` metadata may name `strategic_synthesis` when the gate passed,
+  but only as a proposal field. Nothing is queued.
+- Adapter has no `complete_step` / persist / claim method.
+- Malformed Foresight output yields `validation_failed` and is not stored.
+
+### Deliberate exclusions
+
+- Do not call `generate_foresight`, `strategic_foresight`, `foresight_harvester`,
+  `main.py` scan orchestration, models, scrape, Brave, Firecrawl, or Coresignal.
+- Do not persist `kb_versions` or copy Foresight KB content into the run.
+- Do not wrap Strategic Synthesis or Verification.
+- Do not write PostgreSQL or add a migration.
+- No database transition: after `execute`, the foresight step remains leased
+  and `scan_checkpoints` has no new Foresight row and no `strategic_synthesis`
+  step.
+- No Foresight fenced commit (3I-F3), Supervisor registration, `POST /scan`
+  change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_foresight_checkpoint.py` (hermetic): deterministic
+  projection from snapshot-bound Diagnosis checkpoint; added/omitted/tampered
+  Diagnosis checkpoint cannot project; checkpoint hashes are stable; snapshot
+  has no Diagnosis/Jury/KB text or raw bytes; malformed Foresight result
+  cannot pass.
+- `tests/test_scan_foresight_adapter.py` (hermetic): snapshot-only inputs;
+  default wrap returns a passed empty valid Foresight; wrong stage rejected;
+  malformed injected result cannot name `strategic_synthesis`; no persist
+  method.
+- `tests/test_scan_foresight_adapter_postgres_integration.py`: persist 3I-F1
+  snapshot, claim a `foresight` lease, run the adapter, assert run/step
+  unchanged, Foresight checkpoint count is 0, and no `strategic_synthesis`
+  step exists.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Same class of proof as 3I-D2: preparation reads durable Diagnosis output and
+proposes Foresight output without moving the state machine. Phase 3 is **not**
+closed. Next card is **3I-F3** (Foresight fenced commit + reclaim). Specify
+3I-F3 after this evidence; do not implement it here.
+
+### Likely files
+
+`backend/scan_foresight_checkpoint.py`, `backend/scan_foresight_adapter.py`,
+`tests/test_scan_foresight_checkpoint.py`,
+`tests/test_scan_foresight_adapter.py`,
+`tests/test_scan_foresight_adapter_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -801,13 +880,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-F2 from docs/scanner-reliability-slice-backlog.md
-(prepare-only Foresight adapter). Do not start Foresight fenced commit,
-Synthesis, Verification, Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-F3 from docs/scanner-reliability-slice-backlog.md
+(Foresight fenced commit + reclaim). Do not start Strategic Synthesis,
+Verification, Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-F2 exit evidence is recorded.
+3I-F3 exit evidence is recorded.
 ```
 
-After 3I-F2 merges, replace `3I-F2` with the next specified card in that prompt.
+After 3I-F3 merges, replace `3I-F3` with the next specified card in that prompt.
 Do not accumulate open cards in one run.

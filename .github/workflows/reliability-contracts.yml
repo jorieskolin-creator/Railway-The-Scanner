@@ -92,4 +92,5 @@ jobs:
             tests/test_scan_diagnosis_snapshot_postgres_integration.py \
             tests/test_scan_diagnosis_adapter_postgres_integration.py \
             tests/test_scan_diagnosis_commit_postgres_integration.py \
-            tests/test_scan_foresight_snapshot_postgres_integration.py
+            tests/test_scan_foresight_snapshot_postgres_integration.py \
+            tests/test_scan_foresight_adapter_postgres_integration.py
