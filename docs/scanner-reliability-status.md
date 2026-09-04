@@ -29,12 +29,12 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-S1 — Strategic Synthesis input snapshot** (specify
-after this evidence; do not implement in the same change as 3I-F3). Do not
-start a Synthesis adapter, Synthesis commit, Verification, Supervisor
-execution, or `POST /scan`. Cards **3G1**, **3G2**, **3H**, **3I-J0**,
-**3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**,
-**3I-F2**, and **3I-F3** are complete. The post-3I-D3
+Immediate next card: **3I-S2 — Prepare-only Strategic Synthesis adapter**
+(specify after this evidence; do not implement in the same change as 3I-S1).
+Do not start a Synthesis commit, Verification, Supervisor execution, or
+`POST /scan`. Cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**,
+**3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**, **3I-F3**,
+and **3I-S1** are complete. The post-3I-D3
 `postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
@@ -815,6 +815,39 @@ Verification evidence:
   queue, stale reclaim, identical replay, malformed rejection, restart
   hash/gate). Local replay of `postgres-supervisor-contracts` including the
   new file: `46 passed`.
+
+
+## Slice 3I-S1 — Strategic Synthesis input snapshot
+
+A pending `strategic_synthesis` attempt can now be bound to the passed
+Foresight checkpoint already queued by 3I-F3:
+
+- `build_synthesis_input_snapshot` stores only Foresight checkpoint identity
+  (id, ref, attempt, contract, input/output hashes) on a
+  `scanner.synthesis-input/v1` manifest.
+- Replay of the same manifest is idempotent. A different manifest for the
+  same attempt is rejected. Hydration reloads the Foresight checkpoint
+  through the hash-verifying repository path and requires an exact match.
+- Persist/load do not claim the `strategic_synthesis` lease.
+- This slice does not start a Synthesis adapter or commit, wrap Verification,
+  register a Supervisor, switch `POST /scan`, apply a Railway migration, or
+  copy Foresight KB content.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-S2 —
+Prepare-only Strategic Synthesis adapter**. Specify 3I-S2 after this
+evidence; do not implement it here.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Four new hermetic 3I-S1 contracts passed
+  (`tests/test_scan_synthesis_snapshot.py`). Full hermetic suite without the
+  test DSN: `470 passed, 48 skipped`.
+- Two disposable PostgreSQL 3I-S1 contracts passed (exact hydrate without
+  claiming; tampered manifest and swapped Foresight hash rejected). Local
+  replay of `postgres-supervisor-contracts` including the new file:
+  `48 passed`.
 
 
 
