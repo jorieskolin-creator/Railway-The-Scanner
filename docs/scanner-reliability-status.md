@@ -29,13 +29,13 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-V1 — Verification input snapshot**
-(specify after this evidence; do not implement in the same change as 3I-S3).
-Do not wrap Verification generation, do not register Verification (or later
+Immediate next card: **3I-V2 — Prepare-only Verification adapter**
+(specify after this evidence; do not implement in the same change as 3I-V1).
+Do not start a Verification commit, do not register Verification (or later
 stages) on the Supervisor, and do not reopen `POST /scan`. Cards
 **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
 **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**, **3I-F3**, **3I-S1**,
-**3I-S2**, and **3I-S3** are complete. The post-3I-D3
+**3I-S2**, **3I-S3**, and **3I-V1** are complete. The post-3I-D3
 `postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
@@ -921,5 +921,38 @@ Verification evidence:
   queue, stale reclaim, identical replay, malformed rejection, restart
   hash/gate). Local replay of `postgres-supervisor-contracts` including the
   new file: `54 passed`.
+
+
+## Slice 3I-V1 — Verification input snapshot
+
+A pending `verification` attempt can now be bound to the passed Strategic
+Synthesis checkpoint already queued by 3I-S3:
+
+- `build_verification_input_snapshot` stores only Synthesis checkpoint
+  identity (id, ref, attempt, contract, input/output hashes) on a
+  `scanner.verification-input/v1` manifest.
+- Replay of the same manifest is idempotent. A different manifest for the
+  same attempt is rejected. Hydration reloads the Synthesis checkpoint
+  through the hash-verifying repository path and requires an exact match.
+- Persist/load do not claim the `verification` lease.
+- This slice does not start a Verification adapter or commit, register a
+  Supervisor, switch `POST /scan`, apply a Railway migration, or copy
+  Foresight KB content.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-V2 —
+Prepare-only Verification adapter**. Specify 3I-V2 after this evidence; do
+not implement it here.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Four new hermetic 3I-V1 contracts passed
+  (`tests/test_scan_verification_snapshot.py`). Full hermetic suite without the
+  test DSN: `490 passed, 56 skipped`.
+- Two disposable PostgreSQL 3I-V1 contracts passed (exact hydrate without
+  claiming; tampered manifest and swapped Synthesis hash rejected). Local
+  replay of `postgres-supervisor-contracts` including the new file:
+  `56 passed`.
 
 
