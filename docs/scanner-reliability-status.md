@@ -29,12 +29,13 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-S3 — Strategic Synthesis fenced commit + reclaim**
-(specify after this evidence; do not implement in the same change as 3I-S2).
-Do not start Verification, Supervisor execution, or `POST /scan`. Cards
+Immediate next card: **3I-V1 — Verification input snapshot**
+(specify after this evidence; do not implement in the same change as 3I-S3).
+Do not wrap Verification generation, do not register Verification (or later
+stages) on the Supervisor, and do not reopen `POST /scan`. Cards
 **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
 **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**, **3I-F3**, **3I-S1**,
-and **3I-S2** are complete. The post-3I-D3
+**3I-S2**, and **3I-S3** are complete. The post-3I-D3
 `postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
@@ -887,5 +888,38 @@ Verification evidence:
   `49 passed`.
 
 
+## Slice 3I-S3 — Strategic Synthesis fenced commit + reclaim
+
+The prepare-only Synthesis proposal can now be committed under the current
+lease owner and fencing token:
+
+- `commit_synthesis_stage` persists a passed 3I-S2 checkpoint with existing
+  `complete_step_with_checkpoint` and queues only `verification`.
+- Identical replay of the same passed checkpoint is idempotent. A different
+  checkpoint for the same attempt is rejected. `validation_failed` proposals
+  cannot complete the step or queue Verification.
+- A stale fencing token cannot insert the Synthesis checkpoint. After lease
+  expiry a replacement owner can reclaim the `strategic_synthesis` step,
+  prepare again, and commit. Restart reload keeps Synthesis hashes and the
+  passed gate; tampered Foresight output cannot hydrate.
+- This slice does not register a Supervisor loop, switch `POST /scan`, apply a
+  Railway migration, or wrap Verification.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-V1 —
+Verification input snapshot**. Specify 3I-V1 after this evidence; do not
+implement it here. Do not start a Verification adapter, Verification commit,
+Supervisor registration, or request handoff from this slice.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Six new hermetic 3I-S3 contracts passed
+  (`tests/test_scan_synthesis_commit.py`). Full hermetic suite without the
+  test DSN: `486 passed, 54 skipped`.
+- Five disposable PostgreSQL 3I-S3 durability contracts passed (happy-path
+  queue, stale reclaim, identical replay, malformed rejection, restart
+  hash/gate). Local replay of `postgres-supervisor-contracts` including the
+  new file: `54 passed`.
 
 
