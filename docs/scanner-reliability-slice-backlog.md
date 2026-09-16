@@ -1034,6 +1034,132 @@ Specify 3I-S3 after this evidence; do not implement it here.
 
 ---
 
+## Card 3I-S3 — Strategic Synthesis fenced commit + reclaim
+
+**Parent stakeholder step:** 3I (Strategic Synthesis beat 3)
+**Status:** Complete
+**Mirrors:** 3I-F3 `commit_foresight_stage` / 3I-D3 `commit_diagnosis_stage`
+
+### In scope
+
+- New module `backend/scan_synthesis_commit.py` with `commit_synthesis_stage`.
+- Persist a passed 3I-S2 proposal with existing `complete_step_with_checkpoint`.
+- Queue only the already-defined next stage name `verification`.
+- Stale fencing token rolls back the Synthesis checkpoint insert and does not
+  advance the run.
+- Process-kill / lease-reclaim proof for the `strategic_synthesis` step,
+  reusing the 3I-F3 disposable-PostgreSQL pattern.
+- Restart from the Synthesis checkpoint must not re-hash different inputs or
+  skip the Synthesis gate. Identical replay of the same passed checkpoint is
+  idempotent.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step or queue Verification.
+
+### Deliberate exclusions
+
+- No Verification adapter, snapshot, or cognitive call.
+- No Supervisor loop registration.
+- No `POST /scan` switch.
+- No Railway migration/enablement.
+- No scrape, Brave, Firecrawl, Coresignal, models, `generate_foresight`,
+  `foresight_harvester`, `kb_versions`, or `main.py` scan orchestration.
+- No Phase 4 envelope validator beyond what 3I-S2 already stored.
+
+### Tests
+
+- Hermetic: passed proposal queues `verification` metadata through the commit
+  helper; identical replay does not complete again; a different existing
+  checkpoint is rejected; malformed/blocked proposal cannot be committed;
+  default wrap fixture remains unchanged; module source does not register live
+  paths or wrap Verification.
+- PostgreSQL: happy-path commit queues `verification`; stale owner cannot
+  commit and reclaiming owner can; replay of the same passed checkpoint is
+  idempotent; malformed/blocked proposal cannot complete the step; restart
+  reload keeps Synthesis hashes and the passed gate, and tampered Foresight
+  input cannot hydrate.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Strategic Synthesis is the fifth cognitive stage with a crash-safe durable
+boundary. Phase 3 is **not** closed. Next work is **3I-V1** (Verification
+input snapshot), written after 3I-S3 evidence exists — not in this slice.
+
+### Likely files
+
+`backend/scan_synthesis_commit.py`, `tests/test_scan_synthesis_commit.py`,
+`tests/test_scan_synthesis_commit_postgres_integration.py`
+
+---
+
+## Card 3I-V1 — Verification input snapshot from Synthesis checkpoint
+
+**Parent stakeholder step:** 3I (Verification beat 1)
+**Status:** Complete
+**Mirrors:** 3I-S1 Strategic Synthesis input snapshot
+
+Verification does not get a 3E/3I-J0 retrieval beat. It does not acquire
+sources and it does not copy Foresight KB content into the run. Its durable
+input is the passed Strategic Synthesis checkpoint already queued by 3I-S3.
+
+### In scope
+
+- New module `backend/scan_verification_snapshot.py`.
+- `011_verification_input_snapshots.sql` stores one immutable manifest per
+  `run / verification / attempt`. The manifest contains only the passed
+  Synthesis checkpoint identity: id, ref, attempt, contract, input/output
+  hashes. Extracted text, raw bytes, Synthesis result payload, Foresight
+  result payload, Diagnosis result payload, Jury findings, Intent results,
+  candidate excerpts, and Foresight KB records are not copied into the
+  manifest.
+- Deterministic ID and input hash. Replays are idempotent; a different
+  manifest for the same attempt is rejected.
+- Hydration reloads the Synthesis checkpoint through the hash-verifying
+  repository path and requires an exact manifest match. A non-passed,
+  wrong-run, or tampered Synthesis checkpoint cannot become a best-effort
+  Verification payload.
+- Persist/load attach without claiming the `verification` lease.
+- Thin `ScanRepository` types/methods only. No Verification adapter, commit,
+  or cognitive call.
+
+### Deliberate exclusions
+
+- Do not call Verification generation, `main.py` scan orchestration, models,
+  `generate_foresight`, `strategic_foresight`, or `foresight_harvester`.
+- Do not scrape, acquire, or invent Verification-stage retrievals/candidates.
+- Do not persist KB content or create a `kb_versions` table.
+- Do not start a prepare-only Verification adapter or fenced commit
+  (3I-V2–V3).
+- Do not wrap later stages.
+- No Supervisor registration, `POST /scan` change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_verification_snapshot.py` (hermetic): deterministic
+  refs-only manifest; rejects non-passed / wrong-run / Foresight-stage
+  checkpoints; added/omitted/tampered Synthesis checkpoint cannot match.
+- `tests/test_scan_verification_snapshot_postgres_integration.py`: persist on
+  the pending `verification` step created by 3I-S3 without claiming; exact
+  hydrate; tampered manifest and swapped Synthesis hashes rejected.
+- Add the PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml`.
+
+### Exit evidence
+
+Verification can be bound to exact Synthesis output before an adapter exists.
+Phase 3 is **not** closed. Next card is **3I-V2** (prepare-only Verification
+adapter). Specify 3I-V2 after this evidence; do not implement it here.
+
+### Likely files
+
+`backend/migrations/011_verification_input_snapshots.sql`,
+`backend/scan_verification_snapshot.py`, `backend/scan_supervisor.py`,
+`tests/test_scan_verification_snapshot.py`,
+`tests/test_scan_verification_snapshot_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -1084,13 +1210,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-S3 from docs/scanner-reliability-slice-backlog.md
-(Strategic Synthesis fenced commit + reclaim). Do not start Verification,
+Specify then implement exactly slice 3I-V2 from docs/scanner-reliability-slice-backlog.md
+(prepare-only Verification adapter). Do not start a Verification commit,
 Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-S3 exit evidence is recorded.
+3I-V2 exit evidence is recorded.
 ```
 
-After 3I-S3 merges, replace `3I-S3` with the next specified card in that prompt.
+After 3I-V2 merges, replace `3I-V2` with the next specified card in that prompt.
 Do not accumulate open cards in one run.

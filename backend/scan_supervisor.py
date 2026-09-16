@@ -59,6 +59,10 @@ class SynthesisInputSnapshotIntegrityError(RuntimeError):
     """Raised when an immutable Synthesis input manifest is malformed or mismatched."""
 
 
+class VerificationInputSnapshotIntegrityError(RuntimeError):
+    """Raised when an immutable Verification input manifest is malformed or mismatched."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -297,6 +301,28 @@ class SynthesisInputSnapshot:
 
 
 @dataclass(frozen=True)
+class VerificationInputSnapshot:
+    """Immutable manifest binding one Verification attempt to a passed Synthesis checkpoint.
+
+    It contains only the upstream Synthesis checkpoint identity. It has no
+    Company Evidence, Foresight Knowledge Base content, claim-support, or
+    publication meaning.
+    """
+
+    snapshot_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    contract_version: str
+    input_hash: str
+    manifest: Mapping[str, Any]
+
+    @property
+    def snapshot_ref(self) -> str:
+        return f"verification-input://scan/{self.snapshot_id}"
+
+
+@dataclass(frozen=True)
 class ScanCheckpoint:
     """Immutable persisted stage output with only references to input material."""
 
@@ -528,6 +554,22 @@ def _synthesis_manifest(value: Any) -> Mapping[str, Any]:
     if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
         raise SynthesisInputSnapshotIntegrityError(
             "Synthesis input manifest must be a JSON-safe mapping."
+        )
+    return dict(raw_value)
+
+
+def _verification_manifest(value: Any) -> Mapping[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value)
+        except json.JSONDecodeError as error:
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input manifest is not valid JSON."
+            ) from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise VerificationInputSnapshotIntegrityError(
+            "Verification input manifest must be a JSON-safe mapping."
         )
     return dict(raw_value)
 
@@ -2180,6 +2222,182 @@ class ScanRepository:
         from scan_synthesis_snapshot import validate_synthesis_input_snapshot_manifest
 
         validate_synthesis_input_snapshot_manifest(snapshot)
+
+    def persist_verification_input_snapshot(
+        self,
+        *,
+        snapshot: VerificationInputSnapshot,
+    ) -> Mapping[str, Any]:
+        """Persist one immutable Verification input manifest without stage execution."""
+
+        self._validate_verification_input_snapshot(snapshot)
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO verification_input_snapshots (
+                    snapshot_id, run_id, stage_name, attempt, contract_version,
+                    input_hash, manifest
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT DO NOTHING
+                RETURNING snapshot_id, run_id, stage_name, attempt,
+                          contract_version, input_hash, manifest
+                """,
+                (
+                    snapshot.snapshot_id,
+                    snapshot.run_id,
+                    snapshot.stage_name,
+                    snapshot.attempt,
+                    snapshot.contract_version,
+                    snapshot.input_hash,
+                    _json(snapshot.manifest),
+                ),
+            )
+            stored = _mapping(cursor.fetchone())
+            if stored is None:
+                cursor.execute(
+                    """
+                    SELECT snapshot_id, run_id, stage_name, attempt,
+                           contract_version, input_hash, manifest
+                    FROM verification_input_snapshots
+                    WHERE snapshot_id = %s
+                       OR (run_id = %s AND stage_name = %s AND attempt = %s)
+                    ORDER BY snapshot_id = %s DESC
+                    LIMIT 1
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.run_id,
+                        snapshot.stage_name,
+                        snapshot.attempt,
+                        snapshot.snapshot_id,
+                    ),
+                )
+                stored = _mapping(cursor.fetchone())
+                if stored is None:
+                    raise RuntimeError(
+                        "Idempotent Verification input snapshot disappeared before it could be read."
+                    )
+                expected = {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "run_id": snapshot.run_id,
+                    "stage_name": snapshot.stage_name,
+                    "attempt": snapshot.attempt,
+                    "contract_version": snapshot.contract_version,
+                    "input_hash": snapshot.input_hash,
+                    "manifest": dict(snapshot.manifest),
+                }
+                if any(stored.get(key) != value for key, value in expected.items()):
+                    raise ValueError(
+                        "Verification input snapshot already exists for different immutable input."
+                    )
+            return stored
+
+    def load_verification_input_snapshot(
+        self,
+        *,
+        run_id: str,
+        stage_name: str,
+        attempt: int,
+    ) -> VerificationInputSnapshot:
+        """Load and validate a persisted Verification input manifest."""
+
+        if not run_id or stage_name != "verification" or attempt < 1:
+            raise ValueError(
+                "run_id, stage_name='verification', and a positive attempt are required."
+            )
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_id, run_id, stage_name, attempt,
+                       contract_version, input_hash, manifest
+                FROM verification_input_snapshots
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (run_id, stage_name, attempt),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            raise KeyError(f"Unknown Verification input snapshot: {run_id}/{stage_name}/{attempt}")
+        snapshot = VerificationInputSnapshot(
+            snapshot_id=str(row["snapshot_id"]),
+            run_id=str(row["run_id"]),
+            stage_name=str(row["stage_name"]),
+            attempt=int(row["attempt"]),
+            contract_version=str(row["contract_version"]),
+            input_hash=str(row["input_hash"]),
+            manifest=_verification_manifest(row.get("manifest")),
+        )
+        self._validate_verification_input_snapshot(snapshot)
+        return snapshot
+
+    def load_verified_verification_inputs(
+        self,
+        *,
+        run_id: str,
+        attempt: int,
+    ) -> tuple[VerificationInputSnapshot, ScanCheckpoint]:
+        """Hydrate only the Synthesis checkpoint that exactly matches the manifest."""
+
+        snapshot = self.load_verification_input_snapshot(
+            run_id=run_id,
+            stage_name="verification",
+            attempt=attempt,
+        )
+        synthesis_ref = snapshot.manifest.get("synthesis_checkpoint_ref")
+        if not isinstance(synthesis_ref, Mapping):
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input snapshot is missing its Synthesis checkpoint ref."
+            )
+        try:
+            synthesis_attempt = int(synthesis_ref.get("attempt"))
+        except (TypeError, ValueError) as error:
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input snapshot Synthesis checkpoint attempt is invalid."
+            ) from error
+        checkpoint = self.load_checkpoint(
+            run_id=run_id,
+            stage_name="strategic_synthesis",
+            attempt=synthesis_attempt,
+        )
+        if checkpoint is None:
+            raise VerificationInputSnapshotIntegrityError(
+                f"Unknown Synthesis checkpoint for Verification input: {run_id}/strategic_synthesis/{synthesis_attempt}"
+            )
+        from scan_verification_snapshot import assert_verification_input_snapshot_matches
+
+        assert_verification_input_snapshot_matches(
+            snapshot,
+            synthesis_checkpoint=checkpoint,
+        )
+        return snapshot, checkpoint
+
+    def _validate_verification_input_snapshot(self, snapshot: VerificationInputSnapshot) -> None:
+        if not all(
+            (
+                snapshot.snapshot_id,
+                snapshot.run_id,
+                snapshot.contract_version,
+                snapshot.input_hash,
+            )
+        ):
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input snapshot identity fields are required."
+            )
+        if snapshot.stage_name != "verification" or snapshot.attempt < 1:
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input snapshot must bind one positive verification attempt."
+            )
+        if not _is_sha256_digest(snapshot.input_hash):
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input snapshot hash must be a SHA-256 digest."
+            )
+        if not isinstance(snapshot.manifest, Mapping) or not _json_safe(snapshot.manifest):
+            raise VerificationInputSnapshotIntegrityError(
+                "Verification input manifest must be a JSON-safe mapping."
+            )
+        from scan_verification_snapshot import validate_verification_input_snapshot_manifest
+
+        validate_verification_input_snapshot_manifest(snapshot)
 
     def claim_next_step(
         self,
