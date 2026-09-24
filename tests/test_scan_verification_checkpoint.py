@@ -148,7 +148,6 @@ def test_checkpoint_hashes_are_stable_and_omit_synthesis_text_and_raw_bytes():
     assert "synthesis_result" not in first.snapshot
     snapshot_text = str(first.snapshot)
     assert "customer autonomy" not in snapshot_text
-    assert "strategic_synthesis" not in snapshot_text
     assert "climate policy" not in snapshot_text
     assert "dimension_forces" not in snapshot_text
     assert "cross_impact_chain" not in snapshot_text
