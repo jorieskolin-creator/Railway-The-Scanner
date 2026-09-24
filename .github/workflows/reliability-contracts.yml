@@ -98,4 +98,5 @@ jobs:
             tests/test_scan_synthesis_snapshot_postgres_integration.py \
             tests/test_scan_synthesis_adapter_postgres_integration.py \
             tests/test_scan_synthesis_commit_postgres_integration.py \
-            tests/test_scan_verification_snapshot_postgres_integration.py
+            tests/test_scan_verification_snapshot_postgres_integration.py \
+            tests/test_scan_verification_adapter_postgres_integration.py

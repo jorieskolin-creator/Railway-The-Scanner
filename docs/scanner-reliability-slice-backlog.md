@@ -1160,6 +1160,94 @@ adapter). Specify 3I-V2 after this evidence; do not implement it here.
 
 ---
 
+## Card 3I-V2 — Prepare-only Verification adapter
+
+**Parent stakeholder step:** 3I (Verification beat 2)
+**Status:** Complete
+**Mirrors:** 3I-S2 `SynthesisStageExecutor` / 3I-F2 `ForesightStageExecutor`
+
+Verification is the last stage in the frozen cognitive flow. This card
+prepares a checkpoint proposal from the 3I-V1 snapshot. It does not name
+Company Summary, a publication gate, or a final index.
+
+### In scope
+
+- New `backend/scan_verification_checkpoint.py` with:
+  - `build_verification_input_projection(...)` from a verified 3I-V1 snapshot
+    plus the hydrated passed Synthesis checkpoint.
+  - `build_verification_checkpoint(...)` from that projection plus a
+    caller-supplied Verification result mapping.
+- New `VerificationStageExecutor` in `backend/scan_verification_adapter.py`.
+- `execute(lease)`:
+  1. reject any stage other than `verification`
+  2. call only `load_verified_verification_inputs` (already on `ScanRepository`)
+  3. build the 3I-V2 projection
+  4. wrap existing Synthesis output into a Verification result without calling
+     a model (injectable analyzer; default is an empty valid payload)
+  5. return `StageExecutionResult` with the checkpoint proposal
+- Projection may hold the compact Synthesis result as adapter-facing input.
+  The checkpoint stores refs and a compact Verification result only:
+  `verification`. Synthesis result text, Foresight payload, Diagnosis payload,
+  Jury findings, Intent results, extracted text, and Foresight KB records are
+  not stored on the checkpoint.
+- `next_stage` stays `None` when the gate passed and when it failed.
+  Verification is the last cognitive stage. Nothing is queued and the run is
+  not marked completed.
+- Adapter has no `complete_step` / persist / claim method.
+- Malformed Verification output yields `validation_failed` and is not stored.
+- No new `ScanRepository` method and no migration. 3I-V1 already hydrates the
+  verified Synthesis checkpoint.
+
+### Deliberate exclusions
+
+- Do not call Verification generation, `main.py` scan orchestration, models,
+  scrape, Brave, Firecrawl, Coresignal, `generate_foresight`,
+  `strategic_foresight`, or `foresight_harvester`.
+- Do not persist `kb_versions` or copy Foresight KB content into the run.
+- Do not wrap Company Summary, publication, or a final index.
+- Do not write PostgreSQL or add a migration.
+- No database transition: after `execute`, the `verification` step remains
+  leased, `scan_checkpoints` has no new Verification row, and no later step
+  is inserted.
+- No Verification fenced commit (3I-V3), Supervisor registration, `POST /scan`
+  change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_verification_checkpoint.py` (hermetic): deterministic
+  projection from snapshot-bound Synthesis checkpoint; added/omitted/tampered
+  Synthesis checkpoint cannot project; checkpoint hashes are stable; snapshot
+  has no Synthesis/Foresight/Diagnosis/Jury/KB text or raw bytes; malformed
+  Verification result cannot pass.
+- `tests/test_scan_verification_adapter.py` (hermetic): snapshot-only inputs;
+  default wrap returns a passed empty valid Verification; wrong stage
+  rejected; malformed injected result cannot name a later stage; a passed
+  proposal also leaves `next_stage` unset; no persist method.
+- `tests/test_scan_verification_adapter_postgres_integration.py`: persist the
+  3I-V1 snapshot, claim a `verification` lease, run the adapter, assert
+  run/step unchanged, Verification checkpoint count is 0, and no new step is
+  inserted.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Same class of proof as 3I-S2: preparation reads durable Synthesis output and
+proposes Verification output without moving the state machine. Phase 3 is
+**not** closed. Next card is **3I-V3** (Verification fenced commit + reclaim).
+Specify 3I-V3 after this evidence; do not implement it here. 3I-V3 must not
+assume a next cognitive stage: this card leaves `next_stage` unset because
+Verification is the last stage in the frozen flow.
+
+### Likely files
+
+`backend/scan_verification_checkpoint.py`, `backend/scan_verification_adapter.py`,
+`tests/test_scan_verification_checkpoint.py`,
+`tests/test_scan_verification_adapter.py`,
+`tests/test_scan_verification_adapter_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -1210,13 +1298,14 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-V2 from docs/scanner-reliability-slice-backlog.md
-(prepare-only Verification adapter). Do not start a Verification commit,
-Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-V3 from docs/scanner-reliability-slice-backlog.md
+(Verification fenced commit and reclaim). Do not start Supervisor registration,
+POST /scan, Railway, Company Summary, or a final publication index.
+Verification is the last cognitive stage: 3I-V2 left next_stage unset.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-V2 exit evidence is recorded.
+3I-V3 exit evidence is recorded.
 ```
 
-After 3I-V2 merges, replace `3I-V2` with the next specified card in that prompt.
+After 3I-V3 merges, replace `3I-V3` with the next specified card in that prompt.
 Do not accumulate open cards in one run.
