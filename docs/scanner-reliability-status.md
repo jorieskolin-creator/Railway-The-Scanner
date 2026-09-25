@@ -1047,5 +1047,6 @@ Verification evidence:
   successor, stale reclaim, identical replay, malformed rejection, restart
   hash/gate). Local replay of `tests/test_scan_verification_commit_postgres_integration.py`:
   `5 passed`. This local replay is not GitHub CI.
+- [Reliability contracts run 36119637054](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36119637054) completed successfully on pull request [#32](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/32) for commit `be5e624e1ca210bac7599bd22dbbcb479cd7e0b3` (`pull_request` event). `focused-contracts` passed and `postgres-supervisor-contracts` passed.
 
 
