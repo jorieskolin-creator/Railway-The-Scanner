@@ -1303,6 +1303,41 @@ full stage chain. Do not start 3J, publication, Supervisor registration, or
 
 ---
 
+## Card 3J-loop — test-only full-chain durable loop
+
+**Status:** Complete after the pull-request reliability-contract run is recorded in `docs/scanner-reliability-status.md`
+**Parent:** 3J
+**Proves:** orchestration and contract continuity only. Not cognitive output quality.
+
+### In scope
+
+- Test-only runner `backend/scan_durable_loop.py`.
+- Drive one durable run through `material_ingestion → intent → jury_analysis → diagnosis → foresight → strategic_synthesis → verification`.
+- Use existing verified-input loaders, prepare-only adapters, snapshot builders, and fenced commit helpers.
+- One checkpoint per stage. Verification commits with `next_stage=None`, no successor step, no Blob write, no artifact row, and no publication state.
+- The runner does not register with FastAPI and does not change Supervisor lifecycle.
+- One lease-expiry/reclaim during the chain, then resume under a new owner. The full restart matrix is a later **3J-restart** card.
+
+### Deliberate exclusions
+
+- No `POST /scan`, FastAPI Supervisor registration, Railway migration or setting.
+- No Blob, publication, final index, Company Summary, or artifact row.
+- No real model calls and no claim that cognitive behavior is validated.
+- No 3J-exclusive, 3J-enablement, or 3J-cutover.
+- No schema migration.
+
+### Tests
+
+- Hermetic: stage order, no successor after Verification, no live-path registration.
+- PostgreSQL: full chain, one checkpoint per stage, run completed after Verification, one reclaim/resume.
+- Add the PostgreSQL file to the disposable reliability-contracts job.
+
+### Exit
+
+Phase 3 stays open until the full restart matrix is proven. Next card is **3J-restart — full-chain restart matrix**. Do not implement it here.
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -1359,10 +1394,12 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-3I-V3 is complete. Do not start 3J, publication, Supervisor registration,
-POST /scan, or Railway. The next executable card is not opened by this slice.
-Stop until a later card is specified.
+3J-loop is complete once its pull-request reliability-contract run is recorded.
+Specify then implement exactly slice 3J-restart from
+docs/scanner-reliability-slice-backlog.md (full-chain restart matrix). Do not
+start 3J-exclusive, 3J-enablement, 3J-cutover, publication, Supervisor
+registration, POST /scan, or Railway.
 ```
 
-Do not replace this prompt with 3J until that card is specified in its own
-change. Do not accumulate open cards in one run.
+After 3J-restart is specified and merged, replace `3J-restart` with the next
+specified card. Do not accumulate open cards in one run.
