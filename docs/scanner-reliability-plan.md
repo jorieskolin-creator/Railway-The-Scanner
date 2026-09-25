@@ -25,6 +25,12 @@ The immediate outcomes to prove are:
 - final domain artifacts remain compatible with the existing shared Vercel
   Blob stores.
 
+Prepare-only adapters and empty default payloads are contract scaffolding.
+They prove snapshot, hash, state-transition, and fencing behavior, but they do
+not by themselves prove that the cognitive model produced a valid result.
+Cognitive validation requires representative execution through the existing
+stage functions and final artifact contract.
+
 ## Decision and constraints
 
 The Scanner will retain its cognitive flow unchanged:
@@ -385,8 +391,9 @@ The reliability program requires more than ordinary happy-path tests:
 - shared Blob schema compatibility tests for artifacts consumed by other
   solutions;
 - no-network deterministic contract suites;
-- one representative end-to-end scan, restart, resume, verification, and final
-  Blob publication test in the existing Railway-shaped single-process topology.
+- one representative end-to-end scan using the existing cognitive stage
+  functions, with restart, resume, verification, and final Blob publication
+  tested in the existing Railway-shaped single-process topology.
 
 Repository process gates:
 
