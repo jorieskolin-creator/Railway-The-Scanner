@@ -29,13 +29,13 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next product card: **3I-V3 — Verification fenced commit + reclaim**
-(specify after the 3I-V2 evidence; do not implement it in the 3G0 change).
-Do not register a Supervisor, and do not reopen `POST /scan`. Process card
-**3G0** is complete. Product cards **3G1**, **3G2**, **3H**, **3I-J0**,
-**3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**,
-**3I-F2**, **3I-F3**, **3I-S1**, **3I-S2**, **3I-S3**, **3I-V1**, and
-**3I-V2** are complete. The post-3I-D3 `postgres-supervisor-contracts`
+No next product card is opened. **3I-V3** is complete, and Phase 3 stays open
+until the full-chain restart exit gate is proven. Do not start 3J,
+publication, Supervisor registration, or `POST /scan`. Process card **3G0**
+is complete. Product cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**,
+**3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**,
+**3I-F3**, **3I-S1**, **3I-S2**, **3I-S3**, **3I-V1**, **3I-V2**, and
+**3I-V3** are complete. The post-3I-D3 `postgres-supervisor-contracts`
 NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
@@ -1014,5 +1014,38 @@ Verification evidence:
 - [Reliability contracts run 36117933055](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36117933055) completed successfully on pull request [#31](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/31) for commit `0554158a7477d94bdfeb6425b94a9a483a493069` (`pull_request` event, head branch `jocce-reliability-pr-gate-3g0-f5de`).
 - `focused-contracts` passed.
 - `postgres-supervisor-contracts` passed.
+
+
+## Slice 3I-V3 — Verification fenced commit and reclaim
+
+A passed Verification proposal can now be committed under the current lease
+without opening a stage after Verification:
+
+- `commit_verification_stage` persists a passed 3I-V2 checkpoint with the
+  existing fenced checkpoint transaction and passes `next_stage=None`.
+- The existing transaction completes the Verification step and marks the run
+  `completed`. That is operational completion only. No successor step, Blob
+  object, artifact row, or publication slot is created.
+- A stale fencing token rolls the checkpoint insert back. A reclaiming owner
+  can commit. Identical replay does not insert a second checkpoint.
+- A `validation_failed` proposal cannot complete the step. Restart reload
+  keeps the Verification hashes and passed gate. Tampered Synthesis input
+  cannot hydrate.
+- This slice does not register a Supervisor, switch `POST /scan`, apply a
+  Railway migration, or publish a report.
+
+Phase 3 is **not** closed. The phase exit gate is still a restart across the
+full stage chain. Do not start 3J, publication, Supervisor registration, or
+`POST /scan` from this evidence.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; `backend/scan_verification_commit.py` compiled.
+- Focused trust contracts: `127 passed`.
+- Six new hermetic 3I-V3 contracts passed (`tests/test_scan_verification_commit.py`).
+- Five disposable PostgreSQL 3I-V3 contracts passed (complete without a
+  successor, stale reclaim, identical replay, malformed rejection, restart
+  hash/gate). Local replay of `tests/test_scan_verification_commit_postgres_integration.py`:
+  `5 passed`. This local replay is not GitHub CI.
 
 

@@ -1238,6 +1238,71 @@ Specify 3I-V3 after this evidence; do not implement it here.
 
 ---
 
+## Card 3I-V3 — Verification fenced commit + reclaim
+
+**Parent stakeholder step:** 3I (Verification beat 3)
+**Status:** Complete
+**Mirrors:** 3I-S3 `commit_synthesis_stage`
+
+### In scope
+
+- New module `backend/scan_verification_commit.py` with `commit_verification_stage`.
+- Persist a passed 3I-V2 proposal with existing `complete_step_with_checkpoint`.
+- Verification is the last cognitive stage. Pass `next_stage=None`. Do not
+  insert a successor step. The existing checkpoint transaction then marks the
+  run `completed`. That is operational completion only: no Blob write, no
+  artifact row, and no publication slot.
+- Stale fencing token rolls back the Verification checkpoint insert and does
+  not complete the run.
+- Process-kill / lease-reclaim proof for the `verification` step, reusing the
+  3I-S3 disposable-PostgreSQL pattern.
+- Restart from the Verification checkpoint must not re-hash different inputs
+  or skip the Verification gate. Identical replay of the same passed
+  checkpoint is idempotent.
+- A `validation_failed` or otherwise non-passed proposal cannot complete the
+  step.
+
+### Deliberate exclusions
+
+- No stage after Verification.
+- No publication, Company Summary, Blob artifact, or final index.
+- No Supervisor loop registration.
+- No `POST /scan` switch.
+- No Railway migration/enablement.
+- No scrape, models, `generate_foresight`, `foresight_harvester`,
+  `kb_versions`, or `main.py` scan orchestration.
+- No Phase 4 envelope validator beyond what 3I-V2 already stored.
+
+### Tests
+
+- Hermetic: passed proposal commits with `next_stage is None`; identical
+  replay does not complete again; a different existing checkpoint is rejected;
+  malformed proposal cannot be committed; default wrap fixture remains
+  unchanged; module source does not register live paths, publish, or queue a
+  successor stage name.
+- PostgreSQL: happy-path commit completes the Verification step and the run
+  with no successor step and no publication row; stale owner cannot commit and
+  reclaiming owner can; replay of the same passed checkpoint is idempotent;
+  malformed proposal cannot complete the step; restart reload keeps
+  Verification hashes and the passed gate, and tampered Synthesis input cannot
+  hydrate.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Verification is the last cognitive stage with a crash-safe durable boundary.
+Phase 3 is **not** closed: the phase exit gate is still a restart across the
+full stage chain. Do not start 3J, publication, Supervisor registration, or
+`POST /scan` in this slice.
+
+### Likely files
+
+`backend/scan_verification_commit.py`, `tests/test_scan_verification_commit.py`,
+`tests/test_scan_verification_commit_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -1294,13 +1359,10 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-3G0 is complete. Specify then implement exactly slice 3I-V3 from
-docs/scanner-reliability-slice-backlog.md (Verification fenced commit +
-reclaim). Do not start Supervisor registration, POST /scan, or Railway.
-
-Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-V3 exit evidence is recorded.
+3I-V3 is complete. Do not start 3J, publication, Supervisor registration,
+POST /scan, or Railway. The next executable card is not opened by this slice.
+Stop until a later card is specified.
 ```
 
-After 3I-V3 merges, replace `3I-V3` with the next specified card in that prompt.
-Do not accumulate open cards in one run.
+Do not replace this prompt with 3J until that card is specified in its own
+change. Do not accumulate open cards in one run.
