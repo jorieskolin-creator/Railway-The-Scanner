@@ -32,11 +32,9 @@ multiple cognitive stages and lose context.
 Immediate next product card: **3J-restart — full-chain restart matrix**.
 Do not implement it in the 3J-loop change. Phase 3 stays open until that
 restart matrix is proven. Do not start publication, Supervisor registration,
-or `POST /scan`. Process card **3G0** is complete. Product card **3J-loop**
-is implemented; its GitHub CI evidence is recorded on the pull-request head
-before it is treated as closed. Product cards **3G1** through **3I-V3** are
-complete. The
-post-3I-D3 `postgres-supervisor-contracts` NameError hotfix is merged.
+or `POST /scan`. Process card **3G0** and product card **3J-loop** are complete. Product
+cards **3G1** through **3I-V3** are complete. The post-3I-D3
+`postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
 
@@ -1076,8 +1074,6 @@ Verification evidence:
 - Hermetic contracts in `tests/test_scan_durable_loop.py`: `3 passed`.
 - Local replay of `tests/test_scan_durable_loop_postgres_integration.py`:
   `1 passed` against disposable PostgreSQL. This local replay is not GitHub CI.
-- GitHub CI for the pull-request head is recorded after `focused-contracts`
-  and `postgres-supervisor-contracts` complete. It is not claimed from code
-  presence.
+- [Reliability contracts run 36135327767](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36135327767) completed successfully on pull request [#33](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/33) for commit `054b33a23c74d118c9254d94f37e1a842c67d5e3` (`pull_request` event). `focused-contracts` passed and `postgres-supervisor-contracts` passed. The local PostgreSQL replay above is not this GitHub CI run.
 
 

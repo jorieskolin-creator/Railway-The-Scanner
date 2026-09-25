@@ -1305,7 +1305,7 @@ full stage chain. Do not start 3J, publication, Supervisor registration, or
 
 ## Card 3J-loop — test-only full-chain durable loop
 
-**Status:** Complete after the pull-request reliability-contract run is recorded in `docs/scanner-reliability-status.md`
+**Status:** Complete
 **Parent:** 3J
 **Proves:** orchestration and contract continuity only. Not cognitive output quality.
 
@@ -1394,8 +1394,7 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-3J-loop is complete once its pull-request reliability-contract run is recorded.
-Specify then implement exactly slice 3J-restart from
+3J-loop is complete. Specify then implement exactly slice 3J-restart from
 docs/scanner-reliability-slice-backlog.md (full-chain restart matrix). Do not
 start 3J-exclusive, 3J-enablement, 3J-cutover, publication, Supervisor
 registration, POST /scan, or Railway.
