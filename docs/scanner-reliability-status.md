@@ -29,14 +29,12 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-No next product card is opened. **3I-V3** is complete, and Phase 3 stays open
-until the full-chain restart exit gate is proven. Do not start 3J,
-publication, Supervisor registration, or `POST /scan`. Process card **3G0**
-is complete. Product cards **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**,
-**3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**,
-**3I-F3**, **3I-S1**, **3I-S2**, **3I-S3**, **3I-V1**, **3I-V2**, and
-**3I-V3** are complete. The post-3I-D3 `postgres-supervisor-contracts`
-NameError hotfix is merged.
+Immediate next product card: **3J-restart — full-chain restart matrix**.
+Do not implement it in the 3J-loop change. Phase 3 stays open until that
+restart matrix is proven. Do not start publication, Supervisor registration,
+or `POST /scan`. Process card **3G0** and product card **3J-loop** are complete. Product
+cards **3G1** through **3I-V3** are complete. The post-3I-D3
+`postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
 
@@ -1048,5 +1046,34 @@ Verification evidence:
   hash/gate). Local replay of `tests/test_scan_verification_commit_postgres_integration.py`:
   `5 passed`. This local replay is not GitHub CI.
 - [Reliability contracts run 36119637054](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36119637054) completed successfully on pull request [#32](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/32) for commit `be5e624e1ca210bac7599bd22dbbcb479cd7e0b3` (`pull_request` event). `focused-contracts` passed and `postgres-supervisor-contracts` passed.
+
+
+## Card 3J-loop — test-only full-chain durable loop
+
+A test-only runner can now drive one durable run through the existing stage
+chain. This is orchestration and contract continuity only. It does not prove
+cognitive output quality, and the default Jury, Diagnosis, Foresight,
+Synthesis, and Verification payloads remain empty adapter fixtures.
+
+- `drive_durable_chain` claims each stage, binds the existing input snapshot,
+  calls the existing prepare-only adapter, and commits with the existing
+  fenced helper.
+- Stage order is `material_ingestion → intent → jury_analysis → diagnosis →
+  foresight → strategic_synthesis → verification`.
+- Verification commits with `next_stage=None`. The run completes with no
+  successor step, no Blob write, no artifact table, and no publication state.
+- One diagnosis lease can expire and resume under a new owner. This is not
+  the full restart matrix.
+- The runner is not imported by `main.py` or `scan_supervisor.py`.
+
+Phase 3 remains open until **3J-restart — full-chain restart matrix** is
+proven. Do not start that card here.
+
+Verification evidence:
+
+- Hermetic contracts in `tests/test_scan_durable_loop.py`: `3 passed`.
+- Local replay of `tests/test_scan_durable_loop_postgres_integration.py`:
+  `1 passed` against disposable PostgreSQL. This local replay is not GitHub CI.
+- [Reliability contracts run 36135327767](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36135327767) completed successfully on pull request [#33](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/33) for commit `054b33a23c74d118c9254d94f37e1a842c67d5e3` (`pull_request` event). `focused-contracts` passed and `postgres-supervisor-contracts` passed. The local PostgreSQL replay above is not this GitHub CI run.
 
 
