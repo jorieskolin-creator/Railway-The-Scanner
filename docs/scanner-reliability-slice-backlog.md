@@ -1160,6 +1160,84 @@ adapter). Specify 3I-V2 after this evidence; do not implement it here.
 
 ---
 
+## Card 3I-V2 — Prepare-only Verification adapter
+
+**Parent stakeholder step:** 3I (Verification beat 2)
+**Status:** Complete
+**Mirrors:** 3I-S2 `SynthesisStageExecutor` / 3I-F2 `ForesightStageExecutor`
+
+### In scope
+
+- New `backend/scan_verification_checkpoint.py` with:
+  - `build_verification_input_projection(...)` from a verified 3I-V1 snapshot
+    plus the hydrated passed Synthesis checkpoint.
+  - `build_verification_checkpoint(...)` from that projection plus a
+    caller-supplied Verification result mapping.
+- New `VerificationStageExecutor` in `backend/scan_verification_adapter.py`.
+- `execute(lease)`:
+  1. reject any stage other than `verification`
+  2. call only `load_verified_verification_inputs`
+  3. build the 3I-V2 projection
+  4. wrap existing Synthesis output into a Verification result without calling
+     a model (injectable analyzer; default is an empty valid payload)
+  5. return `StageExecutionResult` with the checkpoint proposal
+- Projection may hold the compact Synthesis result as adapter-facing input.
+  The checkpoint stores refs and a compact Verification result only:
+  `verification_record`. Synthesis text, Foresight/Diagnosis/Jury/Intent
+  payloads, extracts, raw bytes, claim support, eligibility, and publication
+  authority are not stored on the checkpoint.
+- Verification is the last cognitive stage. `next_stage` is `None` for both
+  passed and malformed proposals. Nothing is queued.
+- Adapter has no `complete_step` / persist / claim method.
+- Malformed Verification output yields `validation_failed` and is not stored.
+
+### Deliberate exclusions
+
+- Do not call Verification generation, `main.py` scan orchestration, models,
+  scrape, Brave, Firecrawl, Coresignal, `generate_foresight`,
+  `strategic_foresight`, or `foresight_harvester`.
+- Do not persist `kb_versions` or copy Foresight KB content into the run.
+- Do not invent a stage after Verification.
+- Do not write PostgreSQL or add a migration.
+- No database transition: after `execute`, the `verification` step remains
+  leased and `scan_checkpoints` has no new Verification row.
+- No Verification fenced commit (3I-V3), Supervisor registration, `POST /scan`
+  change, or Railway setting.
+
+### Tests
+
+- `tests/test_scan_verification_checkpoint.py` (hermetic): deterministic
+  projection from snapshot-bound Synthesis checkpoint; added/omitted/tampered
+  Synthesis checkpoint cannot project; checkpoint hashes are stable; snapshot
+  has no Synthesis/Foresight text or raw bytes; malformed Verification result
+  cannot pass.
+- `tests/test_scan_verification_adapter.py` (hermetic): snapshot-only inputs;
+  default wrap returns a passed empty valid Verification and names no
+  successor; wrong stage rejected; malformed injected result stays
+  `validation_failed` with `next_stage is None`; no persist method.
+- `tests/test_scan_verification_adapter_postgres_integration.py`: persist
+  3I-V1 snapshot, claim a `verification` lease, run the adapter, assert
+  run/step unchanged, Verification checkpoint count is 0, and no successor
+  step exists.
+- Add the new PostgreSQL test path to
+  `.github/workflows/reliability-contracts.yml` disposable job.
+
+### Exit evidence
+
+Same class of proof as 3I-S2: preparation reads durable Synthesis output and
+proposes Verification output without moving the state machine. Phase 3 is
+**not** closed. Next card is **3I-V3** (Verification fenced commit + reclaim).
+Specify 3I-V3 after this evidence; do not implement it here.
+
+### Likely files
+
+`backend/scan_verification_checkpoint.py`, `backend/scan_verification_adapter.py`,
+`tests/test_scan_verification_checkpoint.py`,
+`tests/test_scan_verification_adapter.py`,
+`tests/test_scan_verification_adapter_postgres_integration.py`
+
+---
+
 ## 3J split — proof first, cutover last and small
 
 | Card | Outcome | Not this card |
@@ -1210,13 +1288,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-V2 from docs/scanner-reliability-slice-backlog.md
-(prepare-only Verification adapter). Do not start a Verification commit,
-Supervisor registration, POST /scan, or Railway.
+Specify then implement exactly slice 3I-V3 from docs/scanner-reliability-slice-backlog.md
+(Verification fenced commit + reclaim). Do not start Supervisor registration,
+POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
-3I-V2 exit evidence is recorded.
+3I-V3 exit evidence is recorded.
 ```
 
-After 3I-V2 merges, replace `3I-V2` with the next specified card in that prompt.
+After 3I-V3 merges, replace `3I-V3` with the next specified card in that prompt.
 Do not accumulate open cards in one run.
