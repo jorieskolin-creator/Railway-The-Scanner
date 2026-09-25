@@ -29,13 +29,12 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-V2 — Prepare-only Verification adapter**
-(specify after this evidence; do not implement in the same change as 3I-V1).
-Do not start a Verification commit, do not register Verification (or later
-stages) on the Supervisor, and do not reopen `POST /scan`. Cards
+Immediate next card: **3I-V3 — Verification fenced commit + reclaim**
+(specify after this evidence; do not implement in the same change as 3I-V2).
+Do not register a Supervisor, and do not reopen `POST /scan`. Cards
 **3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
 **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**, **3I-F3**, **3I-S1**,
-**3I-S2**, **3I-S3**, and **3I-V1** are complete. The post-3I-D3
+**3I-S2**, **3I-S3**, **3I-V1**, and **3I-V2** are complete. The post-3I-D3
 `postgres-supervisor-contracts` NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
@@ -954,5 +953,40 @@ Verification evidence:
   claiming; tampered manifest and swapped Synthesis hash rejected). Local
   replay of `postgres-supervisor-contracts` including the new file:
   `56 passed`.
+
+
+## Slice 3I-V2 — Prepare-only Verification adapter
+
+The 3I-V1 snapshot can now be prepared into a Verification checkpoint
+proposal without moving the state machine:
+
+- `build_verification_input_projection` reads only the hash-verified Synthesis
+  checkpoint. `build_verification_checkpoint` stores refs and a compact
+  `verification_record`. Synthesis/Foresight/Diagnosis/Jury/Intent payloads,
+  extracts, raw bytes, and KB records stay off the checkpoint.
+- `VerificationStageExecutor.execute` hydrates
+  `load_verified_verification_inputs` and wraps Synthesis output without a
+  model (default empty valid payload). Verification is the last cognitive
+  stage, so `next_stage` is `None` for passed and malformed proposals.
+- After `execute`, the `verification` step remains leased, there is no
+  Verification checkpoint row, and no successor step exists.
+- This slice does not start a Verification commit, register a Supervisor,
+  switch `POST /scan`, apply a Railway migration, or copy Foresight KB content.
+
+Phase 3 is **not** closed. The next bounded dependency is **3I-V3 —
+Verification fenced commit + reclaim**. Specify 3I-V3 after this evidence;
+do not implement it here.
+
+Verification evidence:
+
+- Duplicate-definition guard passed; backend compileall passed.
+- Focused trust contracts: `127 passed`.
+- Ten new hermetic 3I-V2 contracts passed
+  (`tests/test_scan_verification_checkpoint.py`,
+  `tests/test_scan_verification_adapter.py`). Full hermetic suite without the
+  test DSN: `500 passed, 57 skipped`.
+- One disposable PostgreSQL 3I-V2 contract passed (leased `verification`
+  unchanged, no Verification checkpoint row, no successor step). Local replay
+  of `postgres-supervisor-contracts` including the new file: `57 passed`.
 
 
