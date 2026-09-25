@@ -3,6 +3,28 @@
 > **Status:** Canonical implementation contract for `reliability-v2`.
 > This plan supersedes the abandoned `staging` design that used a separately deployed Scanner worker. The target is one Railway FastAPI service with a PostgreSQL-backed in-process Supervisor.
 
+## Purpose and success definition
+
+The purpose of this program is to make the existing cognitive pipeline
+**verifiable, contract-bound, and more reliable than the old browser-fragile
+execution path**. Success means that the pipeline can be executed through
+explicit stage contracts, durable orchestration state, resumable checkpoints,
+and deterministic failure states while preserving the current cognitive model.
+
+This program is **not** a promise that the Scanner becomes fully production
+ready when the plan is complete. The current authorization model is sufficient
+for this phase. User management, broader production hardening, public launch
+readiness, and operational scaling are separate later decisions.
+
+The immediate outcomes to prove are:
+
+- the cognitive model still works end to end;
+- every stage boundary has a clear typed contract;
+- durable orchestration can recover from process loss;
+- malformed, stale, missing, or contradictory inputs fail explicitly;
+- final domain artifacts remain compatible with the existing shared Vercel
+  Blob stores.
+
 ## Decision and constraints
 
 The Scanner will retain its cognitive flow unchanged:
@@ -16,11 +38,15 @@ evidence, or let the Foresight Knowledge Base prove company action.
 The deployment design is intentionally small:
 
 - keep the existing Railway FastAPI service;
-- use the PostgreSQL database already attached to Railway;
+- use the PostgreSQL database already attached to Railway for orchestration;
 - run a PostgreSQL-backed **Scan Supervisor inside that API process**;
 - do not require a Railway staging environment or a second worker service;
+- keep the existing Vercel Blob stores as the authoritative shared domain-data
+  stores;
 - do not create another Vercel Blob store or write intermediate Blob objects;
-- retain existing Blob writes for final immutable reports and exports;
+- retain existing Blob writes, schemas, and current pointers for final
+  immutable reports, exports, dashboard data, company summaries, and shared
+  Foresight artifacts;
 - initially permit one active scan at a time.
 
 “Supervisor” means an execution loop in the existing application, not a new
@@ -28,6 +54,42 @@ deployed service. It claims a queued database row, invokes the existing stage
 functions, heartbeats its lease, and records checkpoints. If Railway restarts,
 the same application can reclaim an expired lease and resume from the last
 valid checkpoint.
+
+## Non-goals for this reliability program
+
+The following are deliberately out of scope unless a later plan explicitly
+adds them:
+
+- replacing the current authorization model;
+- adding user accounts, teams, roles, or multi-tenant administration;
+- moving the source of truth for dashboard data, company reports, company
+  summaries, Foresight artifacts, evidence packages, publications, or exports
+  from Vercel Blob to PostgreSQL;
+- creating a second authoritative domain-data store;
+- introducing a new worker service or another Vercel Blob store;
+- making the service generally production ready for a broader launch;
+- changing the cognitive stages or their analytical intent as part of a
+  reliability slice.
+
+## Storage authority
+
+Vercel Blob and PostgreSQL have separate authority. Neither may silently take
+over the other's role.
+
+| Store | Authoritative for | Must not become |
+|---|---|---|
+| Vercel Blob | Shared domain artifacts: dashboard summaries, company reports, company summaries, Foresight KB artifacts, evidence packages, publications, and exports | A scan-execution lock, lease store, retry log, or process-recovery mechanism |
+| PostgreSQL | Scan-orchestration state: runs, steps, leases, heartbeats, retries, idempotency records, checkpoints, failure state, and references to Blob artifacts | A duplicate source of truth for shared domain artifacts |
+| Browser memory | Presentation and user interaction only | Durable scan state or recovery authority |
+
+PostgreSQL artifact rows should store Blob object identity, URL or key,
+content hash, schema version, validation status, and lineage. They should not
+duplicate full shared artifacts unless a later explicit decision creates a
+rebuildable derived projection.
+
+Shared Blob schemas are external contracts because other solutions consume the
+same stores. Changes must be versioned and compatibility-tested. Existing
+shared objects must not be silently mutated into a new shape.
 
 ## Trust boundaries
 
@@ -39,7 +101,7 @@ The system must keep these stores and meanings separate:
 | Company evidence | company-scoped sources, passages, propositions, support decisions | macro foresight eligibility |
 | Foresight KB | company-neutral external forces and context | company action, deployment, or current capability |
 | Operational state | run, step, lease, retry, event, checkpoint metadata | evidence or analytical support |
-| Published artifacts | output that passed its publication contract | that withheld/internal drafts passed |
+| Published artifacts | Vercel Blob output that passed its publication contract | that withheld/internal drafts passed |
 
 The evidence lineage remains:
 
@@ -70,8 +132,9 @@ Existing cognitive stage function
     └─ atomically commit checkpoint and next queued step
     ▼
 Final publication gate
-    ├─ passed  → existing immutable Blob report/export + PostgreSQL index
-    └─ failed  → internal draft/checkpoint only; no public publication
+    ├─ passed  → existing immutable Blob report/export and Blob current pointer
+    │            plus PostgreSQL artifact reference/reconciliation state
+    └─ failed  → internal draft/checkpoint only; no public Blob publication
 ```
 
 The process may disappear at any instruction. Correctness therefore cannot
@@ -79,6 +142,9 @@ depend on a Python dictionary, daemon thread, in-memory lock, or `finally`
 block. A stage commit is accepted only when its lease owner and fencing token
 still match the current database row. A stale process may finish a model call,
 but it cannot commit after another attempt has reclaimed the step.
+
+The browser is not authoritative. Closing the browser must not interrupt an
+active backend scan once the durable orchestration path is enabled.
 
 ## PostgreSQL records
 
@@ -104,7 +170,9 @@ foreign keys. Use JSONB only for versioned payloads that have a validated schema
   checked timestamp; statuses are explicit (`passed`, `failed`, `blocked`,
   `insufficient_evidence`, `validation_failed`, `approval_required`).
 - `artifacts`: final or internal artifact identity, content hash, publication
-  status, Blob reference where applicable, and gate-result reference.
+  status, Blob reference where applicable, and gate-result reference. This is
+  an orchestration/reference record; it does not replace Blob as the domain
+  artifact store.
 - `kb_versions`: Foresight KB version/hash used by a run; KB content remains a
   distinct contract and cannot be copied into company-evidence rows.
 - `foresight_signals`: stable signal IDs and the company-neutral source contract.
@@ -137,8 +205,27 @@ Rules:
    model-policy version, KB version, and required upstream gates validate.
 6. Model/provider timeout is not evidence failure. It is an explicit unavailable
    or retryable operational result and cannot be converted to `passed`.
-7. Non-idempotent final artifact publication uses an idempotency key and a
-   uniqueness constraint so retries cannot publish duplicate “latest” reports.
+7. Non-idempotent final Blob publication and current-pointer updates use an
+   idempotency key and uniqueness/reconciliation controls so retries cannot
+   publish duplicate “latest” reports.
+
+## Cross-store publication protocol
+
+Vercel Blob and PostgreSQL cannot commit atomically together. Final
+publication therefore needs an explicit, retryable sequence:
+
+1. write the new immutable final artifact to the existing Vercel Blob store
+   under a versioned object key;
+2. verify readability and content hash;
+3. record the artifact reference, hash, gate result, and publication attempt
+   in PostgreSQL;
+4. update the Blob current pointer or index using the existing shared schema;
+5. mark publication reconciled only after the Blob pointer and PostgreSQL
+   reference agree.
+
+A failure between steps must remain visible and retryable. It must not be
+converted into fabricated success. Existing dashboard and company reads remain
+Blob-backed even when PostgreSQL orchestration is disabled or unavailable.
 
 ## Typed stage envelope
 
@@ -181,7 +268,7 @@ Required changes:
 3. Preserve current same-payload generation/verification and independent
    verifier separation where available.
 4. Store failed or inconclusive output as an internal draft with its gate result;
-   do not place it in the public/latest Summary slot.
+   do not place it in the public/latest Summary slot in Blob.
 5. Publish only after schema, evidence lineage, entity, claim-support, citation,
    contradiction, language, and verifier gates pass.
 
@@ -257,15 +344,21 @@ produce explicit blocked states in contract tests.
 Exit gate: mutation tests removing or swapping evidence IDs cause publication
 rejection; tag order/title wording does not alter stable associations.
 
-### Phase 6 — transactional final index
+### Phase 6 — Blob-first publication reconciliation
 
-- Move latest-company/report-index state to PostgreSQL.
-- Keep final immutable artifacts/exports in the existing Blob store.
-- Reconcile Blob publication and database state through idempotent artifact
-  records, not a process-local read/modify/write lock.
+- Keep latest-company/report-index state in the existing Vercel Blob store.
+- Keep final immutable artifacts and exports in the existing Vercel Blob store.
+- Record artifact references, hashes, gate results, and publication attempts in
+  PostgreSQL for orchestration and reconciliation.
+- Reconcile Blob publication and PostgreSQL references through idempotent
+  artifact records, not a process-local read/modify/write lock.
+- Do not create a PostgreSQL authoritative read model. If a later performance
+  need justifies one, it must be a rebuildable derived projection of Blob
+  artifacts, not the source of truth.
 
-Exit gate: concurrent/retried publication produces one latest pointer and no
-duplicate final artifact record.
+Exit gate: concurrent or retried publication produces one Blob current pointer,
+no duplicate final artifact record, and a visible reconciliation path for any
+partial cross-store failure.
 
 ### Phase 7 — orchestrator decomposition
 
@@ -289,15 +382,28 @@ The reliability program requires more than ordinary happy-path tests:
 - hash tampering and checkpoint-version mismatch tests;
 - evidence/KB cross-contamination tests;
 - Summary evidence-ID mutation and publication-withholding tests;
+- shared Blob schema compatibility tests for artifacts consumed by other
+  solutions;
 - no-network deterministic contract suites;
 - one representative end-to-end scan, restart, resume, verification, and final
-  publication test in the existing Railway-shaped single-process topology.
+  Blob publication test in the existing Railway-shaped single-process topology.
+
+Repository process gates:
+
+- pull requests targeting `reliability-v2` must run the reliability contracts
+  before merge, not only after the branch is updated;
+- local command replay may be recorded as evidence, but it must be labelled as
+  local replay and must not be described as GitHub CI;
+- deployment success is not test evidence;
+- a green test run does not authorize changing Railway settings, enabling the
+  Supervisor, or switching `POST /scan`.
 
 Operational metrics should include queue age, run/stage duration, lease age,
 heartbeat lag, retry count/reason, checkpoint age, gate status counts, material
 extraction failures, evidence attrition by gate, Summary publication withholding,
-and final artifact reconciliation failures. Logs and events must include run and
-stage IDs but must not print uploaded content or secrets.
+Blob publication reconciliation failures, and final artifact reference
+mismatches. Logs and events must include run and stage IDs but must not print
+uploaded content or secrets.
 
 ## First implementation slice
 
