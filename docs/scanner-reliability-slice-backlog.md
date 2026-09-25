@@ -1267,16 +1267,22 @@ size cap. In particular:
 
 ---
 
-## Recommended CI planning fix (optional micro-card before 3G2)
+## Card 3G0 — reliability-contract pull-request gate
 
-`.github/workflows/reliability-contracts.yml` currently runs PostgreSQL
-contracts on `push` to `reliability-v2` and pull requests to `main` only.
-Slice PRs that target `reliability-v2` therefore may not run the disposable
-PostgreSQL job until merge.
+**Status:** Complete
+**Kind:** CI/process gate, not a product slice
 
-Optional card **3G0**: also trigger the workflow on pull requests to
-`reliability-v2`. No product behavior. Do this as its own tiny commit if
-touched.
+`.github/workflows/reliability-contracts.yml` runs on push to `reliability-v2`
+and on pull requests targeting `main` and `reliability-v2`. Job names, test
+commands, the PostgreSQL service, and permissions are unchanged.
+
+PR #30 recorded a local replay because pull requests targeting `reliability-v2`
+did not run this workflow before merge. Local replay is not GitHub CI.
+[Run 36117933055](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36117933055)
+on pull request #31 is the GitHub CI evidence for this gate: both
+`focused-contracts` and `postgres-supervisor-contracts` passed.
+
+The next product card remains **3I-V3 — Verification fenced commit + reclaim**.
 
 ---
 
@@ -1288,9 +1294,9 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Specify then implement exactly slice 3I-V3 from docs/scanner-reliability-slice-backlog.md
-(Verification fenced commit + reclaim). Do not start Supervisor registration,
-POST /scan, or Railway.
+3G0 is complete. Specify then implement exactly slice 3I-V3 from
+docs/scanner-reliability-slice-backlog.md (Verification fenced commit +
+reclaim). Do not start Supervisor registration, POST /scan, or Railway.
 
 Deliver: the specified card plus its module/tests/status evidence. Stop when
 3I-V3 exit evidence is recorded.

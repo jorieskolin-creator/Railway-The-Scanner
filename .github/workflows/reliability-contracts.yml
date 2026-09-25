@@ -4,7 +4,7 @@ on:
   push:
     branches: [reliability-v2]
   pull_request:
-    branches: [main]
+    branches: [main, reliability-v2]
 
 permissions:
   contents: read
