@@ -29,13 +29,14 @@ plan ideas, trust boundaries, topology, or phase exit gates. It splits the
 stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
 multiple cognitive stages and lose context.
 
-Immediate next card: **3I-V3 — Verification fenced commit + reclaim**
-(specify after this evidence; do not implement in the same change as 3I-V2).
-Do not register a Supervisor, and do not reopen `POST /scan`. Cards
-**3G1**, **3G2**, **3H**, **3I-J0**, **3I-J1**, **3I-J2**, **3I-J3**,
-**3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**, **3I-F2**, **3I-F3**, **3I-S1**,
-**3I-S2**, **3I-S3**, **3I-V1**, and **3I-V2** are complete. The post-3I-D3
-`postgres-supervisor-contracts` NameError hotfix is merged.
+Immediate next product card: **3I-V3 — Verification fenced commit + reclaim**
+(specify after the 3I-V2 evidence; do not implement it in the 3G0 change).
+Do not register a Supervisor, and do not reopen `POST /scan`. Process card
+**3G0** is complete. Product cards **3G1**, **3G2**, **3H**, **3I-J0**,
+**3I-J1**, **3I-J2**, **3I-J3**, **3I-D1**, **3I-D2**, **3I-D3**, **3I-F1**,
+**3I-F2**, **3I-F3**, **3I-S1**, **3I-S2**, **3I-S3**, **3I-V1**, and
+**3I-V2** are complete. The post-3I-D3 `postgres-supervisor-contracts`
+NameError hotfix is merged.
 
 ## Slice 0A — baseline integrity
 
@@ -988,5 +989,30 @@ Verification evidence:
 - One disposable PostgreSQL 3I-V2 contract passed (leased `verification`
   unchanged, no Verification checkpoint row, no successor step). Local replay
   of `postgres-supervisor-contracts` including the new file: `57 passed`.
+  That local replay is not GitHub CI. Pull requests targeting `reliability-v2`
+  did not run Reliability contracts before merge at that time.
+
+
+## Card 3G0 — reliability-contract pull-request gate
+
+This is a CI/process-gate correction, not a product slice. No application
+code, tests, Supervisor behavior, `POST /scan`, or Railway settings changed.
+
+- `.github/workflows/reliability-contracts.yml` now runs on pull requests
+  targeting `main` and `reliability-v2`. The existing push trigger for
+  `reliability-v2` is unchanged. Job names, test commands, the PostgreSQL
+  service, and permissions are unchanged.
+- PR #30's Verification-adapter evidence was a local replay. Pull requests
+  targeting `reliability-v2` did not run this workflow before merge, so that
+  replay must not be described as GitHub CI.
+
+The next product card remains **3I-V3 — Verification fenced commit + reclaim**.
+Do not start it here.
+
+Verification evidence:
+
+- [Reliability contracts run 36117933055](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36117933055) completed successfully on pull request [#31](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/31) for commit `0554158a7477d94bdfeb6425b94a9a483a493069` (`pull_request` event, head branch `jocce-reliability-pr-gate-3g0-f5de`).
+- `focused-contracts` passed.
+- `postgres-supervisor-contracts` passed.
 
 
