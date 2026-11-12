@@ -34,6 +34,7 @@ from model_policy import (
     policy_for,
 )
 from source_quality import is_generation_eligible_source
+from stakeholder_policy import demand_profile, employee_count, is_historical_role, person_key, rank_stakeholders
 from knowledge_base import REMOTE_KNOWLEDGE_URL as DEFAULT_MODERNIZATION_TACTICS_URL
 
 
@@ -880,191 +881,77 @@ def _company_evidence_records(company_evidence: dict | None) -> tuple[list[dict]
     return strongest[:30], blocked[:30]
 
 
-def _company_evidence_stakeholders(company_evidence: dict | None) -> list[dict]:
-    if not isinstance(company_evidence, dict):
-        return []
+def _evidence_stakeholder_candidates(database: dict | None, source_database: str) -> list[dict]:
     candidates = []
-    for rec in _list(company_evidence.get("records")):
+    for rec in _list(_dict(database).get("records")):
         if not isinstance(rec, dict):
-            continue
-        if rec.get("provider_record_type") != "stakeholder_candidate" and rec.get("source_category") != "stakeholder_candidate":
-            continue
-        stakeholder = _dict(rec.get("stakeholder"))
-        name = stakeholder.get("name")
-        role = stakeholder.get("role")
-        if not name or not role:
-            continue
-        candidates.append({
-            "name": name,
-            "role": role,
-            "insight": _clip(rec.get("source_quote") or rec.get("text_excerpt"), 420),
-            "confidence": rec.get("extraction_confidence") or 50,
-            "source": stakeholder.get("public_profile_url") or rec.get("url"),
-            "evidence_basis": stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title") or rec.get("url"),
-            "source_database": "company_evidence",
-            "provider": rec.get("provider"),
-            "allowed_use": stakeholder.get("allowed_use") or rec.get("sales_use") or "allowed_as_discovery_question",
-            "matched_demand_groups": stakeholder.get("matched_demand_groups") or rec.get("demand_signal_ids") or [],
-            "linked_service_ids": stakeholder.get("linked_service_ids") or rec.get("linked_service_ids") or [],
-            "stakeholder_role_match_reason": stakeholder.get("stakeholder_role_match_reason") or rec.get("stakeholder_role_match_reason"),
-            "safety_notes": stakeholder.get("safety_notes") or rec.get("safety_notes") or [],
-            "do_not_say": stakeholder.get("do_not_say") or rec.get("do_not_say") or [],
-        })
-    return candidates[:12]
-
-
-def _stakeholder_sort_score(item: dict) -> tuple[int, int, str]:
-    role = str(item.get("role") or item.get("position") or "").lower()
-    allowed = str(item.get("allowed_use") or item.get("sales_use") or "").lower()
-    source = str(item.get("source_database") or item.get("source") or "").lower()
-    score = 0
-    if "chief" in role or re.search(r"\b(cxo|ceo|cfo|coo|cio|cto|ciso|cdo|chro)\b", role):
-        score += 40
-    if any(token in role for token in ("director", "head of", "vp", "vice president", "board", "chair")):
-        score += 25
-    if "allowed_as_discovery_question" in allowed or "allowed_as_hypothesis" in allowed:
-        score += 15
-    if "company_evidence" in source:
-        score += 10
-    if "company_source_ledger" in source:
-        score += 5
-    confidence = _safe_int(item.get("confidence"), 0)
-    return (-score, -confidence, str(item.get("name") or "").lower())
-
-
-def _is_historical_stakeholder_role(role: Any) -> bool:
-    text = str(role or "").lower()
-    return bool(re.search(r"\b(retired|ret\.|former|ex-|emeritus|previous|past)\b", text))
-
-
-def _simple_stakeholder_item(
-    name: Any,
-    role: Any,
-    *,
-    source_database: str,
-    source: Any = None,
-    evidence_basis: Any = None,
-    allowed_use: Any = None,
-    confidence: Any = None,
-) -> dict | None:
-    name_text = _clip(name, 120)
-    role_text = _clip(role, 160)
-    if not name_text or not role_text:
-        return None
-    if len(name_text.split()) < 2:
-        return None
-    if _is_historical_stakeholder_role(role_text):
-        return None
-    allowed = _normalize_gate(allowed_use, "allowed_as_discovery_question")
-    if allowed == "blocked":
-        return None
-    return {
-        "name": name_text,
-        "position": role_text,
-        "source_database": source_database,
-        "source": _clip(source, 220),
-        "evidence_basis": _clip(evidence_basis or source or source_database, 260),
-        "allowed_use": allowed,
-        "confidence": _safe_int(confidence, 45),
-    }
-
-
-def _add_simple_stakeholder(target: list[dict], seen: set[str], item: dict | None) -> None:
-    if not item:
-        return
-    key = re.sub(r"\s+", " ", str(item.get("name") or "").strip().lower())
-    if not key or key in seen:
-        return
-    seen.add(key)
-    target.append(item)
-
-
-def _stakeholder_name_list(
-    company_data: dict,
-    company_evidence: dict | None = None,
-    company_source_ledger: dict | None = None,
-    *,
-    limit: int = 6,
-) -> list[dict]:
-    people: list[dict] = []
-    seen: set[str] = set()
-
-    for rec in _list(company_evidence.get("records") if isinstance(company_evidence, dict) else None):
-        if not isinstance(rec, dict) or rec.get("blocked") is True or rec.get("wrong_entity") is True:
             continue
         stakeholder = _dict(rec.get("stakeholder"))
         if stakeholder:
-            _add_simple_stakeholder(
-                people,
-                seen,
-                _simple_stakeholder_item(
-                    stakeholder.get("name"),
-                    stakeholder.get("role"),
-                    source_database="company_evidence",
-                    source=stakeholder.get("public_profile_url") or rec.get("url"),
-                    evidence_basis=stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title"),
-                    allowed_use=stakeholder.get("allowed_use") or rec.get("sales_use"),
-                    confidence=rec.get("extraction_confidence"),
-                ),
-            )
-        coresignal_fields = _dict(rec.get("coresignal_fields"))
-        for executive in _list(coresignal_fields.get("key_executives")):
+            candidates.append({
+                **stakeholder,
+                "role": stakeholder.get("role") or stakeholder.get("position"),
+                "insight": _clip(rec.get("source_quote") or rec.get("text_excerpt"), 420),
+                "confidence": rec.get("extraction_confidence") or 50,
+                "source": stakeholder.get("public_profile_url") or rec.get("url"),
+                "evidence_basis": stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title"),
+                "source_database": source_database,
+                "provider": rec.get("provider"),
+                "allowed_use": "blocked" if rec.get("blocked") or rec.get("wrong_entity") else (
+                    "internal_only" if rec.get("internal_only") or rec.get("sales_use") == "internal_only" else
+                    stakeholder.get("allowed_use") or rec.get("sales_use") or "internal_only"),
+                "current_affiliation_verified": stakeholder.get("current_affiliation_verified", rec.get("current_affiliation_verified")),
+                "historical": _dict(rec.get("signal_markers")).get("historical_or_retired_role") is True,
+            })
+        # New databases already selected the full roster together with employees.
+        # Older databases still need their raw roster checked by the shared policy.
+        for executive in ([] if rec.get("stakeholder_selection_applied") else _list(_dict(rec.get("coresignal_fields")).get("key_executives"))):
             if not isinstance(executive, dict):
                 continue
-            _add_simple_stakeholder(
-                people,
-                seen,
-                _simple_stakeholder_item(
-                    executive.get("name") or executive.get("member_full_name") or executive.get("full_name"),
-                    executive.get("title") or executive.get("member_position_title") or executive.get("role"),
-                    source_database="company_evidence",
-                    source=rec.get("url"),
-                    evidence_basis=rec.get("title") or "Coresignal key executives in Company Evidence DB",
-                    allowed_use="allowed_as_discovery_question",
-                    confidence=rec.get("extraction_confidence"),
-                ),
-            )
+            candidates.append({
+                "name": executive.get("name") or executive.get("member_full_name") or executive.get("full_name"),
+                "role": executive.get("title") or executive.get("member_position_title") or executive.get("role"),
+                "provider_person_id": executive.get("parent_id"),
+                "public_profile_url": executive.get("public_profile_url"),
+                "provider": "coresignal", "source_database": source_database,
+                "source": executive.get("public_profile_url") or rec.get("url"),
+                "evidence_basis": rec.get("title") or "Confirmed Coresignal company executive roster",
+                "allowed_use": "blocked" if rec.get("blocked") or rec.get("wrong_entity") else "allowed_as_discovery_question",
+                "current_affiliation_verified": rec.get("entity_verified") is True and executive.get("is_current") is not False and executive.get("current_affiliation_verified") is not False,
+                "affiliation_basis": "confirmed_company_executive_roster",
+            })
+    return candidates
 
-    for rec in _list(company_source_ledger.get("records") if isinstance(company_source_ledger, dict) else None):
-        if not isinstance(rec, dict) or rec.get("blocked") is True or rec.get("wrong_entity") is True:
+
+def _ranked_stakeholder_pool(company_data: dict, company_evidence: dict | None = None, company_source_ledger: dict | None = None) -> tuple[list[dict], dict]:
+    candidates = _evidence_stakeholder_candidates(company_evidence, "company_evidence")
+    candidates.extend(_evidence_stakeholder_candidates(company_source_ledger, "company_source_ledger"))
+    for person in _list(company_data.get("key_people")):
+        if not isinstance(person, dict):
             continue
-        stakeholder = _dict(rec.get("stakeholder"))
-        _add_simple_stakeholder(
-            people,
-            seen,
-            _simple_stakeholder_item(
-                stakeholder.get("name"),
-                stakeholder.get("role"),
-                source_database="company_source_ledger",
-                source=stakeholder.get("public_profile_url") or rec.get("url"),
-                evidence_basis=stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title"),
-                allowed_use=stakeholder.get("allowed_use") or rec.get("sales_use"),
-                confidence=rec.get("extraction_confidence"),
-            ),
-        )
+        insights = _dict(person.get("linkedin_insights"))
+        candidates.append({
+            **person, "role": person.get("role") or person.get("title"),
+            "source": person.get("source") or person.get("source_url"),
+            "source_database": "scanner_key_people",
+            "evidence_basis": insights.get("verified_role") or person.get("source") or person.get("source_url"),
+            "current_affiliation_verified": insights.get("still_at_company", person.get("current_affiliation_verified")),
+            "allowed_use": "allowed_as_discovery_question" if person.get("source") or person.get("source_url") else "internal_only",
+        })
+    provider = _dict(_dict(_dict(company_evidence).get("provider_status")).get("coresignal"))
+    candidates.extend(_list(provider.get("stakeholder_conflicts")))
+    size = employee_count(company_data) or provider.get("employees_for_ranking")
+    return rank_stakeholders(candidates, demand_profile(company_data), employees=size)
 
-    if len(people) < limit:
-        for person in _list(company_data.get("key_people")):
-            if not isinstance(person, dict):
-                continue
-            _add_simple_stakeholder(
-                people,
-                seen,
-                _simple_stakeholder_item(
-                    person.get("name"),
-                    person.get("role") or person.get("title"),
-                    source_database="scanner_key_people",
-                    source=person.get("source") or person.get("source_url"),
-                    evidence_basis=person.get("source") or person.get("source_url") or "Stored Scanner stakeholder compatibility data",
-                    allowed_use="allowed_as_discovery_question" if (person.get("source") or person.get("source_url")) else "internal_only",
-                    confidence=person.get("confidence") or person.get("confidence_score"),
-                ),
-            )
-            if len(people) >= limit:
-                break
 
-    people.sort(key=_stakeholder_sort_score)
-    return people[:limit]
+def _company_evidence_stakeholders(company_evidence: dict | None) -> list[dict]:
+    # Compatibility entry point. Main generation ranks all sources together.
+    return _ranked_stakeholder_pool({}, company_evidence)[0]
+
+
+def _stakeholder_name_list(company_data: dict, company_evidence: dict | None = None,
+                           company_source_ledger: dict | None = None, *, limit: int = 6) -> list[dict]:
+    return _ranked_stakeholder_pool(company_data, company_evidence, company_source_ledger)[0][:limit]
 
 
 def _company_source_ledger_records(company_source_ledger: dict | None) -> tuple[list[dict], list[dict]]:
@@ -2358,42 +2245,8 @@ def _build_input_payload(
     financial_sources = _financial_evidence(company_data)
     ai_verification = _dict(company_data.get("ai_verification"))
     false_claims = _list(ai_verification.get("false_claims")) + _list(ai_verification.get("unsupported_claims"))
-    key_people = []
-    for person in _list(company_data.get("key_people"))[:10]:
-        if isinstance(person, dict):
-            insights = _dict(person.get("linkedin_insights"))
-            if insights.get("still_at_company") is False:
-                continue
-            insight_bits = [
-                person.get("relevance"),
-                person.get("summary"),
-                person.get("insight"),
-                insights.get("headline"),
-                insights.get("summary"),
-            ]
-            topics = _list(insights.get("topics"))
-            key_people.append({
-                "name": person.get("name"),
-                "role": person.get("role") or person.get("title"),
-                "insight": _clip(" | ".join(str(x) for x in insight_bits if x), 520),
-                "confidence": person.get("confidence") or person.get("confidence_score"),
-                "source": person.get("source") or person.get("source_url"),
-                "evidence_basis": insights.get("verified_role") or person.get("source") or person.get("source_url") or "Stored Scanner stakeholder compatibility data",
-                "source_database": "scanner_key_people",
-                "allowed_use": "internal_only" if not person.get("source") and not person.get("source_url") else "allowed_as_discovery_question",
-                "matched_demand_groups": topics[:6],
-                "stakeholder_role_match_reason": person.get("relevance") or insights.get("verified_role"),
-                "safety_notes": ["Moved from normal Company Summary to Buying Insight; validate current role before customer-facing use."],
-                "do_not_say": ["Do not imply buying intent from role/title alone."],
-            })
-    seen_people = {str(person.get("name") or "").lower() for person in key_people if person.get("name")}
-    for person in _company_evidence_stakeholders(company_evidence):
-        key = str(person.get("name") or "").lower()
-        if key and key not in seen_people:
-            key_people.append(person)
-            seen_people.add(key)
-        if len(key_people) >= 16:
-            break
+    key_people, stakeholder_diagnostics = _ranked_stakeholder_pool(company_data, company_evidence, company_source_ledger)
+    stakeholder_profile = demand_profile(company_data)
 
     strategic_foresight = _dict(company_data.get("strategic_foresight"))
     forces = []
@@ -2517,8 +2370,10 @@ def _build_input_payload(
             "warnings": company_source_ledger.get("warnings", []) if isinstance(company_source_ledger, dict) else [],
         },
         "source_ledger_recovery_records": _company_source_ledger_recovery_records(company_source_ledger),
-        "stakeholders": key_people,
-        "stakeholder_name_list": _stakeholder_name_list(company_data, company_evidence, company_source_ledger),
+        "stakeholders": key_people[:12],
+        "stakeholder_name_list": key_people[:6],
+        "stakeholder_demand_profile": stakeholder_profile,
+        "stakeholder_selection": stakeholder_diagnostics,
         "foresight_forces": forces,
         "services": services,
         "modernization_tactics": modernization_tactics,
@@ -7139,68 +6994,35 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         )
         play["need_hypothesis"] = _strip_archetype_terms(play["need_hypothesis"])
         play["response_directions"] = _strip_archetype_terms(play["response_directions"])
-    fixed_stakeholders = []
-    for item in _list(report.get("stakeholder_map")):
-        if not isinstance(item, dict):
-            continue
-        fixed = fix_item(item, "internal_only")
-        fixed["relevance_rationale"] = _clip(
-            fixed.get("relevance_rationale") or fixed.get("insight") or fixed.get("likely_buying_committee_role"),
-            520,
-        )
-        fixed["linked_pressure_themes"] = [str(x) for x in _list(fixed.get("linked_pressure_themes"))[:8] if x]
-        fixed["linked_service_themes"] = [str(x) for x in _list(fixed.get("linked_service_themes"))[:8] if x]
-        fixed["do_not_say"] = [str(x) for x in _list(fixed.get("do_not_say"))[:5] if x]
-        fixed["safety_notes"] = [str(x) for x in _list(fixed.get("safety_notes"))[:5] if x]
-        if not fixed["do_not_say"]:
-            fixed["do_not_say"] = ["Do not imply confirmed buying intent from role/title alone."]
-        if not fixed["safety_notes"]:
-            fixed["safety_notes"] = ["Use as sales-prep context; validate current role and remit before outreach."]
-        basis_text = str(fixed.get("evidence_basis") or "").strip()
-        if basis_text.lower().endswith("use only"):
-            fixed["evidence_basis"] = basis_text + " as sales-prep context."
-        fixed_stakeholders.append(fixed)
-    if not fixed_stakeholders:
-        fixed_stakeholders = [
-            fix_item(item, "allowed_as_discovery_question")
-            for item in _fallback_stakeholder_map(payload, signals_by_id)
-            if isinstance(item, dict)
-        ]
-    if len(fixed_stakeholders) < 3:
-        for item in _role_level_stakeholder_map(signals_by_id, fixed_stakeholders, limit=3 - len(fixed_stakeholders)):
-            if isinstance(item, dict):
-                fixed_stakeholders.append(fix_item(item, "allowed_as_discovery_question"))
-    has_role_level_guidance = any(
-        str(item.get("name") or "").lower() == "role-level target"
-        or str(item.get("evidence_basis") or "").startswith("SIG-")
-        for item in fixed_stakeholders
-        if isinstance(item, dict)
+    # Names and titles are selected deterministically from the same verified pool
+    # for both report sections. LLM output may enrich reasoning, never add people.
+    canonical, selection = rank_stakeholders(
+        _list(payload.get("stakeholders")), _dict(payload.get("stakeholder_demand_profile")), limit=6,
     )
-    if not has_role_level_guidance and len(fixed_stakeholders) < 6:
-        for item in _role_level_stakeholder_map(signals_by_id, fixed_stakeholders, limit=min(2, 6 - len(fixed_stakeholders))):
-            if isinstance(item, dict):
-                fixed_stakeholders.append(fix_item(item, "allowed_as_discovery_question"))
+    generated = {person_key(item): item for item in _list(report.get("stakeholder_map")) if isinstance(item, dict)}
+    canonical_payload = {**payload, "stakeholders": canonical}
+    fixed_stakeholders = []
+    for item in _fallback_stakeholder_map(canonical_payload, {}, limit=6):
+        draft = generated.get(person_key(item), {})
+        if str(draft.get("role") or "").casefold() == str(item.get("role") or "").casefold():
+            for field in ("relevance_rationale", "likely_buying_committee_role", "linked_pressure_themes", "linked_service_themes"):
+                if draft.get(field):
+                    item[field] = draft[field]
+        fixed_stakeholders.append(fix_item(item, "allowed_as_discovery_question"))
+    # A relevant function without a verified named owner remains a discovery role.
+    fixed_stakeholders.extend(fix_item(item, "allowed_as_discovery_question") for item in
+        _role_level_stakeholder_map(signals_by_id, fixed_stakeholders, limit=2))
     report["stakeholder_map"] = fixed_stakeholders
-    extra_people = []
-    extra_seen: set[str] = set()
-    for person in _list(report.get("additional_stakeholder_names")) + _list(payload.get("stakeholder_name_list")):
-        if not isinstance(person, dict):
-            continue
-        _add_simple_stakeholder(
-            extra_people,
-            extra_seen,
-            _simple_stakeholder_item(
-                person.get("name"),
-                person.get("position") or person.get("role") or person.get("title"),
-                source_database=person.get("source_database") or "buying_insight",
-                source=person.get("source"),
-                evidence_basis=person.get("evidence_basis"),
-                allowed_use=person.get("allowed_use") or person.get("sales_use"),
-                confidence=person.get("confidence"),
-            ),
-        )
-    extra_people.sort(key=_stakeholder_sort_score)
-    report["additional_stakeholder_names"] = extra_people[:6]
+    report["additional_stakeholder_names"] = canonical
+    report["stakeholder_selection"] = {
+        **_dict(payload.get("stakeholder_selection")),
+        "named_stakeholders_displayed": len(canonical),
+        "additional_names_displayed": len(canonical),
+        "role_targets_displayed": len(fixed_stakeholders) - len(canonical),
+    }
+    print("[Buying Insight stakeholders] " + json.dumps({
+        "company": _dict(payload.get("company")).get("name"), **report["stakeholder_selection"],
+    }, ensure_ascii=False))
     report.pop("conversation_angles", None)
 
     if low_evidence:

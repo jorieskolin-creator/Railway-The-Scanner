@@ -182,7 +182,8 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
     def fake_coresignal_request(method, path, *, payload=None, errors=None):
-        assert "employee" not in path
+        if "employee" in path:
+            return []
         if "company" in path and "search" in path:
             return [123]
         if "company" in path and "collect" in path:
@@ -277,9 +278,10 @@ def test_employee_api_runs_after_executive_filter_and_checks_current_employer(mo
     })
     stakeholders = [rec["stakeholder"] for rec in records if "stakeholder" in rec]
     assert diagnostics["employee_search_attempted"] is True
-    assert diagnostics["blocked_or_unmatched"] == 2
+    assert diagnostics["blocked_or_unmatched"] == 3
+    assert diagnostics["rejected_by_reason"]["duplicate_person"] == 1
     assert [(person["name"], person["role"]) for person in stakeholders] == [("Current Executive", "Chief Information Officer")]
-    assert collected_ids == [91, 92, 93]
+    assert collected_ids == [91, 92, 93, 94]
     assert any("404" in warning for warning in warnings)
 
 
@@ -347,11 +349,7 @@ def test_coresignal_executive_generalist_and_retired_roles(monkeypatch):
         {"name": "Raimo Seppänen", "title": "Airport Director Ret."},
         demand_profile,
     )
-    assert retired["stakeholder_role_match_reason"] == "historical_or_retired_role"
-    assert retired["sales_use"] == "internal_only"
-    assert retired["internal_only"] is True
-    assert retired["buying_evidence_eligible"] is False
-    assert retired["demand_signal_ids"] == []
+    assert retired is None
 
 
 def test_company_evidence_warnings_distinguish_coresignal_trigger_updates(monkeypatch):
@@ -504,6 +502,8 @@ def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
                     "stakeholder": {
                         "name": "Jane Example",
                         "role": "CIO",
+                        "current_affiliation_verified": True,
+                        "affiliation_basis": "active_company_id",
                         "public_profile_url": "https://www.linkedin.com/in/jane-example",
                         "allowed_use": "allowed_as_discovery_question",
                         "matched_demand_groups": ["ai_data_cloud_platform"],

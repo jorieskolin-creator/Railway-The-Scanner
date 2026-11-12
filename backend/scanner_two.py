@@ -34,6 +34,7 @@ from entity_identity import (
 )
 from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text, extract_anthropic_text
 from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL, resolve_model_id
+from stakeholder_policy import seniority_tier
 from gemini_client import call_gemini_forensic_text, gemini_api_key
 from evidence_contracts import (
     VERIFIED_COMPANY_EVIDENCE,
@@ -3507,15 +3508,6 @@ def _is_valid_full_name(name: str) -> bool:
     return True
 
 
-_SENIORITY_TIERS = [
-    (1, re.compile(r'\b(CEO|COO|President|Chairman|Founder|Co-Founder|Toimitusjohtaja|Maajohtaja|Managing\s+Director|Country\s+Manager|Group\s+Executive|General\s+Manager|Pääjohtaja|Hallituksen\s+puheenjohtaja)\b', re.I)),
-    (2, re.compile(r'\b(CTO|CIO|CDO|CPO|CFO|CHRO|CMO|Chief\s+\w+\s+Officer|Executive\s+Vice\s+President|EVP)\b', re.I)),
-    (3, re.compile(r'\b(SVP|Senior\s+Vice\s+President|VP|Vice\s+President|Board\s+Member|Hallituksen\s+jäsen)\b', re.I)),
-    (4, re.compile(r'\b(Director)\b', re.I)),
-    (5, re.compile(r'\b(Head\s+of)\b', re.I)),
-    (6, re.compile(r'\b(Senior\s+Manager|Manager|Lead)\b', re.I)),
-]
-
 # Role descriptions that are NOT actual job titles — always invalid as stakeholders
 _INVALID_ROLE_FRAGMENTS = {
     "unspecified", "role not", "no role", "returning employee",
@@ -3552,12 +3544,7 @@ _CONSTRAINT_ROLE_MAP = [
 
 def _get_seniority_tier(role: str) -> int:
     """Return seniority tier (1=highest) for a role string. 7 = unknown/unranked."""
-    if not role:
-        return 7
-    for tier, pattern in _SENIORITY_TIERS:
-        if pattern.search(role):
-            return tier
-    return 7
+    return seniority_tier(role)
 
 
 def _is_valid_role(role: str) -> bool:
