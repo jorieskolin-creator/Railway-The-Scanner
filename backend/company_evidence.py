@@ -1521,6 +1521,8 @@ def _as_records(data: Any) -> list[dict]:
             if isinstance(item, dict):
                 source = item.get("_source") if isinstance(item.get("_source"), dict) else item
                 if source:
+                    if item.get("_id") and not source.get("id"):
+                        source = {**source, "id": item["_id"]}
                     records.append(source)
         return records
     if isinstance(data, dict):
@@ -2015,10 +2017,10 @@ def _confirmed_coresignal_pairs(
     for idx, record in enumerate(candidate_records):
         decision = _coresignal_entity_decision(company_name, company_url, record, target_country, identity)
         if decision["confirmed"]:
-            record_id = (
+            record_id = record.get("company_id") or (
                 collected_pairs[idx][0]
                 if idx < len(collected_pairs)
-                else _first_key(record, ("id", "company_id", "source_id"))
+                else _first_key(record, ("id", "source_id"))
             )
             confirmed_pairs.append((record_id, record))
         elif len(rejection_samples) < 6:
@@ -2161,36 +2163,56 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int, 
     return records[:limit], company_ids[:limit], diagnostics, warnings
 
 
-def _coresignal_employee_search(company_id: Any, company_name: str, demand_profile: dict, max_people: int) -> tuple[list[dict], list[str]]:
-    warnings = []
-    if not company_id:
-        return [], ["Coresignal stakeholder search skipped because no company id was available."]
-    path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_SEARCH_PATH")) or "/cdapi/v1/professional_network/employee/search/filter"
-    collect_path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_COLLECT_PATH")) or "/cdapi/v1/professional_network/employee/collect/{id}"
-    role_terms = _list(demand_profile.get("roles"))[:18]
+def _coresignal_employee_search(
+    company_id: int, company_name: str, company_url: str, demand_profile: dict, max_people: int, start_idx: int,
+) -> tuple[list[dict], int, list[str]]:
+    path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_SEARCH_PATH"))
+    if not path or path == "/cdapi/v1/professional_network/employee/search/filter":
+        path = "/cdapi/v2/employee_multi_source/search/es_dsl"
+    collect_path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_COLLECT_PATH"))
+    if not collect_path or collect_path == "/cdapi/v1/professional_network/employee/collect/{id}":
+        collect_path = "/cdapi/v2/employee_multi_source/collect/{id}"
+    max_collect = max(max_people * 2, 8)
     payload = {
-        "current_company_id": company_id,
-        "company_id": company_id,
-        "company_name": company_name,
-        "title": role_terms,
-        "active": True,
-        "limit": max(max_people * 2, 8),
+        "query": {"bool": {
+            "filter": [{"term": {"active_experience_company_id": company_id}}],
+            "should": [{"match_phrase": {"active_experience_title": role}} for role in demand_profile["roles"][:18]],
+        }},
+        "sort": ["_score"],
     }
-    raw = _coresignal_request("POST", path, payload=payload)
-    people_ids = _extract_ids(raw, max(max_people * 2, 8))
-    records = _as_records(raw)
-    collected = []
-    for person_id in people_ids[:max(max_people * 2, 8)]:
-        data = _coresignal_request("GET", collect_path.format(id=person_id))
-        if isinstance(data, dict):
-            collected.append(data)
-        if len(collected) >= max_people:
+    errors: list[dict] = []
+    raw = _coresignal_request("POST", path, payload=payload, errors=errors)
+    people_ids = dict.fromkeys(
+        str(person_id) for person_id in _extract_ids(raw, max_collect)
+        if re.fullmatch(r"[1-9][0-9]*", str(person_id))
+    )
+    records: list[dict] = []
+    rejected = 0
+    fields = urlencode({"fields": ("id", "full_name", "professional_network_url", "active_experience_title", "active_experience_company_id")}, doseq=True)
+    separator = "&" if "?" in collect_path else "?"
+    for person_id in people_ids:
+        data = _coresignal_request("GET", collect_path.format(id=person_id) + separator + fields, errors=errors)
+        if not isinstance(data, dict):
+            if errors and errors[-1].get("status_code") in {401, 402, 403, 429}:
+                break
+            continue
+        if str(data.get("active_experience_company_id")) != str(company_id):
+            rejected += 1
+            continue
+        record = _coresignal_stakeholder_record(start_idx + len(records), company_name, company_url, data, demand_profile)
+        if record:
+            records.append(record)
+        else:
+            rejected += 1
+        if len(records) >= max_people:
             break
-    if collected:
-        records = collected
+    warnings = [
+        f"Coresignal employee {method} failed ({status})."
+        for method, status in dict.fromkeys((error["method"], error.get("status_code") or "request error") for error in errors)
+    ]
     if not records:
-        warnings.append("Coresignal stakeholder search returned no usable records.")
-    return records[:max(max_people * 2, 8)], warnings
+        warnings.append("Coresignal employee search yielded no stakeholder candidates after current employer and role checks.")
+    return records, rejected, warnings
 
 
 def _coresignal_company_record(idx: int, company_name: str, company_url: str, raw: dict, target_country: str = "", identity: dict | None = None) -> dict:
@@ -2377,7 +2399,7 @@ def _coresignal_stakeholder_record(
     demand_profile: dict,
 ) -> dict | None:
     name = _clip(_first_key(raw, ("name", "full_name", "member_full_name", "person_name")), 160)
-    title = _clip(_first_key(raw, ("title", "current_title", "job_title", "position", "role", "member_position_title")), 180)
+    title = _clip(_first_key(raw, ("active_experience_title", "title", "current_title", "job_title", "position", "role", "member_position_title")), 180)
     if not name or not title:
         return None
     role_context = _stakeholder_role_context(title, demand_profile)
@@ -2487,6 +2509,7 @@ def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callbac
         "company_records": 0,
         "technology_records": 0,
         "stakeholder_candidates": 0,
+        "employee_search_attempted": False,
         "blocked_or_unmatched": 0,
         "base_url": _coresignal_base_url() if _coresignal_enabled() else None,
         "entity_first": True,
@@ -2525,31 +2548,34 @@ def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callbac
             records.append(tech_record)
 
     demand_profile = _demand_profile(company_data)
-    people_records = []
-    if max_stakeholders > 0 and company_items and company_ids:
-        for company_record in [record for record in records if record.get("provider_record_type") == "company_enrichment"]:
-            people_records.extend(_coresignal_key_executive_records(company_record, max_stakeholders - len(people_records)))
-            if len(people_records) >= max_stakeholders:
-                break
-        if not people_records and _env_bool("CORESIGNAL_USE_EMPLOYEE_API", default=False):
-            for company_id in company_ids[:1]:
-                people, people_warnings = _coresignal_employee_search(company_id, company_name, demand_profile, max_stakeholders)
-                warnings.extend(people_warnings)
-                people_records.extend(people)
-                if people_records:
+    stakeholders = []
+    if max_stakeholders > 0:
+        company_records = [record for record in records if record.get("provider_record_type") == "company_enrichment"]
+        for company_record in company_records:
+            for raw in _coresignal_key_executive_records(company_record, 24):
+                if len(stakeholders) >= max_stakeholders:
                     break
-        elif not people_records:
-            warnings.append("Coresignal company record did not include role-matched key executives; legacy employee API fallback disabled.")
-    elif max_stakeholders > 0 and company_items:
-        warnings.append("Coresignal stakeholder search skipped because the confirmed company record did not include a collectable company id.")
-    elif max_stakeholders > 0:
-        warnings.append("Coresignal stakeholder search skipped because no entity-confirmed company record was found.")
-    for raw in people_records:
-        stakeholder_record = _coresignal_stakeholder_record(start_idx + len(records), company_name, company_url, raw, demand_profile)
-        if stakeholder_record:
-            records.append(stakeholder_record)
-        else:
-            diagnostics["blocked_or_unmatched"] += 1
+                stakeholder = _coresignal_stakeholder_record(
+                    start_idx + len(records) + len(stakeholders), company_name, company_url, raw, demand_profile,
+                )
+                if stakeholder:
+                    stakeholders.append(stakeholder)
+                else:
+                    diagnostics["blocked_or_unmatched"] += 1
+        if not stakeholders:
+            company_id = next((int(value) for value in company_ids if re.fullmatch(r"[1-9][0-9]*", str(value))), None)
+            if company_id:
+                diagnostics["employee_search_attempted"] = True
+                stakeholders, rejected, employee_warnings = _coresignal_employee_search(
+                    company_id, company_name, company_url, demand_profile, max_stakeholders, start_idx + len(records),
+                )
+                diagnostics["blocked_or_unmatched"] += rejected
+                warnings.extend(employee_warnings)
+            elif company_items:
+                warnings.append("Coresignal employee search skipped because the confirmed company record had no numeric company ID.")
+            else:
+                warnings.append("Coresignal employee search skipped because no entity-confirmed company record was found.")
+    records.extend(stakeholders)
     diagnostics["company_records"] = sum(1 for r in records if r.get("provider_record_type") == "company_enrichment")
     diagnostics["technology_records"] = sum(1 for r in records if r.get("provider_record_type") == "technology_signal")
     diagnostics["company_update_triggers"] = sum(1 for r in records if r.get("provider_record_type") == "company_update_trigger")
