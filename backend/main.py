@@ -3334,7 +3334,7 @@ Respond with valid JSON only:
     old_why = data.get("why_proposals", [])
     old_what = data.get("what_proposals", [])
 
-    # --- Model chain: GPT frontier → Claude Sonnet 5 ---
+    # --- Model chain: GPT frontier → configured Sonnet ---
     response_text = ""
     model_used = ""
     start = _time.time()
@@ -3883,7 +3883,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     except Exception as gpt_err:
         print(f"   ❌ [Clean Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-    # Fallback: Claude Sonnet 5 (independent provider — survives OpenAI outages)
+    # Fallback: configured Sonnet (independent of OpenAI availability)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not resynth_text and anthropic_key:
         try:
@@ -6023,6 +6023,7 @@ def _execute_scan_pipeline(
         diagnosis_generation_meta = {
             "status": "not_attempted",
             "provider": "",
+            "route": "",
             "parse_status": "not_attempted",
             "fallback_reason": "",
             "attempts": [],
@@ -6352,23 +6353,30 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                     )
                 else:
                     if _use_premium:
+                        diagnosis_policy = policy_for("ai_diagnosis")
+                        diagnosis_effort = diagnosis_policy["effort"]
+                        diagnosis_tokens = diagnosis_policy["max_output_tokens"]
                         attempt_started = time.time()
                         try:
                             _premium_timeout = min(
                                 PREMIUM_SYNTH_TIMEOUT,
                                 max(8, _diagnosis_budget_left()),
                             )
-                            print(f"   🔄 [Synthesis] Attempting {CLAUDE_PREMIUM_MODEL} with adaptive thinking (timeout: {_premium_timeout}s)...")
+                            print(
+                                f"   🔄 [Synthesis] Attempting {CLAUDE_PREMIUM_MODEL} "
+                                f"(effort={diagnosis_effort}, max_tokens={diagnosis_tokens}, timeout={_premium_timeout}s)..."
+                            )
                             response_text = call_anthropic_text(
                                 synthesis_prompt,
                                 model=CLAUDE_PREMIUM_MODEL,
-                                max_tokens=6000,
+                                max_tokens=diagnosis_tokens,
                                 timeout=_premium_timeout,
                                 max_retries=0,
-                                reasoning_effort="xhigh",
+                                reasoning_effort=diagnosis_effort,
                                 log_label="Scanner Diagnosis Premium",
                             )
                             diagnosis_generation_meta["provider"] = CLAUDE_PREMIUM_MODEL
+                            diagnosis_generation_meta["route"] = "premium_claude"
                             diagnosis_generation_meta["attempts"].append({
                                 "model": CLAUDE_PREMIUM_MODEL,
                                 "status": "completed",
@@ -6414,6 +6422,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 log_label="Scanner Diagnosis GPT Fallback",
                             )
                             diagnosis_generation_meta["provider"] = GPT_REASONING_MODEL
+                            diagnosis_generation_meta["route"] = "gpt_fallback"
                             diagnosis_generation_meta["attempts"].append({
                                 "model": GPT_REASONING_MODEL,
                                 "status": "completed",
@@ -6441,7 +6450,9 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 SONNET_SYNTH_TIMEOUT,
                                 max(8, _diagnosis_budget_left()),
                             )
-                            print(f"   🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL} (timeout: {_sonnet_timeout}s)...")
+                            sonnet_retry = _use_premium and CLAUDE_SONNET_MODEL == CLAUDE_PREMIUM_MODEL
+                            sonnet_route = "lower-effort retry" if sonnet_retry else "fallback"
+                            print(f"   🔄 [Synthesis] {CLAUDE_SONNET_MODEL} {sonnet_route} (timeout: {_sonnet_timeout}s)...")
                             m_start = time.time()
 
                             _sonnet_system = (
@@ -6462,6 +6473,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 log_label="Scanner Diagnosis Sonnet Fallback",
                             )
                             diagnosis_generation_meta["provider"] = CLAUDE_SONNET_MODEL
+                            diagnosis_generation_meta["route"] = "sonnet_retry" if sonnet_retry else "sonnet_fallback"
                             diagnosis_generation_meta["attempts"].append({
                                 "model": CLAUDE_SONNET_MODEL,
                                 "status": "completed",
@@ -7351,7 +7363,11 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             full_data["quality_notes"].append(
                 "AI Diagnosis was unavailable; downstream synthesis was attempted directly from governed evidence."
             )
-        elif diagnosis_generation_meta.get("provider") != CLAUDE_PREMIUM_MODEL:
+        elif diagnosis_generation_meta.get("route") == "sonnet_retry":
+            full_data["quality_notes"].append(
+                f"AI Diagnosis completed on a lower-effort retry with {CLAUDE_SONNET_MODEL}."
+            )
+        elif diagnosis_generation_meta.get("route") != "premium_claude":
             full_data["quality_notes"].append(
                 f"AI Diagnosis used the governed fallback provider ({diagnosis_generation_meta.get('provider') or 'unknown'})."
             )

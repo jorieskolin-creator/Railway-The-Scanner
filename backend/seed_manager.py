@@ -17,9 +17,10 @@ from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence, _call_openai_text
 from general_summary import generate_general_summary, fact_check_general_summary
+from llm_clients import call_anthropic_text
 from source_quality import manage_evidence_sources, is_foresight_context_eligible_source
 from prompts import PROMPT_VERSION, build_shared_guardrails
-from model_policy import CLAUDE_PREMIUM_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
+from model_policy import CLAUDE_PREMIUM_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, policy_for
 import anthropic
 
 
@@ -126,18 +127,17 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
 
                 Output plain text only.
                 """
-        # Sonnet 5 fallback for AI context retrieval
+        # Sonnet fallback for AI context retrieval
         try:
             anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
             if anthropic_key:
-                import anthropic
-                claude_client = anthropic.Anthropic(api_key=anthropic_key)
-                resp = claude_client.messages.create(
+                text = call_anthropic_text(
+                    fallback_prompt,
                     model=CLAUDE_SONNET_MODEL,
                     max_tokens=2048,
-                    messages=[{"role": "user", "content": fallback_prompt}]
+                    timeout=45,
+                    reasoning_effort="low",
                 )
-                text = resp.content[0].text if resp.content else ""
                 if text:
                     print(f"   [Scanner 1] ✅ AI Context via {CLAUDE_SONNET_MODEL} for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SONNET FALLBACK) ---\n{text}"
@@ -670,7 +670,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                     model=CLAUDE_PREMIUM_MODEL,
                                     max_tokens=16000,
                                     thinking={"type": "adaptive"},
-                                    extra_body={"output_config": {"effort": "xhigh"}},
+                                    extra_body={"output_config": {"effort": policy_for("ai_diagnosis")["effort"]}},
                                     messages=[{"role": "user", "content": synthesis_prompt}]
                                 )
                                 if resp.content:
@@ -697,7 +697,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             except Exception as gpt_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                        # Fallback 2: Claude Sonnet 5
+                        # Fallback 2: standard Claude at medium effort
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
                                 print(f"   [{company_name}] 🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")
@@ -705,6 +705,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 sonnet_resp = claude_client.messages.create(
                                     model=CLAUDE_SONNET_MODEL,
                                     max_tokens=4000,
+                                    output_config={"effort": "medium"},
                                     messages=[{"role": "user", "content": synthesis_prompt}],
                                 )
                                 for block in sonnet_resp.content:
@@ -1134,7 +1135,7 @@ re-introduce any of the false claims listed above."""
                     except Exception as gpt_err:
                         print(f"   [{company_name}] ❌ [Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                    # Fallback: Claude Sonnet 5
+                    # Fallback: configured Sonnet
                     if not resynth_text:
                         try:
                             print(f"   [{company_name}] 🔄 [Re-Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")

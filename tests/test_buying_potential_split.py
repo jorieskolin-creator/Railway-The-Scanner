@@ -103,9 +103,9 @@ def test_buying_potential_uses_reasoning_aware_sol_budgets_and_strict_schemas(mo
     assert bp._BUYING_GATE_REVIEW_SCHEMA["additionalProperties"] is False
     repair_policy = bp.policy_for("buying_insight_gate_repair")
     assert repair_policy["effort"] == "medium"
-    assert repair_policy["chain"][0] == "claude-sonnet-5"
+    assert repair_policy["chain"][0] == "claude-sonnet-5-5"
     assert repair_policy["max_batch_items"] == 5
-    assert bp.policy_for("buying_insight_language_qa")["chain"][0] == "claude-sonnet-5"
+    assert bp.policy_for("buying_insight_language_qa")["chain"][0] == "claude-sonnet-5-5"
     assert bp.policy_for("buying_insight_gate_reanalysis")["chain"][0] == "gpt-6.1-sol"
 
 
@@ -342,7 +342,7 @@ def test_failed_gate_repair_batch_is_removed_without_sol_reanalysis(monkeypatch)
                     for claim_id in batch_ids
                 ],
                 "notes": [],
-            }, "claude-sonnet-5")
+            }, "claude-sonnet-5-5")
         raise ValueError("repair batch unavailable")
 
     monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
@@ -351,7 +351,7 @@ def test_failed_gate_repair_batch_is_removed_without_sol_reanalysis(monkeypatch)
     assert len(review["field_actions"]) == 6
     assert sum(action["action"] == "remove" for action in review["field_actions"]) == 1
     assert not review["reanalysis_models"]
-    assert calls[1][1][0] == "claude-sonnet-5"
+    assert calls[1][1][0] == "claude-sonnet-5-5"
 
 
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):
@@ -1627,12 +1627,12 @@ def test_final_language_qa_uses_sonnet_batches_for_remaining_fragments(monkeypat
                 "reason": "Completed the causal sentence without adding a claim.",
             }],
             "notes": [],
-        }, "claude-sonnet-5")
+        }, "claude-sonnet-5-5")
 
     monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
     result = bp._run_final_language_qa(report)
 
-    assert calls[0][0][0] == "claude-sonnet-5"
+    assert calls[0][0][0] == "claude-sonnet-5-5"
     assert result["sales_spine"]["account_thesis"].endswith("incomplete.")
     assert result["language_quality"]["model_repair_count"] == 1
     assert result["language_quality"]["remaining_issue_count"] == 0

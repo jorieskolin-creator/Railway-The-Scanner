@@ -19,6 +19,8 @@ from model_policy import (
     GPT_PRO_MODEL,
     GPT_REASONING_MODEL,
     GPT_VERIFIER_MODEL,
+    dedupe_chain,
+    resolve_model_id,
 )
 
 
@@ -196,6 +198,7 @@ def call_anthropic_text(
     json_schema_name: str = "scanner_output",
     log_label: str = "Anthropic",
 ) -> str:
+    model = resolve_model_id(model)
     api_key = anthropic_api_key()
     if not api_key:
         raise ValueError("No ANTHROPIC_API_KEY configured")
@@ -272,7 +275,7 @@ def call_json_model_chain(
     log_label: str = "OpenAI JSON",
 ) -> tuple[str, str]:
     errors: list[str] = []
-    for model in model_chain:
+    for model in dedupe_chain(*model_chain):
         try:
             if model.startswith("gpt-"):
                 text = call_openai_text(

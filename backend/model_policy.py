@@ -10,25 +10,30 @@ import os
 from typing import Any
 
 
-_DEFAULT_POLICY_VERSION = "model-policy-v4-gpt61-sonnet55-gemini38"
+_DEFAULT_POLICY_VERSION = "model-policy-v5-sonnet55"
 MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "").strip() or _DEFAULT_POLICY_VERSION
 
 _DEFAULT_REASONING_MODEL = "gpt-6.1-sol"
 _DEFAULT_VERIFIER_MODEL = "gpt-6.1-terra"
-_DEFAULT_CLAUDE_PREMIUM_MODEL = "claude-sonnet-5-5"
+_DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
 _DEFAULT_GROUNDED_MODEL = "gemini-3.8-flash"
 _MODEL_REPLACEMENTS = {
     "gpt-5.6-sol": _DEFAULT_REASONING_MODEL,
     "gpt-5.4": _DEFAULT_VERIFIER_MODEL,
-    "claude-opus-5": _DEFAULT_CLAUDE_PREMIUM_MODEL,
+    "claude-opus-5": _DEFAULT_CLAUDE_MODEL,
+    "claude-sonnet-5": _DEFAULT_CLAUDE_MODEL,
     "gemini-3.5-flash": _DEFAULT_GROUNDED_MODEL,
 }
 
 
+def resolve_model_id(model: str) -> str:
+    """Resolve old model pins to their configured replacements."""
+    model = model.strip().strip('"').strip("'")
+    return _MODEL_REPLACEMENTS.get(model, model)
+
+
 def _configured_model(env_var: str, default: str = "") -> str:
-    """Migrate old model pins in deployed settings and honor other overrides."""
-    model = os.environ.get(env_var, "").strip().strip('"').strip("'")
-    return _MODEL_REPLACEMENTS.get(model, model) or default
+    return resolve_model_id(os.environ.get(env_var, "")) or default
 
 
 GPT_REASONING_MODEL = _configured_model("SCANNER_DEFAULT_FRONTIER_MODEL", _DEFAULT_REASONING_MODEL)
@@ -46,9 +51,9 @@ DETAILED_COMPLETION_MODEL = _configured_model("SCANNER_DETAILED_COMPLETION_MODEL
 
 CLAUDE_PREMIUM_MODEL = (
     _configured_model("CLAUDE_PREMIUM_MODEL")
-    or _configured_model("CLAUDE_OPUS_MODEL", _DEFAULT_CLAUDE_PREMIUM_MODEL)
+    or _configured_model("CLAUDE_OPUS_MODEL", _DEFAULT_CLAUDE_MODEL)
 )
-CLAUDE_SONNET_MODEL = _configured_model("CLAUDE_SONNET_MODEL", "claude-sonnet-5")
+CLAUDE_SONNET_MODEL = _configured_model("CLAUDE_SONNET_MODEL", _DEFAULT_CLAUDE_MODEL)
 
 GEMINI_GROUNDED_MODEL = _configured_model("SCANNER_GROUNDED_RESEARCH_MODEL", _DEFAULT_GROUNDED_MODEL)
 GEMINI_HARVEST_MODEL = _configured_model("GEMINI_HARVEST_MODEL", GEMINI_GROUNDED_MODEL)
@@ -62,7 +67,7 @@ def dedupe_chain(*models: str | None) -> tuple[str, ...]:
     seen: set[str] = set()
     chain: list[str] = []
     for model in models:
-        model = str(model or "").strip().strip('"').strip("'")
+        model = resolve_model_id(str(model or ""))
         if not model or model in seen:
             continue
         seen.add(model)
@@ -120,6 +125,10 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "verbosity": "medium",
         "fallback": CLAUDE_SONNET_MODEL,
         "terminal": "compact_deterministic_rescue",
+    },
+    "ai_diagnosis": {
+        "effort": "high",
+        "max_output_tokens": 8000,
     },
     "gpt_web_repair": {
         "primary": GPT_REASONING_MODEL,

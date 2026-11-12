@@ -1265,7 +1265,7 @@ def generate_detailed_report(
 
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if anthropic_key and remaining_budget() >= 10:
-        # --- Attempt 1: Claude Sonnet 5 (standard long-form writer) ---
+        # --- Attempt 1: standard Claude long-form writer ---
         SONNET_MODEL = CLAUDE_SONNET_MODEL
         try:
             print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL}...")
@@ -1281,6 +1281,7 @@ def generate_detailed_report(
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=token_budget,
+                output_config={"effort": "medium"},
                 messages=[{"role": "user", "content": prompt}],
             )
             text_parts = []
@@ -1337,9 +1338,10 @@ def generate_detailed_report(
         print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} failed ({elapsed}ms): {e}")
 
     if anthropic_key and remaining_budget() >= 10:
-        # --- Attempt 3: Premium Claude fallback ---
+        # --- Attempt 3: premium Claude or a higher-effort retry of the standard model ---
         try:
-            print(f"   📝 [Detailed Report] Attempting {CLAUDE_PREMIUM_MODEL} premium fallback...")
+            route = "high-effort retry" if CLAUDE_PREMIUM_MODEL == CLAUDE_SONNET_MODEL else "premium fallback"
+            print(f"   📝 [Detailed Report] Attempting {CLAUDE_PREMIUM_MODEL} {route}...")
             t0 = time.time()
             opus_timeout = remaining_timeout(reserve=3, cap=60)
             if opus_timeout < 8:

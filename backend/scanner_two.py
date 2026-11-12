@@ -32,8 +32,8 @@ from entity_identity import (
     ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
     ENTITY_SCOPE_UNKNOWN,
 )
-from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
-from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text, extract_anthropic_text
+from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL, resolve_model_id
 from gemini_client import call_gemini_forensic_text, gemini_api_key
 from evidence_contracts import (
     VERIFIED_COMPANY_EVIDENCE,
@@ -4167,9 +4167,10 @@ Return ONLY valid JSON, no explanation."""
         response = client.messages.create(
             model=CLAUDE_SONNET_MODEL,
             max_tokens=12000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": structuring_prompt}]
         )
-        response_text = response.content[0].text if response.content else ""
+        response_text = extract_anthropic_text(response)
         json_payload = extract_json_from_text(response_text)
         if not json_payload:
             return None
@@ -7005,7 +7006,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Uses Claude/OpenAI web search to find financial data.
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
-    primary_model = model_id or CLAUDE_SONNET_MODEL
+    primary_model = resolve_model_id(model_id or "") or CLAUDE_SONNET_MODEL
     _fh_start = time.time()
     _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 

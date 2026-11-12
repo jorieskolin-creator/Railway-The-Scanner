@@ -35,15 +35,17 @@ def test_model_policy_defaults_and_fallback_order(monkeypatch):
     assert policy.GPT_PRO_REASONING_MODE == "pro"
     assert policy.DETAILED_COMPLETION_MODEL == "gpt-6.1-sol"
     assert policy.CLAUDE_PREMIUM_MODEL == "claude-sonnet-5-5"
-    assert policy.CLAUDE_SONNET_MODEL == "claude-sonnet-5"
+    assert policy.CLAUDE_SONNET_MODEL == "claude-sonnet-5-5"
     assert policy.GEMINI_GROUNDED_MODEL == "gemini-3.8-flash"
     assert policy.GEMINI_HARVEST_MODEL == policy.GEMINI_FORENSIC_MODEL == "gemini-3.8-flash"
     assert policy.GEMINI_FAST_FALLBACK_MODEL == "gemini-3.8-flash"
-    assert policy.MODEL_POLICY_VERSION == "model-policy-v4-gpt61-sonnet55-gemini38"
-    assert policy.buying_generation_chain("economy") == ("gpt-6.1-terra", "claude-sonnet-5")
-    assert policy.buying_generation_chain("quality") == ("gpt-6.1-sol", "claude-sonnet-5", "claude-sonnet-5-5")
-    assert policy.buying_generation_chain("board_grade") == ("gpt-6.1-sol", "claude-sonnet-5-5", "claude-sonnet-5")
-    assert policy.source_claim_chain() == ("gpt-6.1-terra", "claude-sonnet-5")
+    assert policy.MODEL_POLICY_VERSION == "model-policy-v5-sonnet55"
+    assert policy.buying_generation_chain("economy") == ("gpt-6.1-terra", "claude-sonnet-5-5")
+    assert policy.buying_generation_chain("balanced") == ("claude-sonnet-5-5", "gpt-6.1-sol")
+    assert policy.buying_generation_chain("quality") == ("gpt-6.1-sol", "claude-sonnet-5-5")
+    assert policy.buying_generation_chain("board_grade") == ("gpt-6.1-sol", "claude-sonnet-5-5")
+    assert policy.source_claim_chain() == ("gpt-6.1-terra", "claude-sonnet-5-5")
+    assert policy.policy_for("ai_diagnosis") == {"effort": "high", "max_output_tokens": 8000}
     assert policy.policy_for("grounded_acquisition")["availability_fallback"] == ("gpt-6.1-sol",)
     assert policy.policy_for("gpt_web_repair")["fallback"] == "gemini-3.8-flash"
     assert policy.policy_for("buying_insight_generation")["qualification"]["max_output_tokens"] == 9000
@@ -69,6 +71,7 @@ def test_deployment_model_pins_migrate_to_requested_replacements(monkeypatch):
     monkeypatch.setenv("SCANNER_VALIDATOR_MODEL", "gpt-5.4")
     monkeypatch.setenv("SCANNER_BUYING_GENERATION_MODEL", "gpt-5.6-sol")
     monkeypatch.setenv("CLAUDE_OPUS_MODEL", "claude-opus-5")
+    monkeypatch.setenv("CLAUDE_SONNET_MODEL", "claude-sonnet-5")
     monkeypatch.setenv("GEMINI_FORENSIC_MODEL", "gemini-3.5-flash")
     monkeypatch.setenv("GEMINI_FAST_FALLBACK_MODEL", "gemini-3.7-flash")
     sys.modules.pop("model_policy", None)
@@ -77,9 +80,10 @@ def test_deployment_model_pins_migrate_to_requested_replacements(monkeypatch):
         assert policy.GPT_REASONING_MODEL == "gpt-6.1-sol"
         assert policy.GPT_VERIFIER_MODEL == "gpt-6.1-terra"
         assert policy.CLAUDE_PREMIUM_MODEL == "claude-sonnet-5-5"
+        assert policy.CLAUDE_SONNET_MODEL == "claude-sonnet-5-5"
         assert policy.GEMINI_FORENSIC_MODEL == "gemini-3.8-flash"
         assert policy.policy_for("grounded_acquisition")["availability_fallback"] == ("gpt-6.1-sol", "gemini-3.7-flash")
-        assert policy.buying_generation_chain("quality") == ("gpt-6.1-sol", "claude-sonnet-5", "claude-sonnet-5-5")
+        assert policy.buying_generation_chain("quality") == ("gpt-6.1-sol", "claude-sonnet-5-5")
     finally:
         sys.modules.pop("model_policy", None)
 
