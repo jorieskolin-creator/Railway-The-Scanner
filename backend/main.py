@@ -64,8 +64,8 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
-from llm_clients import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
-from model_policy import policy_for
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from model_policy import CLAUDE_PREMIUM_MODEL, policy_for
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
@@ -2922,7 +2922,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         company_name=company_name,
     )
 
-    # Step 2: AI-powered fact-check (GPT-5.4 / Claude provider-separated verification)
+    # Step 2: AI-powered fact-check (GPT verifier / Claude provider-separated verification)
     ai_result = ai_fact_check_summary(
         summary_text=data.get("summary_text", ""),
         evidence_links=data.get("evidence_links", []),
@@ -5379,7 +5379,7 @@ def _execute_scan_pipeline(
                 f"after_core+final_reserve={snap['after_core_and_final_reserve']}s"
             )
 
-        # Model pipeline: Sonnet 5 + Web Search (forensic) | GPT/Claude financial search | Opus/GPT/Sonnet synthesis.
+        # Model pipeline: Grounded forensic research, GPT/Claude financial search, and Claude/GPT diagnosis.
 
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
@@ -6248,9 +6248,9 @@ Respond with valid JSON only. Required fields:
 Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. The archetype field is audit-only and must not appear in diagnostic_summary or evidence_based_risks. Do not add a foresight paragraph.
 Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
-                # --- Diagnosis synthesis with fallback chain: Opus 5 → GPT frontier → Sonnet 5 ---
-                # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
-                # Opus uses adaptive thinking to reason through conflicting intent vs. reality
+                # --- Diagnosis synthesis with fallback chain: premium Claude → GPT frontier → standard Sonnet ---
+                # The premium model synthesizes the governed evidence.
+                # The premium route reasons through conflicting intent and reality signals
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
                 response_text = ""
                 synth_start = time.time()
@@ -6289,40 +6289,40 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                 _gpt_available = bool(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY"))
                 _sonnet_available = bool(anthropic_key)
                 if _gpt_available and not _sonnet_available:
-                    OPUS_SYNTH_TIMEOUT = 0
+                    PREMIUM_SYNTH_TIMEOUT = 0
                     GPT_SYNTH_TIMEOUT = min(110, _diagnosis_available)
                     SONNET_SYNTH_TIMEOUT = 0
                 elif _sonnet_available and not _gpt_available:
-                    OPUS_SYNTH_TIMEOUT = min(70, max(0, _diagnosis_available - 30))
+                    PREMIUM_SYNTH_TIMEOUT = min(70, max(0, _diagnosis_available - 30))
                     GPT_SYNTH_TIMEOUT = 0
-                    SONNET_SYNTH_TIMEOUT = max(0, _diagnosis_available - OPUS_SYNTH_TIMEOUT)
+                    SONNET_SYNTH_TIMEOUT = max(0, _diagnosis_available - PREMIUM_SYNTH_TIMEOUT)
                 elif _diagnosis_available >= 130:
-                    OPUS_SYNTH_TIMEOUT = 70
+                    PREMIUM_SYNTH_TIMEOUT = 70
                     GPT_SYNTH_TIMEOUT = 35 if _gpt_available else 0
                     SONNET_SYNTH_TIMEOUT = (
-                        max(25, _diagnosis_available - OPUS_SYNTH_TIMEOUT - GPT_SYNTH_TIMEOUT)
+                        max(25, _diagnosis_available - PREMIUM_SYNTH_TIMEOUT - GPT_SYNTH_TIMEOUT)
                         if _sonnet_available else 0
                     )
                 elif _diagnosis_available >= 95:
-                    OPUS_SYNTH_TIMEOUT = 0
+                    PREMIUM_SYNTH_TIMEOUT = 0
                     GPT_SYNTH_TIMEOUT = min(55, _diagnosis_available - 35) if _gpt_available else 0
                     SONNET_SYNTH_TIMEOUT = (
                         max(30, _diagnosis_available - GPT_SYNTH_TIMEOUT)
                         if _sonnet_available else 0
                     )
                 elif _diagnosis_available >= 55:
-                    OPUS_SYNTH_TIMEOUT = 0
+                    PREMIUM_SYNTH_TIMEOUT = 0
                     GPT_SYNTH_TIMEOUT = 0
                     SONNET_SYNTH_TIMEOUT = _diagnosis_available if _sonnet_available else 0
                 else:
-                    OPUS_SYNTH_TIMEOUT = GPT_SYNTH_TIMEOUT = SONNET_SYNTH_TIMEOUT = 0
+                    PREMIUM_SYNTH_TIMEOUT = GPT_SYNTH_TIMEOUT = SONNET_SYNTH_TIMEOUT = 0
 
-                _use_opus = OPUS_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
+                _use_premium = PREMIUM_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
                 _use_gpt = GPT_SYNTH_TIMEOUT > 0
                 _use_sonnet = SONNET_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
                 _synth_chain_budget = min(
                     _diagnosis_available,
-                    OPUS_SYNTH_TIMEOUT + GPT_SYNTH_TIMEOUT + SONNET_SYNTH_TIMEOUT,
+                    PREMIUM_SYNTH_TIMEOUT + GPT_SYNTH_TIMEOUT + SONNET_SYNTH_TIMEOUT,
                 )
 
                 def _synthesis_budget_left() -> int:
@@ -6340,55 +6340,55 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                     f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
                     f"protected reserve: {FINAL_OUTPUT_RESERVE}s | "
                     f"diagnosis budget: {_synth_chain_budget}s | activation reserve: {ACTIVATION_CHAIN_BUDGET}s | "
-                    f"timeouts: opus={OPUS_SYNTH_TIMEOUT}s,gpt={GPT_SYNTH_TIMEOUT}s,sonnet={SONNET_SYNTH_TIMEOUT}s | "
-                    f"mode: {'full' if _use_opus else 'gpt/sonnet' if _use_gpt else 'sonnet-only' if _use_sonnet else 'skip'}"
+                    f"timeouts: premium={PREMIUM_SYNTH_TIMEOUT}s,gpt={GPT_SYNTH_TIMEOUT}s,sonnet={SONNET_SYNTH_TIMEOUT}s | "
+                    f"mode: {'full' if _use_premium else 'gpt/sonnet' if _use_gpt else 'sonnet-only' if _use_sonnet else 'skip'}"
                 )
 
-                if not (_use_opus or _use_gpt or _use_sonnet):
+                if not (_use_premium or _use_gpt or _use_sonnet):
                     scan_quality = "partial_synthesis"
                     print(
                         f"   ⏭ [Synthesis] Only {_synth_available}s available before final-output reserve "
                         f"— skipping all synthesis models, scan stored as partial"
                     )
                 else:
-                    if _use_opus:
+                    if _use_premium:
                         attempt_started = time.time()
                         try:
-                            _opus_timeout = min(
-                                OPUS_SYNTH_TIMEOUT,
+                            _premium_timeout = min(
+                                PREMIUM_SYNTH_TIMEOUT,
                                 max(8, _diagnosis_budget_left()),
                             )
-                            print(f"   🔄 [Synthesis] Attempting {CLAUDE_OPUS_MODEL} with adaptive thinking (timeout: {_opus_timeout}s)...")
+                            print(f"   🔄 [Synthesis] Attempting {CLAUDE_PREMIUM_MODEL} with adaptive thinking (timeout: {_premium_timeout}s)...")
                             response_text = call_anthropic_text(
                                 synthesis_prompt,
-                                model=CLAUDE_OPUS_MODEL,
+                                model=CLAUDE_PREMIUM_MODEL,
                                 max_tokens=6000,
-                                timeout=_opus_timeout,
+                                timeout=_premium_timeout,
                                 max_retries=0,
                                 reasoning_effort="xhigh",
-                                log_label="Scanner Diagnosis Opus",
+                                log_label="Scanner Diagnosis Premium",
                             )
-                            diagnosis_generation_meta["provider"] = CLAUDE_OPUS_MODEL
+                            diagnosis_generation_meta["provider"] = CLAUDE_PREMIUM_MODEL
                             diagnosis_generation_meta["attempts"].append({
-                                "model": CLAUDE_OPUS_MODEL,
+                                "model": CLAUDE_PREMIUM_MODEL,
                                 "status": "completed",
-                                "timeout_seconds": _opus_timeout,
+                                "timeout_seconds": _premium_timeout,
                                 "elapsed_seconds": round(time.time() - attempt_started, 2),
                             })
-                            print(f"   ✅ [Synthesis] {CLAUDE_OPUS_MODEL} + adaptive thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                        except Exception as opus_err:
+                            print(f"   ✅ [Synthesis] {CLAUDE_PREMIUM_MODEL} + adaptive thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        except Exception as premium_err:
                             diagnosis_generation_meta["attempts"].append({
-                                "model": CLAUDE_OPUS_MODEL,
+                                "model": CLAUDE_PREMIUM_MODEL,
                                 "status": "failed",
-                                "timeout_seconds": OPUS_SYNTH_TIMEOUT,
+                                "timeout_seconds": PREMIUM_SYNTH_TIMEOUT,
                                 "elapsed_seconds": round(time.time() - attempt_started, 2),
-                                "error": str(opus_err)[:240],
+                                "error": str(premium_err)[:240],
                             })
-                            diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_OPUS_MODEL} failed: {opus_err}"
-                            print(f"   ❌ [Synthesis] {CLAUDE_OPUS_MODEL} failed: {opus_err}")
+                            diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_PREMIUM_MODEL} failed: {premium_err}"
+                            print(f"   ❌ [Synthesis] {CLAUDE_PREMIUM_MODEL} failed: {premium_err}")
                     else:
                         print(
-                            f"   ⏭ [Synthesis] Skipping {CLAUDE_OPUS_MODEL} — {_synth_available}s synthesis budget "
+                            f"   ⏭ [Synthesis] Skipping {CLAUDE_PREMIUM_MODEL} — {_synth_available}s synthesis budget "
                             f"reserved for shorter fallback path"
                         )
 
@@ -6432,8 +6432,8 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                             diagnosis_generation_meta["fallback_reason"] = f"{GPT_REASONING_MODEL} failed: {gpt_err}"
                             print(f"   ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                    # Independent-provider fallback remains available after either
-                    # Opus or GPT failure. Provider availability must not suppress it.
+                    # Standard Sonnet can recover after either the premium Claude or GPT attempt.
+                    # Provider availability must not suppress it when GPT is unavailable.
                     if not response_text and _use_sonnet and _diagnosis_budget_left() >= 8:
                         attempt_started = time.time()
                         try:
@@ -6563,17 +6563,17 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                              }
 
                          # Intent score is IMMUTABLE — Scanner 1's website analysis is the
-                         # sole source of intent. Opus may disagree, but overriding intent
+                         # sole source of intent. The synthesis model may disagree, but overriding intent
                          # would destroy the integrity delta (intent vs reality gap).
-                         # Log Opus's opinion for diagnostics only.
+                         # Log the synthesis model's opinion for diagnostics only.
                          if opus_intent is not None and isinstance(opus_intent, (int, float)):
                              opus_intent = max(0, min(100, int(opus_intent)))
                              delta_i = abs(opus_intent - scanner_intent)
                              intent_results["opus_intent_score"] = opus_intent
                              if delta_i <= 5:
-                                 print(f"   ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
+                                 print(f"   ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ synthesis {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
                              else:
-                                 print(f"   ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
+                                 print(f"   ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs synthesis {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                  gap = intent_results["score"] - reality_results["score"]
 
                          # --- ARCHETYPE AUDIT ---
@@ -7351,7 +7351,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             full_data["quality_notes"].append(
                 "AI Diagnosis was unavailable; downstream synthesis was attempted directly from governed evidence."
             )
-        elif diagnosis_generation_meta.get("provider") != CLAUDE_OPUS_MODEL:
+        elif diagnosis_generation_meta.get("provider") != CLAUDE_PREMIUM_MODEL:
             full_data["quality_notes"].append(
                 f"AI Diagnosis used the governed fallback provider ({diagnosis_generation_meta.get('provider') or 'unknown'})."
             )

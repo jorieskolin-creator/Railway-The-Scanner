@@ -17,7 +17,7 @@ import uuid
 
 import anthropic
 from llm_clients import call_anthropic_text, call_openai_text, parse_json_object
-from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, DETAILED_COMPLETION_MODEL, GPT_REASONING_MODEL, policy_for
+from model_policy import CLAUDE_PREMIUM_MODEL, CLAUDE_SONNET_MODEL, DETAILED_COMPLETION_MODEL, GPT_REASONING_MODEL, policy_for
 from source_quality import (
     assess_source_scope, is_generation_eligible_source,
     is_analysis_premise_source, source_analysis_support_mode,
@@ -1180,7 +1180,7 @@ def generate_detailed_report(
     analyses rather than duplicating analysis from raw evidence. No new searches
     are performed — it works entirely from data already in memory.
 
-    Model chain: Sonnet 5 → GPT frontier → Opus premium fallback.
+    Model chain: Standard Sonnet → GPT frontier → premium Claude fallback.
     Returns (report_text, model_used).
     Returns ("", "") on failure.
     """
@@ -1331,27 +1331,26 @@ def generate_detailed_report(
             repaired, repair_model = complete_with_gpt(text, f"{GPT_REASONING_MODEL}_incomplete_or_short")
             if repaired:
                 return repaired, f"{GPT_REASONING_MODEL}+{repair_model}"
-        print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to Opus premium")
+        print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to {CLAUDE_PREMIUM_MODEL}")
     except Exception as e:
         elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
         print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} failed ({elapsed}ms): {e}")
 
     if anthropic_key and remaining_budget() >= 10:
-        # --- Attempt 3: Claude Opus 5 premium fallback ---
-        OPUS_MODEL = CLAUDE_OPUS_MODEL
+        # --- Attempt 3: Premium Claude fallback ---
         try:
-            print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL} premium fallback...")
+            print(f"   📝 [Detailed Report] Attempting {CLAUDE_PREMIUM_MODEL} premium fallback...")
             t0 = time.time()
             opus_timeout = remaining_timeout(reserve=3, cap=60)
             if opus_timeout < 8:
-                raise TimeoutError("Detailed Report Opus fallback budget unavailable")
+                raise TimeoutError("Detailed Report premium fallback budget unavailable")
             claude_client = anthropic.Anthropic(
                 api_key=anthropic_key,
                 timeout=opus_timeout,
                 max_retries=0,
             )
             response = claude_client.messages.create(
-                model=OPUS_MODEL,
+                model=CLAUDE_PREMIUM_MODEL,
                 max_tokens=token_budget,
                 thinking={"type": "adaptive"},
                 extra_body={"output_config": {"effort": "high"}},
@@ -1364,17 +1363,17 @@ def generate_detailed_report(
             text = _strip_links("\n".join(text_parts).strip())
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   📝 [Detailed Report] {OPUS_MODEL}: {wc} words ({elapsed}ms)")
+            print(f"   📝 [Detailed Report] {CLAUDE_PREMIUM_MODEL}: {wc} words ({elapsed}ms)")
 
             if text and wc >= target_min and quality_ok(text):
-                return text, OPUS_MODEL
+                return text, CLAUDE_PREMIUM_MODEL
             if text:
-                repaired, repair_model = complete_with_gpt(text, f"{OPUS_MODEL}_incomplete_or_short")
+                repaired, repair_model = complete_with_gpt(text, f"{CLAUDE_PREMIUM_MODEL}_incomplete_or_short")
                 if repaired:
-                    return repaired, f"{OPUS_MODEL}+{repair_model}"
-            print(f"   ⚠️ [Detailed Report] Opus unusable ({wc} words) — no usable detailed report")
+                    return repaired, f"{CLAUDE_PREMIUM_MODEL}+{repair_model}"
+            print(f"   ⚠️ [Detailed Report] {CLAUDE_PREMIUM_MODEL} unusable ({wc} words) — no usable detailed report")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Detailed Report] {OPUS_MODEL} failed ({elapsed}ms): {e}")
+            print(f"   ❌ [Detailed Report] {CLAUDE_PREMIUM_MODEL} failed ({elapsed}ms): {e}")
 
     return "", ""

@@ -106,7 +106,7 @@ def test_buying_potential_uses_reasoning_aware_sol_budgets_and_strict_schemas(mo
     assert repair_policy["chain"][0] == "claude-sonnet-5"
     assert repair_policy["max_batch_items"] == 5
     assert bp.policy_for("buying_insight_language_qa")["chain"][0] == "claude-sonnet-5"
-    assert bp.policy_for("buying_insight_gate_reanalysis")["chain"][0] == "gpt-5.6-sol"
+    assert bp.policy_for("buying_insight_gate_reanalysis")["chain"][0] == "gpt-6.1-sol"
 
 
 def test_gate_claim_ids_are_stable_and_nested_spine_path_is_writable(monkeypatch):

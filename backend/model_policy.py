@@ -10,31 +10,50 @@ import os
 from typing import Any
 
 
-MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-policy-v3-gpt56-claude5").strip() or "model-policy-v3-gpt56-claude5"
+_DEFAULT_POLICY_VERSION = "model-policy-v4-gpt61-sonnet55-gemini38"
+MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "").strip() or _DEFAULT_POLICY_VERSION
 
-GPT_REASONING_MODEL = os.environ.get("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
-# GPT-5.6 Pro is a reasoning mode on the Sol model, not a separate model slug.
-GPT_PRO_MODEL = os.environ.get("SCANNER_PREMIUM_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+_DEFAULT_REASONING_MODEL = "gpt-6.1-sol"
+_DEFAULT_VERIFIER_MODEL = "gpt-6.1-terra"
+_DEFAULT_CLAUDE_PREMIUM_MODEL = "claude-sonnet-5-5"
+_DEFAULT_GROUNDED_MODEL = "gemini-3.8-flash"
+_MODEL_REPLACEMENTS = {
+    "gpt-5.6-sol": _DEFAULT_REASONING_MODEL,
+    "gpt-5.4": _DEFAULT_VERIFIER_MODEL,
+    "claude-opus-5": _DEFAULT_CLAUDE_PREMIUM_MODEL,
+    "gemini-3.5-flash": _DEFAULT_GROUNDED_MODEL,
+}
+
+
+def _configured_model(env_var: str, default: str = "") -> str:
+    """Migrate old model pins in deployed settings and honor other overrides."""
+    model = os.environ.get(env_var, "").strip().strip('"').strip("'")
+    return _MODEL_REPLACEMENTS.get(model, model) or default
+
+
+GPT_REASONING_MODEL = _configured_model("SCANNER_DEFAULT_FRONTIER_MODEL", _DEFAULT_REASONING_MODEL)
+# The premium OpenAI route uses Pro reasoning mode on Sol.
+GPT_PRO_MODEL = _configured_model("SCANNER_PREMIUM_MODEL", _DEFAULT_REASONING_MODEL)
 GPT_PRO_REASONING_MODE = os.environ.get("SCANNER_PREMIUM_REASONING_MODE", "pro").strip() or "pro"
-GPT_VERIFIER_MODEL = os.environ.get("SCANNER_VALIDATOR_MODEL", "gpt-5.4").strip() or "gpt-5.4"
-GPT_EXPERIMENTAL_MODEL = os.environ.get("SCANNER_GPT56_SOL_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+GPT_VERIFIER_MODEL = _configured_model("SCANNER_VALIDATOR_MODEL", _DEFAULT_VERIFIER_MODEL)
+GPT_EXPERIMENTAL_MODEL = _configured_model("SCANNER_GPT56_SOL_MODEL", _DEFAULT_REASONING_MODEL)
 ENABLE_GPT56_SOL_TEST = os.environ.get("SCANNER_ENABLE_GPT56_SOL_TEST", "").strip().lower() in {"1", "true", "yes", "on"}
 BUYING_GENERATION_MODEL_OVERRIDE = (
-    os.environ.get("SCANNER_BUYING_GENERATION_MODEL", "").strip()
+    _configured_model("SCANNER_BUYING_GENERATION_MODEL")
     or (GPT_EXPERIMENTAL_MODEL if ENABLE_GPT56_SOL_TEST else "")
 )
-DETAILED_COMPLETION_MODEL = (
-    os.environ.get("SCANNER_DETAILED_COMPLETION_MODEL", "").strip()
-    or GPT_REASONING_MODEL
+DETAILED_COMPLETION_MODEL = _configured_model("SCANNER_DETAILED_COMPLETION_MODEL", GPT_REASONING_MODEL)
+
+CLAUDE_PREMIUM_MODEL = (
+    _configured_model("CLAUDE_PREMIUM_MODEL")
+    or _configured_model("CLAUDE_OPUS_MODEL", _DEFAULT_CLAUDE_PREMIUM_MODEL)
 )
+CLAUDE_SONNET_MODEL = _configured_model("CLAUDE_SONNET_MODEL", "claude-sonnet-5")
 
-CLAUDE_OPUS_MODEL = os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-5").strip() or "claude-opus-5"
-CLAUDE_SONNET_MODEL = os.environ.get("CLAUDE_SONNET_MODEL", "claude-sonnet-5").strip() or "claude-sonnet-5"
-
-GEMINI_GROUNDED_MODEL = os.environ.get("SCANNER_GROUNDED_RESEARCH_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
-GEMINI_HARVEST_MODEL = os.environ.get("GEMINI_HARVEST_MODEL", GEMINI_GROUNDED_MODEL).strip() or GEMINI_GROUNDED_MODEL
-GEMINI_FORENSIC_MODEL = os.environ.get("GEMINI_FORENSIC_MODEL", GEMINI_GROUNDED_MODEL).strip() or GEMINI_GROUNDED_MODEL
-GEMINI_FAST_FALLBACK_MODEL = os.environ.get("GEMINI_FAST_FALLBACK_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+GEMINI_GROUNDED_MODEL = _configured_model("SCANNER_GROUNDED_RESEARCH_MODEL", _DEFAULT_GROUNDED_MODEL)
+GEMINI_HARVEST_MODEL = _configured_model("GEMINI_HARVEST_MODEL", GEMINI_GROUNDED_MODEL)
+GEMINI_FORENSIC_MODEL = _configured_model("GEMINI_FORENSIC_MODEL", GEMINI_GROUNDED_MODEL)
+GEMINI_FAST_FALLBACK_MODEL = _configured_model("GEMINI_FAST_FALLBACK_MODEL", _DEFAULT_GROUNDED_MODEL)
 
 BUYING_MODEL_MODE = os.environ.get("SCANNER_BUYING_MODEL_MODE", "quality").strip().lower() or "quality"
 
@@ -59,8 +78,8 @@ def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
     if mode == "balanced":
         return dedupe_chain(override, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL)
     if mode == "board_grade":
-        return dedupe_chain(override, GPT_REASONING_MODEL, CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL)
-    return dedupe_chain(override, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL)
+        return dedupe_chain(override, GPT_REASONING_MODEL, CLAUDE_PREMIUM_MODEL, CLAUDE_SONNET_MODEL)
+    return dedupe_chain(override, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, CLAUDE_PREMIUM_MODEL)
 
 
 def buying_gate_chain(_mode: str | None = None) -> tuple[str, ...]:
@@ -79,7 +98,7 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
     "grounded_acquisition": {
         "primary": GEMINI_GROUNDED_MODEL,
         "thinking_level": "low",
-        "availability_fallback": (GPT_REASONING_MODEL, GEMINI_FAST_FALLBACK_MODEL),
+        "availability_fallback": dedupe_chain(GEMINI_GROUNDED_MODEL, GPT_REASONING_MODEL, GEMINI_FAST_FALLBACK_MODEL)[1:],
         "gpt_reasoning_effort": "low",
         "gpt_verbosity": "low",
     },
@@ -164,7 +183,7 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
     "detailed_report": {
         "standard": CLAUDE_SONNET_MODEL,
         "complex": GPT_REASONING_MODEL,
-        "premium": CLAUDE_OPUS_MODEL,
+        "premium": CLAUDE_PREMIUM_MODEL,
         "completion_repair": DETAILED_COMPLETION_MODEL,
         "completion_effort": "medium",
         "completion_verbosity": "high",
@@ -193,7 +212,7 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "effort": "high",
         "verbosity": "high",
         "max_output_tokens": 24000,
-        "l3": CLAUDE_OPUS_MODEL,
+        "l3": CLAUDE_PREMIUM_MODEL,
         "repair": json_repair_chain(),
     },
 }

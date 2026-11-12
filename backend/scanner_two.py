@@ -5389,8 +5389,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} paced acquisition lane(s) across five juries for {company_name}: "
         f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
-        f"Gemini Pro low-thinking scout max {FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT} in-flight with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown; "
-        "current revalidated seed lanes skip live Gemini; deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
+        f"{GEMINI_FORENSIC_MODEL} low-thinking scout max {FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT} in-flight with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown; "
+        f"current revalidated seed lanes skip live Gemini; deterministic gate → {GPT_REASONING_MODEL} retry → {FORENSIC_GEMINI_FAST_FALLBACK_MODEL} last resort; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
         "."
     )
@@ -5481,7 +5481,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 except Exception as error:
                     status = _provider_error_status("provider", error)
                     print(
-                        f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini Pro {status}: "
+                        f"   ⚠️ [Forensic Acquisition] {jury_name} {GEMINI_FORENSIC_MODEL} {status}: "
                         f"{type(error).__name__}: {error}"
                     )
             else:
@@ -7146,12 +7146,12 @@ CONFIDENCE GUIDE:
             time.sleep(2)
             data = _execute_financial_search(primary_model, prompt, company_name, timeout=120)
 
-    # Attempt 2: Fallback to GPT-5.5 web search with one retry
+    # Attempt 2: Fallback to the configured GPT model for web search with one retry
     if not data:
         if (time.time() - _fh_start) > _FH_BUDGET:
             print(f"   ⏭ [Financial Health] Budget exceeded before fallback. Aborting.")
         else:
-            print(f"   [Financial Health] Primary exhausted. Falling back to GPT-5.5 web search...")
+            print(f"   [Financial Health] Primary exhausted. Falling back to {GPT_REASONING_MODEL} web search...")
             data = _execute_financial_search(GPT_REASONING_MODEL, prompt, company_name, timeout=120)
     if not data and (time.time() - _fh_start) <= _FH_BUDGET:
         time.sleep(2)

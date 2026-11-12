@@ -15,7 +15,6 @@ import time
 from typing import Any
 
 from model_policy import (
-    CLAUDE_OPUS_MODEL,
     CLAUDE_SONNET_MODEL,
     GPT_PRO_MODEL,
     GPT_REASONING_MODEL,
@@ -143,7 +142,7 @@ def call_openai_text(
         kwargs["tools"] = [{"type": "web_search", "search_context_size": search_context_size}]
     reasoning: dict[str, Any] = {}
     if reasoning_mode:
-        # Pro is a mode on GPT-5.6 Sol, not a separate model slug.
+        # Pro is a Responses API reasoning mode on the configured Sol model.
         reasoning["mode"] = reasoning_mode
     if reasoning_effort:
         reasoning["effort"] = reasoning_effort

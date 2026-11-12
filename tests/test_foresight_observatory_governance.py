@@ -31,7 +31,7 @@ def _signal(title: str, eligible: bool, **extra) -> dict:
     return signal
 
 
-def test_opus5_generation_preserves_adaptive_thinking_contract(monkeypatch):
+def test_sonnet55_dossier_generation_preserves_adaptive_thinking_contract(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     captured = {}
 
@@ -48,12 +48,12 @@ def test_opus5_generation_preserves_adaptive_thinking_contract(monkeypatch):
 
     monkeypatch.setattr(observatory.anthropic, "Anthropic", Anthropic)
 
-    text, word_count = observatory._generate_opus("Build the dossier", max_tokens=16000)
+    text, word_count = observatory._generate_domain_dossier("Build the dossier", max_tokens=16000)
 
     assert text == "Evidence-grounded domain dossier"
     assert word_count == 3
-    assert observatory.OBSERVATORY_L3_MODEL == "claude-opus-5"
-    assert captured["model"] == "claude-opus-5"
+    assert observatory.OBSERVATORY_L3_MODEL == "claude-sonnet-5-5"
+    assert captured["model"] == "claude-sonnet-5-5"
     assert captured["max_tokens"] == 16000
     assert captured["thinking"] == {"type": "adaptive"}
     assert captured["extra_body"] == {"output_config": {"effort": "xhigh"}}

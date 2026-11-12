@@ -6,39 +6,80 @@ import types
 import pytest
 
 
-def test_model_policy_defaults_to_gpt56_sol_without_haiku(monkeypatch):
+def test_model_policy_defaults_and_fallback_order(monkeypatch):
     for name in (
         "SCANNER_DEFAULT_FRONTIER_MODEL",
         "SCANNER_PREMIUM_MODEL",
+        "SCANNER_PREMIUM_REASONING_MODE",
+        "SCANNER_VALIDATOR_MODEL",
         "SCANNER_DETAILED_COMPLETION_MODEL",
         "SCANNER_ENABLE_GPT56_SOL_TEST",
+        "SCANNER_BUYING_GENERATION_MODEL",
         "SCANNER_MODEL_POLICY_VERSION",
+        "CLAUDE_PREMIUM_MODEL",
         "CLAUDE_OPUS_MODEL",
+        "CLAUDE_SONNET_MODEL",
+        "SCANNER_GROUNDED_RESEARCH_MODEL",
+        "GEMINI_HARVEST_MODEL",
+        "GEMINI_FORENSIC_MODEL",
+        "GEMINI_FAST_FALLBACK_MODEL",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.syspath_prepend("backend")
     sys.modules.pop("model_policy", None)
     policy = importlib.import_module("model_policy")
 
-    assert policy.GPT_REASONING_MODEL == "gpt-5.6-sol"
-    assert policy.GPT_PRO_MODEL == "gpt-5.6-sol"
+    assert policy.GPT_REASONING_MODEL == "gpt-6.1-sol"
+    assert policy.GPT_PRO_MODEL == "gpt-6.1-sol"
+    assert policy.GPT_VERIFIER_MODEL == "gpt-6.1-terra"
     assert policy.GPT_PRO_REASONING_MODE == "pro"
-    assert policy.DETAILED_COMPLETION_MODEL == "gpt-5.6-sol"
-    assert policy.CLAUDE_OPUS_MODEL == "claude-opus-5"
+    assert policy.DETAILED_COMPLETION_MODEL == "gpt-6.1-sol"
+    assert policy.CLAUDE_PREMIUM_MODEL == "claude-sonnet-5-5"
     assert policy.CLAUDE_SONNET_MODEL == "claude-sonnet-5"
-    assert policy.MODEL_POLICY_VERSION == "model-policy-v3-gpt56-claude5"
-    assert all("haiku" not in model.lower() for model in policy.buying_generation_chain())
+    assert policy.GEMINI_GROUNDED_MODEL == "gemini-3.8-flash"
+    assert policy.GEMINI_HARVEST_MODEL == policy.GEMINI_FORENSIC_MODEL == "gemini-3.8-flash"
+    assert policy.GEMINI_FAST_FALLBACK_MODEL == "gemini-3.8-flash"
+    assert policy.MODEL_POLICY_VERSION == "model-policy-v4-gpt61-sonnet55-gemini38"
+    assert policy.buying_generation_chain("economy") == ("gpt-6.1-terra", "claude-sonnet-5")
+    assert policy.buying_generation_chain("quality") == ("gpt-6.1-sol", "claude-sonnet-5", "claude-sonnet-5-5")
+    assert policy.buying_generation_chain("board_grade") == ("gpt-6.1-sol", "claude-sonnet-5-5", "claude-sonnet-5")
+    assert policy.source_claim_chain() == ("gpt-6.1-terra", "claude-sonnet-5")
+    assert policy.policy_for("grounded_acquisition")["availability_fallback"] == ("gpt-6.1-sol",)
+    assert policy.policy_for("gpt_web_repair")["fallback"] == "gemini-3.8-flash"
     assert policy.policy_for("buying_insight_generation")["qualification"]["max_output_tokens"] == 9000
     assert policy.policy_for("activation_strategic_synthesis")["max_output_tokens"] == 16000
 
 
 def test_model_policy_allows_explicit_opus48_rollback(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PREMIUM_MODEL", raising=False)
     monkeypatch.setenv("CLAUDE_OPUS_MODEL", "claude-opus-4-8")
     monkeypatch.syspath_prepend("backend")
     sys.modules.pop("model_policy", None)
     try:
         policy = importlib.import_module("model_policy")
-        assert policy.CLAUDE_OPUS_MODEL == "claude-opus-4-8"
+        assert policy.CLAUDE_PREMIUM_MODEL == "claude-opus-4-8"
+    finally:
+        sys.modules.pop("model_policy", None)
+
+
+def test_deployment_model_pins_migrate_to_requested_replacements(monkeypatch):
+    monkeypatch.syspath_prepend("backend")
+    monkeypatch.delenv("CLAUDE_PREMIUM_MODEL", raising=False)
+    monkeypatch.setenv("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.6-sol")
+    monkeypatch.setenv("SCANNER_VALIDATOR_MODEL", "gpt-5.4")
+    monkeypatch.setenv("SCANNER_BUYING_GENERATION_MODEL", "gpt-5.6-sol")
+    monkeypatch.setenv("CLAUDE_OPUS_MODEL", "claude-opus-5")
+    monkeypatch.setenv("GEMINI_FORENSIC_MODEL", "gemini-3.5-flash")
+    monkeypatch.setenv("GEMINI_FAST_FALLBACK_MODEL", "gemini-3.7-flash")
+    sys.modules.pop("model_policy", None)
+    try:
+        policy = importlib.import_module("model_policy")
+        assert policy.GPT_REASONING_MODEL == "gpt-6.1-sol"
+        assert policy.GPT_VERIFIER_MODEL == "gpt-6.1-terra"
+        assert policy.CLAUDE_PREMIUM_MODEL == "claude-sonnet-5-5"
+        assert policy.GEMINI_FORENSIC_MODEL == "gemini-3.8-flash"
+        assert policy.policy_for("grounded_acquisition")["availability_fallback"] == ("gpt-6.1-sol", "gemini-3.7-flash")
+        assert policy.buying_generation_chain("quality") == ("gpt-6.1-sol", "claude-sonnet-5", "claude-sonnet-5-5")
     finally:
         sys.modules.pop("model_policy", None)
 
@@ -81,7 +122,7 @@ def _load_llm_clients(monkeypatch, response):
     return module, captured
 
 
-def test_openai_helper_sends_sol_pro_context_verbosity_and_schema(monkeypatch):
+def test_openai_helper_sends_sol_pro_verbosity_and_schema(monkeypatch):
     usage = types.SimpleNamespace(
         input_tokens=100,
         output_tokens=80,
@@ -104,7 +145,7 @@ def test_openai_helper_sends_sol_pro_context_verbosity_and_schema(monkeypatch):
 
     text = llm.call_openai_text(
         "Return JSON",
-        model="gpt-5.6-sol",
+        model="gpt-6.1-sol",
         reasoning_mode="pro",
         reasoning_effort="high",
         text_verbosity="high",
@@ -113,7 +154,8 @@ def test_openai_helper_sends_sol_pro_context_verbosity_and_schema(monkeypatch):
     )
 
     assert text == '{"result":"ok"}'
-    assert captured["reasoning"] == {"mode": "pro", "effort": "high", "context": "current_turn"}
+    assert captured["model"] == "gpt-6.1-sol"
+    assert captured["reasoning"] == {"mode": "pro", "effort": "high"}
     assert captured["text"]["verbosity"] == "high"
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["strict"] is True
@@ -139,7 +181,7 @@ def test_openai_helper_rejects_incomplete_response_before_parse(monkeypatch):
     with pytest.raises(ValueError, match="response incomplete.*max_output_tokens"):
         llm.call_openai_text(
             "Reason deeply",
-            model="gpt-5.6-sol",
+            model="gpt-6.1-sol",
             max_output_tokens=5000,
             reasoning_effort="high",
         )
