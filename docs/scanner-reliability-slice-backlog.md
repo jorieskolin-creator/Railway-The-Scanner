@@ -1410,7 +1410,7 @@ are proven. Do not jump from `3J-loop` or `3J-restart` to `3J-cutover`.
 
 ## Card 2A — Golden company & Market Intelligence compatibility contracts
 
-**Status:** Next executable card
+**Status:** Complete
 **Proves:** deterministic read compatibility across the full `companies/{slug}.json`
 master contract and `market_intelligence.py` aggregations before any durable
 publication or real-stage replacement touches company records.
@@ -1449,11 +1449,18 @@ publication or real-stage replacement touches company records.
 `docs/scanner-reliability-status.md`,
 `docs/scanner-reliability-slice-backlog.md`
 
+### Exit evidence
+
+- [Reliability contracts run 43421474359](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43421474359)
+  on pull request [#35](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/35)
+  (`9e701c87e60e8066ee518de5003e0ec139da3f6e`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
 ---
 
 ## Card 2B — Foresight KB-first, Observatory & Buying Insight compatibility contracts
 
-**Status:** Planned after 2A
+**Status:** Next executable card
 **Proves:** KB-first and registry-fallback `strategic_foresight` / `foresight_links`
 outputs remain compatible with `buying_potential._build_input_payload()`,
 `foresight_observatory.py`, `company_source_ledger.py`, and `general_summary.py`
@@ -1548,13 +1555,14 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 1A (main baseline sync) is complete. Implement exactly Card 2A from
-docs/scanner-reliability-slice-backlog.md (Golden company & Market Intelligence
-compatibility contracts). Freeze current serialized company/index/MI behavior in
-hermetic tests without network or model calls. Do not modify market_intelligence.py
-rules, POST /scan, Supervisor registration, PostgreSQL schemas, or Railway.
+Card 2A (golden company & Market Intelligence compatibility contracts) is complete.
+Implement exactly Card 2B from docs/scanner-reliability-slice-backlog.md (Foresight
+KB-first, Observatory & Buying Insight compatibility contracts). Keep tests hermetic
+with no network or model calls. Do not modify central KB harvest/cleanup rules,
+Blob schema names, POST /scan, Supervisor registration, PostgreSQL schemas, or
+Railway settings.
 ```
 
-After Card 2A is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, advance this prompt to **Card 2B**, then
-**Card 3K-integrity**, then **3J-restart**. Do not accumulate open cards in one run.
+After Card 2B is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, advance this prompt to **Card 3K-integrity**,
+then **3J-restart**. Do not accumulate open cards in one run.
