@@ -32,8 +32,9 @@ from entity_identity import (
     ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
     ENTITY_SCOPE_UNKNOWN,
 )
-from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
-from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text, extract_anthropic_text
+from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL, resolve_model_id
+from stakeholder_policy import seniority_tier
 from gemini_client import call_gemini_forensic_text, gemini_api_key
 from evidence_contracts import (
     VERIFIED_COMPANY_EVIDENCE,
@@ -3531,15 +3532,6 @@ def _is_valid_full_name(name: str) -> bool:
     return True
 
 
-_SENIORITY_TIERS = [
-    (1, re.compile(r'\b(CEO|COO|President|Chairman|Founder|Co-Founder|Toimitusjohtaja|Maajohtaja|Managing\s+Director|Country\s+Manager|Group\s+Executive|General\s+Manager|Pääjohtaja|Hallituksen\s+puheenjohtaja)\b', re.I)),
-    (2, re.compile(r'\b(CTO|CIO|CDO|CPO|CFO|CHRO|CMO|Chief\s+\w+\s+Officer|Executive\s+Vice\s+President|EVP)\b', re.I)),
-    (3, re.compile(r'\b(SVP|Senior\s+Vice\s+President|VP|Vice\s+President|Board\s+Member|Hallituksen\s+jäsen)\b', re.I)),
-    (4, re.compile(r'\b(Director)\b', re.I)),
-    (5, re.compile(r'\b(Head\s+of)\b', re.I)),
-    (6, re.compile(r'\b(Senior\s+Manager|Manager|Lead)\b', re.I)),
-]
-
 # Role descriptions that are NOT actual job titles — always invalid as stakeholders
 _INVALID_ROLE_FRAGMENTS = {
     "unspecified", "role not", "no role", "returning employee",
@@ -3576,12 +3568,7 @@ _CONSTRAINT_ROLE_MAP = [
 
 def _get_seniority_tier(role: str) -> int:
     """Return seniority tier (1=highest) for a role string. 7 = unknown/unranked."""
-    if not role:
-        return 7
-    for tier, pattern in _SENIORITY_TIERS:
-        if pattern.search(role):
-            return tier
-    return 7
+    return seniority_tier(role)
 
 
 def _is_valid_role(role: str) -> bool:
@@ -4191,9 +4178,10 @@ Return ONLY valid JSON, no explanation."""
         response = client.messages.create(
             model=CLAUDE_SONNET_MODEL,
             max_tokens=12000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": structuring_prompt}]
         )
-        response_text = response.content[0].text if response.content else ""
+        response_text = extract_anthropic_text(response)
         json_payload = extract_json_from_text(response_text)
         if not json_payload:
             return None
@@ -5413,8 +5401,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} paced acquisition lane(s) across five juries for {company_name}: "
         f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
-        f"Gemini Pro low-thinking scout max {FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT} in-flight with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown; "
-        "current revalidated seed lanes skip live Gemini; deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
+        f"{GEMINI_FORENSIC_MODEL} low-thinking scout max {FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT} in-flight with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown; "
+        f"current revalidated seed lanes skip live Gemini; deterministic gate → {GPT_REASONING_MODEL} retry → {FORENSIC_GEMINI_FAST_FALLBACK_MODEL} last resort; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
         "."
     )
@@ -5505,7 +5493,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 except Exception as error:
                     status = _provider_error_status("provider", error)
                     print(
-                        f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini Pro {status}: "
+                        f"   ⚠️ [Forensic Acquisition] {jury_name} {GEMINI_FORENSIC_MODEL} {status}: "
                         f"{type(error).__name__}: {error}"
                     )
             else:
@@ -7029,7 +7017,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Uses Claude/OpenAI web search to find financial data.
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
-    primary_model = model_id or CLAUDE_SONNET_MODEL
+    primary_model = resolve_model_id(model_id or "") or CLAUDE_SONNET_MODEL
     _fh_start = time.time()
     _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 
@@ -7170,12 +7158,12 @@ CONFIDENCE GUIDE:
             time.sleep(2)
             data = _execute_financial_search(primary_model, prompt, company_name, timeout=120)
 
-    # Attempt 2: Fallback to GPT-5.5 web search with one retry
+    # Attempt 2: Fallback to the configured GPT model for web search with one retry
     if not data:
         if (time.time() - _fh_start) > _FH_BUDGET:
             print(f"   ⏭ [Financial Health] Budget exceeded before fallback. Aborting.")
         else:
-            print(f"   [Financial Health] Primary exhausted. Falling back to GPT-5.5 web search...")
+            print(f"   [Financial Health] Primary exhausted. Falling back to {GPT_REASONING_MODEL} web search...")
             data = _execute_financial_search(GPT_REASONING_MODEL, prompt, company_name, timeout=120)
     if not data and (time.time() - _fh_start) <= _FH_BUDGET:
         time.sleep(2)

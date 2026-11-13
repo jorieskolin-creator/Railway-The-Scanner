@@ -7,9 +7,9 @@ Synthesizes existing Scanner data into macro-level strategic intelligence:
   3. Domain Force Dossiers — per-domain analysis with timescale mapping
 
 Model pipeline:
-  - GPT-5.5 Pro: Layer 1 and Layer 2 strategic analysis
-  - Claude Opus 5: Layer 3 domain dossiers
-  - GPT-5.5 high / Sonnet: Independent verification
+  - OpenAI Pro reasoning: Layer 1 and Layer 2 strategic analysis
+  - Premium Claude: Layer 3 domain dossiers
+  - GPT verifier / Sonnet: Independent verification
 
 All data comes from existing DB — no new scanning or web search required.
 """
@@ -26,7 +26,6 @@ from datetime import datetime
 import anthropic
 
 from llm_clients import (
-    CLAUDE_OPUS_MODEL,
     CLAUDE_SONNET_MODEL,
     GPT_PRO_MODEL,
     GPT_REASONING_MODEL,
@@ -35,7 +34,7 @@ from llm_clients import (
     call_openai_text,
     parse_json_object,
 )
-from model_policy import policy_for
+from model_policy import CLAUDE_PREMIUM_MODEL, policy_for
 from foresight_guardrails import build_foresight_guardrails, sanitize_foresight_text, validate_foresight_text, sanitize_future_insight
 from storage import BlobStorage
 from market_intelligence import (
@@ -62,7 +61,7 @@ PUBLIC OUTPUT RULE — Write for an executive reader. Do not expose internal met
 OBSERVATORY_DOSSIER_VERSION = "observatory_dossier_v1"
 OBSERVATORY_L1_MODEL = GPT_PRO_MODEL
 OBSERVATORY_L2_MODEL = GPT_PRO_MODEL
-OBSERVATORY_L3_MODEL = CLAUDE_OPUS_MODEL
+OBSERVATORY_L3_MODEL = CLAUDE_PREMIUM_MODEL
 OBSERVATORY_INTERNAL_ID_RE = re.compile(r"\bL[123]-(?:CLAIM|FALLBACK)-\d+\b")
 OBSERVATORY_FALLBACK_PAREN_RE = re.compile(r"\s*\(\s*L[123]-FALLBACK-\d+(?:\s*[/,;]\s*\d+)*\s*\)")
 OBSERVATORY_METHOD_LABEL_RE = re.compile(
@@ -1208,7 +1207,7 @@ def _build_l3_evidence_dossier(
     l2_claims: list[dict],
     structured_findings: list[dict],
 ) -> dict:
-    """Compile one domain's evidence and upstream claim handoffs for Opus."""
+    """Compile one domain's evidence and upstream claim handoffs for Layer 3."""
     company_metrics = []
     for company in domain_companies:
         name = company.get("company_name") or company.get("companyName") or "Unknown"
@@ -1850,8 +1849,8 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
     return text, wc
 
 
-def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
-    """Generate text via Opus 5. Returns (text, word_count).
+def _generate_domain_dossier(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
+    """Generate text via the premium Claude model. Returns (text, word_count).
     Used for Domain Dossiers (Layer 3) where analytical depth matters most."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
@@ -1884,7 +1883,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
 
 
 def _generate_gpt_pro(prompt: str, max_tokens: int = 16000, log_label: str = "Observatory") -> tuple[str, int, str]:
-    """Generate L1/L2 with GPT-5.6 Sol Pro and bounded quality fallbacks."""
+    """Generate L1/L2 with OpenAI Pro reasoning and bounded quality fallbacks."""
     policy = policy_for("cross_impact_interpretation" if log_label == "CrossImpact" else "observatory")
     output_budget = max(max_tokens, int(policy.get("max_output_tokens") or 24000))
     attempts = (
@@ -1992,19 +1991,19 @@ def _generate_with_verification(
     prompt: str,
     source_summary: str,
     output_type: str,
-    use_opus: bool = False,
+    use_premium_claude: bool = False,
     signal_evidence: str = "",
     use_gpt_pro: bool = False,
 ) -> tuple[str, dict]:
     """Generate via Claude, then verify via GPT/Claude. Returns (text, verification).
-    use_opus=True uses Opus 5 for deeper analytical reasoning (Layer 3).
+    use_premium_claude=True uses the Layer 3 model for domain dossiers.
     signal_evidence: when provided, enables claim-level cross-validation against KB signals."""
     if use_gpt_pro:
         text, wc, generation_model = _generate_gpt_pro(prompt)
     else:
-        generate_fn = _generate_opus if use_opus else _generate_sonnet
+        generate_fn = _generate_domain_dossier if use_premium_claude else _generate_sonnet
         text, wc = generate_fn(prompt)
-        generation_model = OBSERVATORY_L3_MODEL if use_opus else CLAUDE_SONNET_MODEL
+        generation_model = OBSERVATORY_L3_MODEL if use_premium_claude else CLAUDE_SONNET_MODEL
 
     if wc < 50:
         raise ValueError(f"Generation too short: {wc} words")
@@ -2279,7 +2278,7 @@ def generate_observatory(progress_callback=None):
                 f"- **{s.get('title', 'N/A')}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n  Description: {s.get('description', 'N/A')}"
                 for s in kb_signals[:20]
             )
-            text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True, signal_evidence=domain_signal_evidence)
+            text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_premium_claude=True, signal_evidence=domain_signal_evidence)
             text, sections, public_qa = _finalize_observatory_output_text(
                 text,
                 f"domain:{domain}",

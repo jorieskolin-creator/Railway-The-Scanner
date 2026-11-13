@@ -3,7 +3,7 @@
 ## Authority and branch policy
 
 - Canonical implementation branch: `reliability-v2`.
-- Baseline: current `main` at 84a3d498b51118200866de01be25b5a67ab8cae1.
+- Original baseline: `main` at `84a3d498b51118200866de01be25b5a67ab8cae1`; synchronized with `main` through `4f05acfbd654e6a0920f15764de5dc48a19ed5a0` in Card 1A.
 - Intended outcome: replace `main` only after all phase exit gates pass.
 - The existing `staging` branch is an historical reference for the abandoned two-service API/worker design. It must not be merged into `reliability-v2`.
 - Cognitive flow remains unchanged: `Intent → five Juries → Diagnosis → Foresight → Strategic Synthesis → Verification`.
@@ -14,27 +14,29 @@
 |---|---|---|
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
-| 2 — PostgreSQL orchestration primitives | Complete — lifecycle wired, execution intentionally blocked | Process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — material foundation committed, request path unchanged | Restart at every stage preserves immutable lineage |
-| 4 — Typed envelopes and deterministic gates | Not started | Invalid/stale/hash-mismatched inputs block explicitly |
+| 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain through `3J-loop` committed; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
-| 6 — Transactional final index | Not started | One current pointer; no duplicate final artifact |
+| 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
 | 7 — Orchestrator decomposition | Not started | Golden checkpoint replay unchanged |
 
 ## Operational slice register
 
-Remaining Phase 3 implementation is executed from
+Remaining implementation is executed from
 `docs/scanner-reliability-slice-backlog.md`. That register does not change
-plan ideas, trust boundaries, topology, or phase exit gates. It splits the
-stakeholder steps 3G–3J into one-concern cards so a single run cannot wrap
-multiple cognitive stages and lose context.
+plan ideas, trust boundaries, topology, or phase exit gates. It splits work into
+one-concern cards so a single run cannot wrap multiple cognitive stages or break
+shared Blob contracts consumed by Company Summary, Market Intelligence,
+Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **3J-restart — full-chain restart matrix**.
-Do not implement it in the 3J-loop change. Phase 3 stays open until that
-restart matrix is proven. Do not start publication, Supervisor registration,
-or `POST /scan`. Process card **3G0** and product card **3J-loop** are complete. Product
-cards **3G1** through **3I-V3** are complete. The post-3I-D3
-`postgres-supervisor-contracts` NameError hotfix is merged.
+Immediate next product card: **Card 2A — Golden company & Market Intelligence
+compatibility contracts** (followed by **Card 2B**, **Card 3K-integrity**, and
+**3J-restart**). Phase 3 stays open, and `3J-cutover` stays blocked until real
+cognitive stage parity, post-Verification report/summary assembly, and Phase 6
+Blob-first publication reconciliation pass. Process card **3G0**, scaffold card
+**3J-loop**, product cards **3G1** through **3I-V3**, and synchronization card
+**1A** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1077,3 +1079,35 @@ Verification evidence:
 - [Reliability contracts run 36135327767](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/36135327767) completed successfully on pull request [#33](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/33) for commit `054b33a23c74d118c9254d94f37e1a842c67d5e3` (`pull_request` event). `focused-contracts` passed and `postgres-supervisor-contracts` passed. The local PostgreSQL replay above is not this GitHub CI run.
 
 
+## Card 1A — synchronize `main` baseline into `reliability-v2`
+
+`reliability-v2` now includes the four `main` commits accrued since baseline
+`84a3d498b51118200866de01be25b5a67ab8cae1` through `main` HEAD
+`4f05acfbd654e6a0920f15764de5dc48a19ed5a0` without changing `POST /scan`,
+registering a live Supervisor loop, writing Blob objects, or altering Railway
+settings:
+
+- merged `462238c` and `2c2a0c9` (`model-policy-v5-sonnet55`: Gemini 3.8 Flash,
+  GPT-6.1 Sol/Terra, Claude Sonnet 5.5, and high-effort AI Diagnosis policy);
+- merged `495d06f` and `4f05acf` (Coresignal employee ES DSL search/collect and
+  centralized `stakeholder_policy.py` hierarchy + demand-targeted rounds across
+  Company Evidence DB, Scanner compatibility helpers, and Buying Insight);
+- resolved `backend/company_evidence.py::_as_records` to preserve both
+  `reliability-v2`'s shallow-copy non-mutation guarantee and `main`'s `_id`
+  fallback across nested `_source` and top-level payloads, covered by
+  `test_as_records_preserves_ids_without_mutating_caller_payloads`;
+- retained `reliability-v2`'s Observatory dual-status Foresight eligibility
+  check, fresh cleanup URL re-verification, Jury matched-passage verification,
+  duplicate-definition guard, and strict socket/DNS-blocking `tests/conftest.py`;
+- recorded cross-feature compatibility guardrails and sequenced **Card 2A**,
+  **Card 2B**, and **Card 3K-integrity** ahead of `3J-restart` and real-stage
+  parity.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; focused trust
+  contracts `127 passed`; complete hermetic suite `551 passed, 63 skipped`
+  with all provider keys cleared and socket/DNS guard active.
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
