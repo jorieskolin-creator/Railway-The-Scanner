@@ -1399,6 +1399,13 @@ are proven. Do not jump from `3J-loop` or `3J-restart` to `3J-cutover`.
 - No behavioral rewrite of Market Intelligence, Foresight harvesting, or Buying
   Insight during the merge.
 
+### Exit evidence
+
+- [Reliability contracts run 43414193888](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43414193888)
+  on pull request [#34](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/34)
+  (`1f8f32df901554e93ad03f68beefc403f0251fc3`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
 ---
 
 ## Card 2A — Golden company & Market Intelligence compatibility contracts

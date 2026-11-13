@@ -1109,5 +1109,9 @@ Verification evidence:
   `python scripts/check_duplicate_top_level_defs.py` passed; focused trust
   contracts `127 passed`; complete hermetic suite `551 passed, 63 skipped`
   with all provider keys cleared and socket/DNS guard active.
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43414193888](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43414193888)
+  completed successfully on pull request [#34](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/34)
+  for commit `1f8f32df901554e93ad03f68beefc403f0251fc3` (`pull_request` event,
+  head branch `reliability-1a-sync-main`): `focused-contracts` passed and
+  `postgres-supervisor-contracts` passed. The local replay above is not this
+  GitHub CI run.
