@@ -2147,7 +2147,19 @@ def _build_account_signal_map(
     for force in _list(payload_seed.get("foresight_forces"))[:5]:
         if not isinstance(force, dict):
             continue
-        text = _first_nonempty(force.get("description"), force.get("theme"), force.get("dimension"), limit=700)
+        text = _first_nonempty(
+            force.get("description"),
+            force.get("theme"),
+            force.get("dimension"),
+            force.get("_kb_description"),
+            force.get("impact_on_company"),
+            force.get("source_quote"),
+            force.get("trend"),
+            force.get("fp_theme"),
+            force.get("title"),
+            force.get("kb_dimension"),
+            limit=700,
+        )
         force_id = str(force.get("id") or force.get("force_id") or "")
         add_candidate(
             "external_pressure",
@@ -2162,12 +2174,23 @@ def _build_account_signal_map(
                 "source_freshness": force.get("source_freshness") or force.get("updated_at"),
                 "pressure_horizon": force.get("horizon") or force.get("time_horizon") or force.get("timeframe"),
                 "geography": force.get("geography"),
-                "domain_relevance": force.get("domain_relevance"),
+                "domain_relevance": (
+                    force.get("domain_relevance")
+                    or force.get("relevance")
+                    or force.get("impact_on_company")
+                    or force.get("possible_relevance")
+                ),
                 "company_specific": force.get("company_specific") is True,
                 "requires_company_specific_corroboration": force.get("requires_company_specific_corroboration") is True,
                 "excluded_from_company_fact_generation": force.get("excluded_from_company_fact_generation") is True,
                 "not_evidence_of_deployment": force.get("not_evidence_of_deployment") is True,
-                "source_says": _clip(force.get("source_says") or force.get("exact_passage"), 420),
+                "source_says": _clip(
+                    force.get("source_says")
+                    or force.get("exact_passage")
+                    or force.get("_kb_description")
+                    or force.get("source_quote"),
+                    420,
+                ),
             },
         )
 
@@ -2255,21 +2278,49 @@ def _build_input_payload(
             forces.append({
                 "id": force.get("id") or force.get("force_id") or f"FORESIGHT-{force_index:02d}",
                 "force_id": force.get("force_id") or force.get("id") or f"FORESIGHT-{force_index:02d}",
-                "theme": force.get("theme") or force.get("force") or force.get("name"),
-                "dimension": force.get("dimension"),
-                "description": _clip(force.get("description") or force.get("rationale") or force.get("signal"), 500),
+                "theme": (
+                    force.get("theme")
+                    or force.get("force")
+                    or force.get("name")
+                    or force.get("trend")
+                    or force.get("fp_theme")
+                    or force.get("title")
+                ),
+                "dimension": force.get("dimension") or force.get("kb_dimension"),
+                "description": _clip(
+                    force.get("description")
+                    or force.get("rationale")
+                    or force.get("signal")
+                    or force.get("_kb_description")
+                    or force.get("impact_on_company")
+                    or force.get("source_quote")
+                    or force.get("trend")
+                    or force.get("title"),
+                    500,
+                ),
                 "confidence": force.get("confidence"),
                 "credibility": force.get("source_credibility") or force.get("credibility"),
                 "horizon": force.get("horizon") or force.get("time_horizon") or force.get("timeframe"),
                 "geography": force.get("geography") or force.get("region"),
-                "domain_relevance": force.get("domain_relevance") or force.get("relevance"),
+                "domain_relevance": (
+                    force.get("domain_relevance")
+                    or force.get("relevance")
+                    or force.get("impact_on_company")
+                    or force.get("possible_relevance")
+                ),
                 "source_freshness": force.get("source_freshness") or force.get("updated_at"),
                 "source_ids": _list(force.get("source_ids") or force.get("evidence_ids"))[:8],
                 "company_specific": force.get("company_specific") is True,
                 "requires_company_specific_corroboration": force.get("requires_company_specific_corroboration") is True,
                 "excluded_from_company_fact_generation": force.get("excluded_from_company_fact_generation") is True,
                 "not_evidence_of_deployment": force.get("not_evidence_of_deployment") is True,
-                "source_says": _clip(force.get("source_says") or force.get("exact_passage"), 420),
+                "source_says": _clip(
+                    force.get("source_says")
+                    or force.get("exact_passage")
+                    or force.get("_kb_description")
+                    or force.get("source_quote"),
+                    420,
+                ),
             })
 
     services = []

@@ -1460,7 +1460,7 @@ publication or real-stage replacement touches company records.
 
 ## Card 2B — Foresight KB-first, Observatory & Buying Insight compatibility contracts
 
-**Status:** Next executable card
+**Status:** Complete
 **Proves:** KB-first and registry-fallback `strategic_foresight` / `foresight_links`
 outputs remain compatible with `buying_potential._build_input_payload()`,
 `foresight_observatory.py`, `company_source_ledger.py`, and `general_summary.py`
@@ -1486,11 +1486,25 @@ trust boundaries.
 - No central KB harvest/cleanup changes, no Blob schema renames, no `POST /scan`
   handoff, and no Supervisor changes.
 
+### Likely files
+
+`backend/buying_potential.py`, `backend/strategic_foresight.py`,
+`tests/test_foresight_buying_compatibility_contracts.py`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- [Reliability contracts run 43431466666](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43431466666)
+  on pull request [#36](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/36)
+  (`281158f7f5e8c20797a11239afc038f08fb82bce`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
 ---
 
 ## Card 3K-integrity — Checkpoint reload payload-hash verification & durable `save_to_database`
 
-**Status:** Planned after 2B (before `3J-restart` closure)
+**Status:** Next executable card (before `3J-restart` closure)
 **Proves:** `load_checkpoint()` recomputes snapshot/output hashes, validates
 checkpoint ID and embedded gate/ref consistency against JSON payload mutation,
 and persists `save_to_database` durably on `scan_runs`.
@@ -1555,14 +1569,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 2A (golden company & Market Intelligence compatibility contracts) is complete.
-Implement exactly Card 2B from docs/scanner-reliability-slice-backlog.md (Foresight
-KB-first, Observatory & Buying Insight compatibility contracts). Keep tests hermetic
-with no network or model calls. Do not modify central KB harvest/cleanup rules,
-Blob schema names, POST /scan, Supervisor registration, PostgreSQL schemas, or
-Railway settings.
+Card 2B (Foresight KB-first, Observatory & Buying Insight compatibility contracts)
+is complete. Specify then implement exactly Card 3K-integrity from
+docs/scanner-reliability-slice-backlog.md (Checkpoint reload payload-hash
+verification & durable save_to_database). Do not modify POST /scan, Supervisor
+loop registration, Blob publication paths, or Railway settings.
 ```
 
-After Card 2B is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, advance this prompt to **Card 3K-integrity**,
-then **3J-restart**. Do not accumulate open cards in one run.
+After Card 3K-integrity is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, advance this prompt to **3J-restart**. Do
+not accumulate open cards in one run.
