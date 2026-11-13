@@ -57,6 +57,7 @@ def diagnosis_adapter_schema():
             "006_jury_source_candidates.sql",
             "007_jury_input_snapshots.sql",
             "008_diagnosis_input_snapshots.sql",
+            "012_scan_runs_save_to_database.sql",
         )
     ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:

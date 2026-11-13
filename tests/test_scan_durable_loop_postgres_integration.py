@@ -51,6 +51,7 @@ def durable_loop_schema():
             "009_foresight_input_snapshots.sql",
             "010_synthesis_input_snapshots.sql",
             "011_verification_input_snapshots.sql",
+            "012_scan_runs_save_to_database.sql",
         )
     ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
@@ -80,6 +81,7 @@ def _create_run(repository: ScanRepository):
         cognitive_contract_version=ingress.cognitive_contract_version,
         initial_stage=ingress.initial_stage,
         materials=list(ingress.materials),
+        save_to_database=ingress.save_to_database,
     )
     return ingress
 

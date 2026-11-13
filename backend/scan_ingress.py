@@ -53,6 +53,8 @@ def prepare_scan_ingress(
         raise ValueError("company_name is required.")
     if not normalized_idempotency_key:
         raise ValueError("idempotency_key is required.")
+    if type(save_to_database) is not bool:
+        raise ValueError("save_to_database must be a boolean.")
 
     run_id = "RUN-" + _sha256(
         f"{SCAN_INGRESS_CONTRACT_VERSION}\0{normalized_idempotency_key}".encode("utf-8")
@@ -66,7 +68,7 @@ def prepare_scan_ingress(
         company_name=normalized_company_name,
         company_url=normalized_company_url,
         report_text=normalized_report_text,
-        save_to_database=bool(save_to_database),
+        save_to_database=save_to_database,
         materials=prepared_materials,
     )
     return PreparedScanIngress(
@@ -77,7 +79,7 @@ def prepare_scan_ingress(
         request_hash=request_hash,
         cognitive_contract_version=COGNITIVE_CONTRACT_VERSION,
         initial_stage=MATERIAL_INGESTION_STAGE,
-        save_to_database=bool(save_to_database),
+        save_to_database=save_to_database,
         materials=prepared_materials,
     )
 

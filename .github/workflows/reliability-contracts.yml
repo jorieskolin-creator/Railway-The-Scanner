@@ -101,4 +101,5 @@ jobs:
             tests/test_scan_verification_snapshot_postgres_integration.py \
             tests/test_scan_verification_adapter_postgres_integration.py \
             tests/test_scan_verification_commit_postgres_integration.py \
-            tests/test_scan_durable_loop_postgres_integration.py
+            tests/test_scan_durable_loop_postgres_integration.py \
+            tests/test_scan_checkpoint_integrity_postgres_integration.py

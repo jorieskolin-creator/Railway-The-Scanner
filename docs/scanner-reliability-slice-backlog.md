@@ -1504,10 +1504,118 @@ trust boundaries.
 
 ## Card 3K-integrity — Checkpoint reload payload-hash verification & durable `save_to_database`
 
-**Status:** Next executable card (before `3J-restart` closure)
+**Status:** Complete
 **Proves:** `load_checkpoint()` recomputes snapshot/output hashes, validates
 checkpoint ID and embedded gate/ref consistency against JSON payload mutation,
 and persists `save_to_database` durably on `scan_runs`.
+
+### In scope
+
+- New module `backend/scan_checkpoint_integrity.py` with
+  `validate_checkpoint_integrity(checkpoint, *, require_passed=True)`:
+  - validates stage/contract pairing across all seven durable stages
+    (`material_ingestion`, `intent`, `jury_analysis`, `diagnosis`, `foresight`,
+    `strategic_synthesis`, `verification`);
+  - enforces finite JSON-safe (`allow_nan=False`) `gate_result` and `snapshot`
+    mappings and exact top-level `snapshot` header parity (`contract`,
+    `run_id`, `stage`, `attempt`, `input_hash`);
+  - recomputes canonical `output_hash = sha256(canonical_json(snapshot))` and
+    deterministic `checkpoint_id` (`CP-<sha256[:32]>`) so in-place JSONB payload
+    mutations and partial hash rewrites fail closed with
+    `CheckpointIntegrityError`;
+  - verifies embedded gate consistency (`snapshot["gate_result"] == gate_result`
+    on `material_ingestion`; `snapshot["gate_results"] == [gate_result]` on the
+    six cognitive stages, with `status == "passed"` and empty `reasons` required
+    on persisted checkpoints);
+  - verifies stage-specific ref, input-hash, and compact-payload invariants:
+    - `material_ingestion`: sorted unique `material_refs` with no raw bytes or
+      `extracted_text`, recomputed `input_hash`, and recomputed gate
+      status/reasons/warnings;
+    - cognitive stages: exact allowed `snapshot` keysets (no raw text, raw
+      bytes, foreign stage payloads, or KB records), deterministic
+      `input_snapshot_ref`, ordered unique `input_refs`, upstream
+      `<prev>_checkpoint_ref` consistency (plus exact `input_refs` and
+      recomputed `input_hash` binding for `diagnosis`, `foresight`,
+      `strategic_synthesis`, and `verification`), compact `<stage>_result`
+      schema re-validation, and recomputed `output_refs` (`id`, `sha256`,
+      `kind`).
+- Wire `CheckpointIntegrityError` and `validate_checkpoint_integrity(...,
+  require_passed=True)` into `ScanRepository.load_checkpoint()` and
+  `ScanRepository._validate_checkpoint()`, and chain `CheckpointIntegrityError`
+  into `<Stage>InputSnapshotIntegrityError` inside
+  `load_verified_<stage>_inputs()`.
+- New migration `backend/migrations/012_scan_runs_save_to_database.sql` adding
+  `save_to_database BOOLEAN NOT NULL DEFAULT TRUE` on `scan_runs` without
+  modifying migrations `001`–`011`.
+- Persist, conflict-check, and reload `save_to_database` durably on `scan_runs`
+  through `ScanRepository.create_run(..., save_to_database=True)`,
+  `ScanRepository.create_run_with_materials(..., save_to_database=True)`, and
+  `ScanRepository.load_run(*, run_id) -> ScanRun | None` (with `ScanRun` and
+  `ScanRunIntegrityError`), rejecting non-boolean `save_to_database` values in
+  `prepare_scan_ingress()` and `ScanRepository`.
+
+### Deliberate exclusions
+
+- Do not modify `POST /scan` or `backend/main.py`.
+- Do not register a live Supervisor execution loop or claim queued work on
+  startup.
+- Do not modify Blob publication paths, Blob schemas, Company Summary, Market
+  Intelligence, Observatory, or Buying Insight.
+- Do not apply Railway migrations or alter `SCAN_SUPERVISOR_*` settings.
+- Do not edit existing migrations `001`–`011`.
+- Do not bundle the full `3J-restart` matrix into this card.
+
+### Tests
+
+- Hermetic `tests/test_scan_checkpoint_integrity.py`:
+  - all seven stage checkpoints pass reload validation across mapping and JSON
+    string cursor rows;
+  - in-place JSON payload mutations, forged `output_hash` without matching
+    `checkpoint_id`, embedded `gate_result`/`gate_results` drift, `output_refs`
+    sha256/id tamper, `input_refs` / upstream checkpoint-ref / `input_hash`
+    mismatch, `input_snapshot_ref` tamper, injected extra/forbidden keys, and
+    `NaN` JSON fail closed with `CheckpointIntegrityError`;
+  - `complete_step_with_checkpoint` rejects forged hashes before SQL execution;
+  - strict boolean `save_to_database` validation, conflict detection, and
+    `load_run()` integrity checks.
+- Disposable PostgreSQL `tests/test_scan_checkpoint_integrity_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - full 7-stage chain with `save_to_database=False` reloads every checkpoint
+    and preserves `save_to_database=False` through completion;
+  - in-place PostgreSQL `jsonb_set` snapshot mutation, coordinated
+    `snapshot` + `output_hash` tamper, and `gate_result` tamper fail closed on
+    `load_checkpoint()` and block downstream `load_verified_<stage>_inputs()`;
+  - `save_to_database` survives retryable and terminal failures and rejects
+    same-`idempotency_key` replay when the boolean flag flips;
+  - `012_scan_runs_save_to_database.sql` upgrades a pre-`012` `scan_runs` table
+    idempotently and backfills legacy rows to `TRUE`.
+
+### Likely files
+
+`backend/migrations/012_scan_runs_save_to_database.sql`,
+`backend/scan_checkpoint_integrity.py`, `backend/scan_supervisor.py`,
+`backend/scan_ingress.py`, `tests/test_scan_checkpoint_integrity.py`,
+`tests/test_scan_checkpoint_integrity_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- [Reliability contracts run 43454821231](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43454821231)
+  on pull request [#37](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/37)
+  (`a19907f79284e82f313b8fc97de25185fd46f911`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
+---
+
+## Card 3J-restart — Full-chain restart and reclaim matrix
+
+**Status:** Next executable card
+**Proves:** lease expiry, process loss, and reclaim across every stage boundary
+in the 7-stage durable chain resume from hash-verified checkpoints without
+re-uploading material, mutating completed snapshots, losing `save_to_database`,
+or skipping stage gates.
 
 ---
 
@@ -1569,13 +1677,14 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 2B (Foresight KB-first, Observatory & Buying Insight compatibility contracts)
-is complete. Specify then implement exactly Card 3K-integrity from
-docs/scanner-reliability-slice-backlog.md (Checkpoint reload payload-hash
-verification & durable save_to_database). Do not modify POST /scan, Supervisor
-loop registration, Blob publication paths, or Railway settings.
+Card 3K-integrity (Checkpoint reload payload-hash verification & durable
+save_to_database) is complete. Specify then implement exactly Card 3J-restart
+from docs/scanner-reliability-slice-backlog.md (Full-chain restart/reclaim
+matrix across every stage boundary with verified checkpoint reload hashes). Do
+not modify POST /scan, Supervisor loop registration, Blob publication paths, or
+Railway settings.
 ```
 
-After Card 3K-integrity is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, advance this prompt to **3J-restart**. Do
-not accumulate open cards in one run.
+After Card 3J-restart is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, advance this prompt to the first
+real-stage parity card. Do not accumulate open cards in one run.

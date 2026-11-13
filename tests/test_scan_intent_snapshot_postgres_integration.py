@@ -40,6 +40,7 @@ def intent_snapshot_schema():
             "003_scan_checkpoints.sql",
             "004_source_retrievals.sql",
             "005_intent_input_snapshots.sql",
+            "012_scan_runs_save_to_database.sql",
         )
     ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
