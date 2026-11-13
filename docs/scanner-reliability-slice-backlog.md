@@ -1611,7 +1611,7 @@ and persists `save_to_database` durably on `scan_runs`.
 
 ## Card 3J-restart — Full-chain restart and reclaim matrix
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence
+**Status:** Complete
 **Proves:** lease expiry, process loss, and reclaim across every stage boundary
 in the 7-stage durable chain resume from hash-verified checkpoints without
 re-uploading material, mutating completed snapshots, losing `save_to_database`,
@@ -1694,14 +1694,16 @@ or skipping stage gates.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43457975706](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43457975706)
+  on pull request [#38](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/38)
+  (`b94b937a00619233b649ff3e68091fabd10e7d34`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 3L-Jury-parity — Five-Jury cognitive parity & model-policy binding on durable packets
 
-**Status:** Planned after 3J-restart CI closure (first real-stage parity card; Intent already calls `analyze_intent` in 3G2)
+**Status:** Next executable card (first real-stage parity card; Intent already calls `analyze_intent` in 3G2)
 **Proves:** `JuryStageExecutor` can invoke the existing no-web five-Jury packet
 analysis path (without `x_ray_search` or live scraping) on verified durable Jury
 packets, bind `MODEL_POLICY_VERSION` on the Jury checkpoint contract, and
@@ -1767,11 +1769,11 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3J-restart pull-request CI is recorded in
-docs/scanner-reliability-status.md, specify then implement exactly Card
-3L-Jury-parity from docs/scanner-reliability-slice-backlog.md (Five-Jury
-cognitive parity & model-policy binding on durable packets). Keep tests
-hermetic with no live network or provider calls. Do not call x_ray_search,
+Card 3J-restart (Full-chain restart/reclaim matrix across every stage boundary
+with verified checkpoint reload hashes) is complete. Specify then implement
+exactly Card 3L-Jury-parity from docs/scanner-reliability-slice-backlog.md
+(Five-Jury cognitive parity & model-policy binding on durable packets). Keep
+tests hermetic with no live network or provider calls. Do not call x_ray_search,
 modify POST /scan, register a Supervisor loop, touch Blob publication paths, or
 change Railway settings.
 ```

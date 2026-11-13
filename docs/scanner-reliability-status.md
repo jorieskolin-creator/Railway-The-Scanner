@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, and 3J-restart matrix implemented locally; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, and 3J-restart matrix proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -30,15 +30,14 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3J-restart — Full-chain restart and reclaim
-matrix** (implemented locally and awaiting pull-request GitHub CI before
-advancing to **Card 3L-Jury-parity**). Phase 3 stays open until real cognitive
-stage parity closes, and `3J-cutover` stays blocked until real cognitive stage
-parity, post-Verification report/summary assembly, and Phase 6 Blob-first
-publication reconciliation pass. Process card **3G0**, scaffold card
-**3J-loop**, product cards **3G1** through **3I-V3**, synchronization card
-**1A**, compatibility cards **2A** and **2B**, and integrity card
-**3K-integrity** are complete.
+Immediate next product card: **Card 3L-Jury-parity — Five-Jury cognitive parity
+& model-policy binding on durable packets**. Phase 3 stays open until real
+cognitive stage parity closes, and `3J-cutover` stays blocked until real
+cognitive stage parity, post-Verification report/summary assembly, and Phase 6
+Blob-first publication reconciliation pass. Process card **3G0**, scaffold
+cards **3J-loop** and **3J-restart**, product cards **3G1** through **3I-V3**,
+synchronization card **1A**, compatibility cards **2A** and **2B**, and
+integrity card **3K-integrity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1399,9 +1398,8 @@ objects, or changing Railway settings:
 
 Phase 3 remains open until real cognitive stage parity replaces empty scaffold
 defaults across Jury, Diagnosis, Foresight, Strategic Synthesis, and
-Verification. Once pull-request GitHub CI is recorded for Card 3J-restart, the
-next bounded card is **Card 3L-Jury-parity — Five-Jury cognitive parity &
-model-policy binding on durable packets**.
+Verification. The next bounded card is **Card 3L-Jury-parity — Five-Jury
+cognitive parity & model-policy binding on durable packets**.
 
 Verification evidence:
 
@@ -1412,5 +1410,9 @@ Verification evidence:
   all provider keys cleared and socket/DNS guard active; local disposable
   PostgreSQL replay of `postgres-supervisor-contracts` `77 passed` (including
   `10 passed` in `tests/test_scan_restart_matrix_postgres_integration.py`).
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43457975706](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43457975706)
+  completed successfully on pull request [#38](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/38)
+  for commit `b94b937a00619233b649ff3e68091fabd10e7d34` (`pull_request` event,
+  head branch `reliability-3j-restart`): `focused-contracts` passed and
+  `postgres-supervisor-contracts` passed. The local replay above is not this
+  GitHub CI run.
