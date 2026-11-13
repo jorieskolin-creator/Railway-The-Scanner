@@ -14,8 +14,8 @@
 |---|---|---|
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
-| 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain through `3J-loop` committed; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, and 3J-restart matrix proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -30,13 +30,14 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3J-restart — Full-chain restart and reclaim
-matrix**. Phase 3 stays open, and `3J-cutover` stays blocked until real
+Immediate next product card: **Card 3L-Jury-parity — Five-Jury cognitive parity
+& model-policy binding on durable packets**. Phase 3 stays open until real
+cognitive stage parity closes, and `3J-cutover` stays blocked until real
 cognitive stage parity, post-Verification report/summary assembly, and Phase 6
-Blob-first publication reconciliation pass. Process card **3G0**, scaffold card
-**3J-loop**, product cards **3G1** through **3I-V3**, synchronization card
-**1A**, compatibility cards **2A** and **2B**, and integrity card
-**3K-integrity** are complete.
+Blob-first publication reconciliation pass. Process card **3G0**, scaffold
+cards **3J-loop** and **3J-restart**, product cards **3G1** through **3I-V3**,
+synchronization card **1A**, compatibility cards **2A** and **2B**, and
+integrity card **3K-integrity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1340,3 +1341,78 @@ Verification evidence:
   head branch `reliability-3k-checkpoint-integrity`): `focused-contracts`
   passed and `postgres-supervisor-contracts` passed. The local replay above is
   not this GitHub CI run.
+
+
+## Card 3J-restart — Full-chain restart and reclaim matrix
+
+Restart, lease-expiry reclaim, retryable failure recovery, and OS `SIGKILL`
+process-loss recovery are now proven across every stage boundary in the 7-stage
+durable chain (`material_ingestion → intent → jury_analysis → diagnosis →
+foresight → strategic_synthesis → verification`) without modifying `POST /scan`,
+registering a live Supervisor loop, altering PostgreSQL schemas, writing Blob
+objects, or changing Railway settings:
+
+- **Prefix-verifying durable resume helpers (`backend/scan_durable_loop.py`):**
+  1. `verify_completed_stage_prefix()` reloads the durable `ScanRun` header and
+     every completed upstream checkpoint through `load_checkpoint()` +
+     `validate_checkpoint_integrity(..., require_passed=True)`, verifies
+     adjacent `<prev>_checkpoint_ref` chain continuity across stages, and
+     rejects any unexpected downstream checkpoint ahead of the resumed stage;
+  2. `prepare_leased_stage()` and `commit_prepared_stage()` separate durable
+     input-snapshot binding + prepare-only execution from fenced commit so a
+     stalled or killed worker can leave a persisted input snapshot and prepared
+     proposal behind while its stale lease is deterministically rejected with
+     `StaleLeaseError` after lease expiry;
+  3. `resume_durable_chain()` resumes from any `pending`, `retryable_failed`, or
+     expired `leased`/`running` stage in `DURABLE_STAGE_ORDER`, hash-verifying
+     all completed upstream stages before executing the resumed stage and
+     keeping `drive_durable_chain()` unchanged and test-only.
+- **Full 7-stage restart & reclaim matrix
+  (`tests/test_scan_restart_matrix.py`,
+  `tests/test_scan_restart_matrix_postgres_integration.py`):**
+  1. *Single-boundary crash/reclaim across all 7 stages:* for each stage in
+     `DURABLE_STAGE_ORDER`, a worker completes `0..k-1`, claims stage `k`,
+     seeds Intent/Jury provenance where applicable, persists stage `k`'s input
+     snapshot, prepares output, and stalls; early contenders are blocked while
+     the lease is live; after expiry a fresh `ScanRepository` reclaims stage `k`
+     (`fencing_token = 2`), rejects the stale owner's late commit with
+     `StaleLeaseError`, verifies `0..k-1` checkpoints without re-uploading
+     `scan_materials` or mutating completed snapshots, and finishes through
+     `verification` with `save_to_database` preserved;
+  2. *Cascading 7-boundary determinism:* stalling and reclaiming at **every**
+     stage in a single run (`save_to_database=False`, with Intent retrieval and
+     Jury candidate + retrieval provenance) produces bit-for-bit identical
+     `ScanRun`, `ScanMaterial`, `*InputSnapshot`, and `ScanCheckpoint` records
+     to an uninterrupted clean run of the same ingress, with zero artifact
+     tables or successor steps after `verification`;
+  3. *Inter-stage restart, `retryable_failed` recovery, and tamper blocking:*
+     resuming after a clean inter-stage stop and `fail_step(retryable=True)`
+     recovers cleanly, whereas mutating an upstream checkpoint's PostgreSQL
+     `JSONB` `snapshot` before resume fails closed with
+     `CheckpointIntegrityError` before queueing any downstream step;
+  4. *Real OS `SIGKILL` process termination:* killing a live child Python
+     process (`signal.SIGKILL`) after it completes `material_ingestion →
+     intent → jury_analysis` and prepares `diagnosis` leaves PostgreSQL
+     recoverable after lease expiry on a fresh `ScanRepository` with verified
+     upstream hashes and `save_to_database=False` intact.
+
+Phase 3 remains open until real cognitive stage parity replaces empty scaffold
+defaults across Jury, Diagnosis, Foresight, Strategic Synthesis, and
+Verification. The next bounded card is **Card 3L-Jury-parity — Five-Jury
+cognitive parity & model-policy binding on durable packets**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card 3J-restart
+  hermetic suite `9 passed` (`tests/test_scan_restart_matrix.py`); focused trust
+  contracts `127 passed`; complete hermetic suite `583 passed, 77 skipped` with
+  all provider keys cleared and socket/DNS guard active; local disposable
+  PostgreSQL replay of `postgres-supervisor-contracts` `77 passed` (including
+  `10 passed` in `tests/test_scan_restart_matrix_postgres_integration.py`).
+- [Reliability contracts run 43457975706](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43457975706)
+  completed successfully on pull request [#38](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/38)
+  for commit `b94b937a00619233b649ff3e68091fabd10e7d34` (`pull_request` event,
+  head branch `reliability-3j-restart`): `focused-contracts` passed and
+  `postgres-supervisor-contracts` passed. The local replay above is not this
+  GitHub CI run.

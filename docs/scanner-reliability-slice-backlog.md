@@ -1611,11 +1611,103 @@ and persists `save_to_database` durably on `scan_runs`.
 
 ## Card 3J-restart — Full-chain restart and reclaim matrix
 
-**Status:** Next executable card
+**Status:** Complete
 **Proves:** lease expiry, process loss, and reclaim across every stage boundary
 in the 7-stage durable chain resume from hash-verified checkpoints without
 re-uploading material, mutating completed snapshots, losing `save_to_database`,
 or skipping stage gates.
+
+### In scope
+
+- Extend test-only `backend/scan_durable_loop.py` without changing
+  `drive_durable_chain()`:
+  - `verify_completed_stage_prefix(repository, *, run_id, completed_stages)`:
+    reloads the durable `ScanRun` header and every completed checkpoint in an
+    exact prefix of `DURABLE_STAGE_ORDER` through `load_checkpoint()` +
+    `validate_checkpoint_integrity(..., require_passed=True)`, verifies adjacent
+    `<prev>_checkpoint_ref` chain continuity across stages, and rejects any
+    unexpected downstream checkpoint ahead of the resumed stage;
+  - `prepare_leased_stage(repository, lease)` and
+    `commit_prepared_stage(repository, lease, result, *, now)`: separate durable
+    input-snapshot binding + prepare-only stage execution from fenced commit so
+    crash/stall tests can halt after snapshot persistence and stage preparation
+    and prove stale-owner commit rejection (`StaleLeaseError`) after lease
+    expiry;
+  - `resume_durable_chain(repository, *, lease_owner, now, lease_seconds=30,
+    stop_after_stage=None, on_stage_leased=None) -> DurableResumeResult`:
+    resumes a run from whatever `pending`, `retryable_failed`, or expired
+    `leased`/`running` stage PostgreSQL claims next, verifying all upstream
+    checkpoints before executing the resumed stage and stopping either after a
+    caller-specified boundary or after `verification` (`next_stage=None`).
+- Keep `backend/scan_durable_loop.py` strictly test-only (unimported by
+  `backend/main.py` and `backend/scan_supervisor.py`).
+
+### Deliberate exclusions
+
+- Do not modify `POST /scan` or `backend/main.py`.
+- Do not register a live Supervisor execution loop or alter
+  `backend/scan_supervisor.py`.
+- Do not modify Blob publication paths, Blob schemas, Company Summary, Market
+  Intelligence, Observatory, or Buying Insight.
+- Do not add a database migration or change Railway settings.
+- Do not replace scaffold cognitive stage payloads with live model calls here
+  (real cognitive parity starts in the next one-stage card).
+
+### Tests
+
+- Hermetic `tests/test_scan_restart_matrix.py`:
+  - parametrized 7-stage boundary crash/reclaim matrix across every stage in
+    `DURABLE_STAGE_ORDER`, proving contention blocking before lease expiry,
+    fencing-token increment on reclaim, `StaleLeaseError` on late stale commit,
+    preserved `save_to_database=False`, and exact checkpoint parity with an
+    uninterrupted run;
+  - tampered upstream checkpoint JSON and unexpected out-of-order downstream
+    checkpoint fail closed with `CheckpointIntegrityError` before resume;
+  - source-isolation check confirming `scan_durable_loop.py` stays disconnected
+    from `main.py`, `scan_supervisor.py`, FastAPI, and Blob stores.
+- Disposable PostgreSQL `tests/test_scan_restart_matrix_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - parametrized single-boundary mid-stage crash + lease expiry + stale-commit
+    rejection + fresh-`ScanRepository` resume across all 7 stages (including
+    Intent `SourceRetrieval` and Jury `JurySourceCandidate` + `SourceRetrieval`
+    provenance, no material re-upload, immutable upstream checkpoints, and
+    preserved `save_to_database`);
+  - cascading 7-boundary restart/reclaim run (stalling and reclaiming at every
+    single stage in one run with `save_to_database=False`) producing bit-for-bit
+    identical `ScanRun`, `ScanMaterial`, `*InputSnapshot`, and `ScanCheckpoint`
+    records to an uninterrupted clean run, with zero artifact tables;
+  - inter-stage clean restart + `fail_step(retryable=True)` operational recovery
+    + fail-closed rejection when an upstream checkpoint JSONB is mutated before
+    resume;
+  - real OS `SIGKILL` subprocess termination (`subprocess.Popen` + `signal.SIGKILL`)
+    mid-chain on `diagnosis` after snapshot persistence and preparation,
+    followed by lease expiry, reclaim on a new `ScanRepository`, upstream hash
+    verification, and completion through `verification`.
+
+### Likely files
+
+`backend/scan_durable_loop.py`, `tests/test_scan_restart_matrix.py`,
+`tests/test_scan_restart_matrix_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- [Reliability contracts run 43457975706](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43457975706)
+  on pull request [#38](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/38)
+  (`b94b937a00619233b649ff3e68091fabd10e7d34`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
+---
+
+## Card 3L-Jury-parity — Five-Jury cognitive parity & model-policy binding on durable packets
+
+**Status:** Next executable card (first real-stage parity card; Intent already calls `analyze_intent` in 3G2)
+**Proves:** `JuryStageExecutor` can invoke the existing no-web five-Jury packet
+analysis path (without `x_ray_search` or live scraping) on verified durable Jury
+packets, bind `MODEL_POLICY_VERSION` on the Jury checkpoint contract, and
+preserve deterministic Jury passage/finding normalization contracts.
 
 ---
 
@@ -1677,14 +1769,16 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 3K-integrity (Checkpoint reload payload-hash verification & durable
-save_to_database) is complete. Specify then implement exactly Card 3J-restart
-from docs/scanner-reliability-slice-backlog.md (Full-chain restart/reclaim
-matrix across every stage boundary with verified checkpoint reload hashes). Do
-not modify POST /scan, Supervisor loop registration, Blob publication paths, or
-Railway settings.
+Card 3J-restart (Full-chain restart/reclaim matrix across every stage boundary
+with verified checkpoint reload hashes) is complete. Specify then implement
+exactly Card 3L-Jury-parity from docs/scanner-reliability-slice-backlog.md
+(Five-Jury cognitive parity & model-policy binding on durable packets). Keep
+tests hermetic with no live network or provider calls. Do not call x_ray_search,
+modify POST /scan, register a Supervisor loop, touch Blob publication paths, or
+change Railway settings.
 ```
 
-After Card 3J-restart is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, advance this prompt to the first
-real-stage parity card. Do not accumulate open cards in one run.
+After Card 3L-Jury-parity is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, advance this prompt one stage at a time
+through Diagnosis, Foresight, Strategic Synthesis, and Verification real-stage
+parity. Do not accumulate open cards in one run.
