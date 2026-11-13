@@ -30,13 +30,13 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 2A — Golden company & Market Intelligence
-compatibility contracts** (followed by **Card 2B**, **Card 3K-integrity**, and
+Immediate next product card: **Card 2B — Foresight KB-first, Observatory &
+Buying Insight compatibility contracts** (followed by **Card 3K-integrity** and
 **3J-restart**). Phase 3 stays open, and `3J-cutover` stays blocked until real
 cognitive stage parity, post-Verification report/summary assembly, and Phase 6
 Blob-first publication reconciliation pass. Process card **3G0**, scaffold card
-**3J-loop**, product cards **3G1** through **3I-V3**, and synchronization card
-**1A** are complete.
+**3J-loop**, product cards **3G1** through **3I-V3**, synchronization card
+**1A**, and compatibility card **2A** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1115,3 +1115,75 @@ Verification evidence:
   head branch `reliability-1a-sync-main`): `focused-contracts` passed and
   `postgres-supervisor-contracts` passed. The local replay above is not this
   GitHub CI run.
+
+
+## Card 2A — Golden company & Market Intelligence compatibility contracts
+
+Current serialized company-record, global-index, and Market Intelligence read
+behavior is now frozen in `tests/test_company_and_mi_compatibility_contracts.py`
+without network or model calls and without modifying `market_intelligence.py`,
+`POST /scan`, `scan_supervisor.py`, PostgreSQL schemas, or Railway settings:
+
+- **Master `companies/{slug}.json` & `index/summary_list.json` contract:** locks
+  `BlobStorage._make_json_safe` JSON round-trip fidelity across the full
+  company master schema (`general_summary`, `summary_text`, `detailed_report`,
+  `strategic_synthesis`, `activation_pairs`, `why_proposals`, `what_proposals`,
+  `evidence_links`, `strategic_foresight`, `foresight_links`, `key_people`,
+  `ai_verification`, `history`, `evidence_manifest`, and `claim_graph`), strict
+  separation from the compact `index/summary_list.json` row (including Buying
+  Insight availability flags `buying_potential_available`,
+  `buying_potential_updated_at`, and `buying_potential_confidence`), and strict
+  non-overlap with compact PostgreSQL stage checkpoints (`scanner.*/v1`).
+- **Direct deterministic Market Intelligence contracts:** locks exact outputs
+  for `compute_top_foresights()`, `compute_cross_impact()`,
+  `compute_domain_dimension_matrix()`, `compute_industry_radar()`,
+  `compute_foresight_coverage()`, and end-to-end
+  `compute_market_intelligence()` (including FAVI geometric vs. additive
+  formulas, percentile segment cutoffs, Opportunity Map ranking, and curated
+  Sweden cohort matching).
+- **Frozen foresight-eligibility & cross-record subtleties (documented for
+  deliberate future hardening / Phase 6 reconciliation):**
+  1. *Three-way `foresight_links` eligibility split:* `/api/market-intelligence`
+     passes unfiltered `company_details` into `market_intelligence.py`, where
+     theme/dimension counters include every dict link with a mapped `fp_theme` /
+     `kb_dimension` regardless of `foresight_context_eligible`,
+     `foresight_signal_status`, `source_audit_status`, `source_readable`,
+     `validated`, or `is_priority_dimension`; FAVI's `compute_fps()` filters
+     only on `validated` and `is_priority_dimension` (defaulting missing flags
+     to `True` and still counting unvalidated links in `foresight_count` and
+     `megatrend_exposure`); Observatory's `_filter_company_foresight()`
+     requires `foresight_context_eligible is True`, no
+     `dead`/`unreadable`/`excluded`/`rejected` token in either
+     `foresight_signal_status` or `source_audit_status`, and
+     `source_readable is not False` before calling
+     `compute_market_intelligence()`.
+  2. *Global index full-row replacement on rescan:*
+     `BlobStorage.update_global_index_fields()` merges `buying_potential_*`
+     flags onto `index/summary_list.json`, whereas
+     `BlobStorage.update_global_index(summary_entry)` replaces the matched row
+     wholesale (`current_index[i] = summary_entry`), dropping uncopied
+     `buying_potential_*` flags when a fresh scan constructs `summary_entry`
+     without preserving them.
+  3. *Join & dimension asymmetries inside `market_intelligence.py`:*
+     `compute_domain_dimension_matrix()` and `compute_industry_radar()` join
+     `companyName` case-insensitively (`.lower()`) against `dashboard_data`
+     (falling back to `"Unknown"` if absent from `dashboard_data`), whereas
+     `compute_favi_index()` and `compute_opportunity_map()` join `companyName`
+     with exact case-sensitive keys; `compute_domain_dimension_matrix()` counts
+     valid `kb_dimension` links even when `fp_theme` is unmapped, while
+     `compute_cross_impact()` increments Top-15 `theme_totals` for non-empty
+     dimensions outside `KB_DIMENSIONS` (such as `"Business Model"`) without
+     emitting cells outside `KB_DIMENSIONS`.
+
+Phase 3 remains open. The next bounded card is **Card 2B — Foresight KB-first,
+Observatory & Buying Insight compatibility contracts**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card 2A suite
+  `11 passed` (`tests/test_company_and_mi_compatibility_contracts.py`); focused
+  trust contracts `127 passed`; complete hermetic suite `562 passed, 63 skipped`
+  with all provider keys cleared and socket/DNS guard active.
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
