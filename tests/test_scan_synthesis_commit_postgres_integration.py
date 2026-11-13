@@ -75,6 +75,7 @@ def synthesis_commit_schema():
             "008_diagnosis_input_snapshots.sql",
             "009_foresight_input_snapshots.sql",
             "010_synthesis_input_snapshots.sql",
+            "012_scan_runs_save_to_database.sql",
         )
     ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:

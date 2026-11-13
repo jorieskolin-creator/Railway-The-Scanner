@@ -31,12 +31,13 @@ shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
 Immediate next product card: **Card 3K-integrity — Checkpoint reload
-payload-hash verification & durable `save_to_database`** (followed by
-**3J-restart**). Phase 3 stays open, and `3J-cutover` stays blocked until real
-cognitive stage parity, post-Verification report/summary assembly, and Phase 6
-Blob-first publication reconciliation pass. Process card **3G0**, scaffold card
-**3J-loop**, product cards **3G1** through **3I-V3**, synchronization card
-**1A**, and compatibility cards **2A** and **2B** are complete.
+payload-hash verification & durable `save_to_database`** (implemented locally
+and awaiting pull-request GitHub CI before advancing to **3J-restart**). Phase 3
+stays open, and `3J-cutover` stays blocked until real cognitive stage parity,
+post-Verification report/summary assembly, and Phase 6 Blob-first publication
+reconciliation pass. Process card **3G0**, scaffold card **3J-loop**, product
+cards **3G1** through **3I-V3**, synchronization card **1A**, and compatibility
+cards **2A** and **2B** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1271,3 +1272,69 @@ Verification evidence:
   head branch `reliability-2b-foresight-buying-contracts`):
   `focused-contracts` passed and `postgres-supervisor-contracts` passed. The
   local replay above is not this GitHub CI run.
+
+
+## Card 3K-integrity — Checkpoint reload payload-hash verification & durable `save_to_database`
+
+Persisted checkpoints and durable run headers now verify payload integrity on
+reload and retain `save_to_database` across restarts without modifying
+`POST /scan`, registering a live Supervisor loop, writing Blob artifacts, or
+changing Railway settings:
+
+- **Checkpoint reload & write payload-hash verification
+  (`backend/scan_checkpoint_integrity.py`, `backend/scan_supervisor.py`):**
+  `ScanRepository.load_checkpoint()` (and `_validate_checkpoint()` on commit)
+  now validates every stage contract (`material_ingestion`, `intent`,
+  `jury_analysis`, `diagnosis`, `foresight`, `strategic_synthesis`,
+  `verification`) through `validate_checkpoint_integrity(..., require_passed=True)`:
+  1. enforces finite JSON-safe (`allow_nan=False`) `gate_result` and `snapshot`
+     mappings and exact `snapshot` header parity (`contract`, `run_id`, `stage`,
+     `attempt`, `input_hash`);
+  2. recomputes canonical `output_hash` over `snapshot` and deterministic
+     `checkpoint_id` (`CP-<sha256[:32]>`) so in-place PostgreSQL `JSONB`
+     mutations and forged `output_hash` updates without matching `checkpoint_id`
+     fail closed with `CheckpointIntegrityError`;
+  3. verifies embedded gate consistency (`snapshot["gate_result"] == gate_result`
+     for `material_ingestion`; `snapshot["gate_results"] == [gate_result]` for
+     cognitive stages) and stage-specific ref/payload bindings (`material_refs`
+     and recomputed `input_hash` on `material_ingestion`; deterministic
+     `input_snapshot_ref`, ordered unique `input_refs`, upstream
+     `<prev>_checkpoint_ref` and recomputed `input_hash`, compact
+     `<stage>_result` schema re-validation, and recomputed `output_refs` on
+     cognitive stages);
+  4. chains `CheckpointIntegrityError` into
+     `<Stage>InputSnapshotIntegrityError` inside `load_verified_<stage>_inputs()`
+     so downstream stage hydration cannot consume a JSON-mutated upstream
+     checkpoint even when stored `output_hash` columns were left untouched.
+- **Durable `save_to_database` on `scan_runs`
+  (`backend/migrations/012_scan_runs_save_to_database.sql`,
+  `backend/scan_supervisor.py`, `backend/scan_ingress.py`):**
+  1. migration `012_scan_runs_save_to_database.sql` adds `save_to_database
+     BOOLEAN NOT NULL DEFAULT TRUE` idempotently without editing migrations
+     `001`–`011`;
+  2. `prepare_scan_ingress()`, `ScanRepository.create_run()`, and
+     `ScanRepository.create_run_with_materials()` reject non-boolean
+     `save_to_database` values, persist the boolean on `scan_runs` (and in
+     `run_queued` diagnostics), and reject idempotency-key replays that flip
+     `save_to_database`;
+  3. `ScanRepository.load_run(run_id=...)` returns a validated `ScanRun` header
+     (raising `ScanRunIntegrityError` on malformed stored columns) and proves
+     `save_to_database=False` and `save_to_database=True` survive step claims,
+     lease expiry/reclaim, retryable/terminal failures, and full-chain
+     completion.
+
+Phase 3 remains open. Once pull-request GitHub CI is recorded for Card
+3K-integrity, the next bounded card is **Card 3J-restart — Full-chain restart
+and reclaim matrix**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card 3K-integrity
+  hermetic suite `7 passed` (`tests/test_scan_checkpoint_integrity.py`); focused
+  trust contracts `127 passed`; complete hermetic suite `574 passed, 67 skipped`
+  with all provider keys cleared and socket/DNS guard active; local disposable
+  PostgreSQL replay of `postgres-supervisor-contracts` `67 passed` (including
+  `4 passed` in `tests/test_scan_checkpoint_integrity_postgres_integration.py`).
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.

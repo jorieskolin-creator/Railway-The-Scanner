@@ -31,6 +31,7 @@ def ingress_state_schema():
     migrations = [
         (_BACKEND / "migrations" / "001_scan_execution_state.sql").read_text(encoding="utf-8"),
         (_BACKEND / "migrations" / "002_scan_materials.sql").read_text(encoding="utf-8"),
+        (_BACKEND / "migrations" / "012_scan_runs_save_to_database.sql").read_text(encoding="utf-8"),
     ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
         connection.execute(
@@ -55,6 +56,7 @@ def _create(repository: ScanRepository, ingress):
         cognitive_contract_version=ingress.cognitive_contract_version,
         initial_stage=ingress.initial_stage,
         materials=list(ingress.materials),
+        save_to_database=ingress.save_to_database,
     )
 
 

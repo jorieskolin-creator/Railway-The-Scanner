@@ -63,6 +63,14 @@ class VerificationInputSnapshotIntegrityError(RuntimeError):
     """Raised when an immutable Verification input manifest is malformed or mismatched."""
 
 
+class CheckpointIntegrityError(RuntimeError):
+    """Raised when a persisted checkpoint fails hash, ID, gate, or ref verification."""
+
+
+class ScanRunIntegrityError(RuntimeError):
+    """Raised when a persisted scan_runs row has malformed identity or flags."""
+
+
 class RunStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -128,6 +136,22 @@ class StepLease:
     lease_owner: str
     fencing_token: int
     lease_expires_at: datetime
+
+
+@dataclass(frozen=True)
+class ScanRun:
+    """Operational scan-run header; never a duplicate of Blob company artifacts."""
+
+    run_id: str
+    company_name: str
+    company_url: str | None
+    cognitive_contract_version: str
+    status: str
+    current_stage: str | None
+    idempotency_key: str
+    request_hash: str
+    save_to_database: bool
+    final_artifact_ref: str | None
 
 
 @dataclass(frozen=True)
@@ -574,6 +598,40 @@ def _verification_manifest(value: Any) -> Mapping[str, Any]:
     return dict(raw_value)
 
 
+def _reject_json_constant(constant: str) -> Any:
+    raise CheckpointIntegrityError(
+        f"Persisted checkpoint JSON cannot contain non-finite constant {constant!r}."
+    )
+
+
+def _checkpoint_json_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value, parse_constant=_reject_json_constant)
+        except json.JSONDecodeError as error:
+            raise CheckpointIntegrityError(
+                f"Persisted checkpoint {field_name} is not valid JSON."
+            ) from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise CheckpointIntegrityError(
+            f"Persisted checkpoint {field_name} must be a JSON-safe mapping."
+        )
+    try:
+        encoded = json.dumps(
+            dict(raw_value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointIntegrityError(
+            f"Persisted checkpoint {field_name} must contain finite JSON values."
+        ) from error
+    return json.loads(encoded)
+
+
 def _source_metadata(value: Any) -> Mapping[str, Any]:
     raw_value = value
     if isinstance(raw_value, str):
@@ -696,9 +754,12 @@ class ScanRepository:
         request_hash: str,
         cognitive_contract_version: str,
         initial_stage: str,
+        save_to_database: bool = True,
     ) -> Mapping[str, Any]:
         """Create one queued run and its first pending step idempotently."""
 
+        if type(save_to_database) is not bool:
+            raise ValueError("save_to_database must be a boolean.")
         with self._transaction() as connection, connection.cursor() as cursor:
             return self._create_run_on_cursor(
                 cursor,
@@ -709,6 +770,7 @@ class ScanRepository:
                 request_hash=request_hash,
                 cognitive_contract_version=cognitive_contract_version,
                 initial_stage=initial_stage,
+                save_to_database=save_to_database,
             )
 
     def create_run_with_materials(
@@ -722,6 +784,7 @@ class ScanRepository:
         cognitive_contract_version: str,
         initial_stage: str,
         materials: list[ScanMaterial],
+        save_to_database: bool = True,
     ) -> Mapping[str, Any]:
         """Atomically create (or replay) a run with immutable prepared material.
 
@@ -729,6 +792,8 @@ class ScanRepository:
         a worker, or route the legacy in-memory /scan path through PostgreSQL.
         """
 
+        if type(save_to_database) is not bool:
+            raise ValueError("save_to_database must be a boolean.")
         self._validate_materials(materials)
         with self._transaction() as connection, connection.cursor() as cursor:
             created = self._create_run_on_cursor(
@@ -740,6 +805,7 @@ class ScanRepository:
                 request_hash=request_hash,
                 cognitive_contract_version=cognitive_contract_version,
                 initial_stage=initial_stage,
+                save_to_database=save_to_database,
             )
             if str(created["run_id"]) != run_id:
                 raise ValueError(
@@ -747,6 +813,77 @@ class ScanRepository:
                 )
             self._persist_materials_on_cursor(cursor, run_id=run_id, materials=materials)
             return created
+
+    def load_run(self, *, run_id: str) -> ScanRun | None:
+        """Load one durable scan_runs row, or None if run_id is absent."""
+
+        if not run_id:
+            raise ValueError("run_id is required.")
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_id, company_name, company_url,
+                       cognitive_contract_version, status, current_stage,
+                       idempotency_key, request_hash, save_to_database,
+                       final_artifact_ref
+                FROM scan_runs
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+            row = _mapping(cursor.fetchone())
+        if row is None:
+            return None
+        stored_run_id = row.get("run_id")
+        company_name = row.get("company_name")
+        company_url = row.get("company_url")
+        cognitive_contract_version = row.get("cognitive_contract_version")
+        status = row.get("status")
+        current_stage = row.get("current_stage")
+        idempotency_key = row.get("idempotency_key")
+        request_hash = row.get("request_hash")
+        save_to_database = row.get("save_to_database")
+        final_artifact_ref = row.get("final_artifact_ref")
+        allowed_statuses = {member.value for member in RunStatus}
+        if (
+            not isinstance(stored_run_id, str)
+            or stored_run_id != run_id
+            or not isinstance(company_name, str)
+            or not company_name
+            or (company_url is not None and not isinstance(company_url, str))
+            or not isinstance(cognitive_contract_version, str)
+            or not cognitive_contract_version
+            or not isinstance(status, str)
+            or status not in allowed_statuses
+            or (
+                current_stage is not None
+                and (not isinstance(current_stage, str) or not current_stage)
+            )
+            or not isinstance(idempotency_key, str)
+            or not idempotency_key
+            or not isinstance(request_hash, str)
+            or not _is_sha256_digest(request_hash)
+            or type(save_to_database) is not bool
+            or (
+                final_artifact_ref is not None
+                and (not isinstance(final_artifact_ref, str) or not final_artifact_ref)
+            )
+        ):
+            raise ScanRunIntegrityError(
+                f"Persisted scan run row is malformed: {run_id!r}."
+            )
+        return ScanRun(
+            run_id=stored_run_id,
+            company_name=company_name,
+            company_url=company_url,
+            cognitive_contract_version=cognitive_contract_version,
+            status=status,
+            current_stage=current_stage,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            save_to_database=save_to_database,
+            final_artifact_ref=final_artifact_ref,
+        )
 
     def _create_run_on_cursor(
         self,
@@ -759,18 +896,22 @@ class ScanRepository:
         request_hash: str,
         cognitive_contract_version: str,
         initial_stage: str,
+        save_to_database: bool = True,
     ) -> Mapping[str, Any]:
         if not all((run_id, company_name, idempotency_key, request_hash, initial_stage)):
             raise ValueError("run_id, company_name, idempotency_key, request_hash, and initial_stage are required.")
+        if type(save_to_database) is not bool:
+            raise ValueError("save_to_database must be a boolean.")
 
         cursor.execute(
             """
             INSERT INTO scan_runs (
                 run_id, company_name, company_url, cognitive_contract_version,
-                status, current_stage, idempotency_key, request_hash
-            ) VALUES (%s, %s, %s, %s, 'queued', %s, %s, %s)
+                status, current_stage, idempotency_key, request_hash,
+                save_to_database
+            ) VALUES (%s, %s, %s, %s, 'queued', %s, %s, %s, %s)
             ON CONFLICT (idempotency_key) DO NOTHING
-            RETURNING run_id, status, current_stage, request_hash
+            RETURNING run_id, status, current_stage, request_hash, save_to_database
             """,
             (
                 run_id,
@@ -780,13 +921,14 @@ class ScanRepository:
                 initial_stage,
                 idempotency_key,
                 request_hash,
+                save_to_database,
             ),
         )
         created = _mapping(cursor.fetchone())
         if created is None:
             cursor.execute(
                 """
-                SELECT run_id, status, current_stage, request_hash
+                SELECT run_id, status, current_stage, request_hash, save_to_database
                 FROM scan_runs
                 WHERE idempotency_key = %s
                 """,
@@ -795,7 +937,10 @@ class ScanRepository:
             created = _mapping(cursor.fetchone())
             if created is None:
                 raise RuntimeError("Idempotent scan run disappeared before it could be read.")
-            if created.get("request_hash") != request_hash:
+            if (
+                created.get("request_hash") != request_hash
+                or created.get("save_to_database") is not save_to_database
+            ):
                 raise ValueError("Idempotency key was already used for different scan input.")
             return created
 
@@ -811,7 +956,16 @@ class ScanRepository:
             INSERT INTO scan_events (run_id, stage_name, attempt, event_type, details)
             VALUES (%s, %s, 1, 'run_queued', %s::jsonb)
             """,
-            (run_id, initial_stage, _json({"idempotency_key": idempotency_key})),
+            (
+                run_id,
+                initial_stage,
+                _json(
+                    {
+                        "idempotency_key": idempotency_key,
+                        "save_to_database": save_to_database,
+                    }
+                ),
+            ),
         )
         return created
 
@@ -1650,11 +1804,16 @@ class ScanRepository:
             raise JuryInputSnapshotIntegrityError(
                 "Jury input snapshot Intent checkpoint attempt is invalid."
             ) from error
-        checkpoint = self.load_checkpoint(
-            run_id=run_id,
-            stage_name="intent",
-            attempt=intent_attempt,
-        )
+        try:
+            checkpoint = self.load_checkpoint(
+                run_id=run_id,
+                stage_name="intent",
+                attempt=intent_attempt,
+            )
+        except CheckpointIntegrityError as error:
+            raise JuryInputSnapshotIntegrityError(
+                f"Jury input manifest does not match the verified durable inputs: {error}"
+            ) from error
         if checkpoint is None:
             raise JuryInputSnapshotIntegrityError(
                 f"Unknown Intent checkpoint for Jury input: {run_id}/intent/{intent_attempt}"
@@ -1828,11 +1987,16 @@ class ScanRepository:
             raise DiagnosisInputSnapshotIntegrityError(
                 "Diagnosis input snapshot Jury checkpoint attempt is invalid."
             ) from error
-        checkpoint = self.load_checkpoint(
-            run_id=run_id,
-            stage_name="jury_analysis",
-            attempt=jury_attempt,
-        )
+        try:
+            checkpoint = self.load_checkpoint(
+                run_id=run_id,
+                stage_name="jury_analysis",
+                attempt=jury_attempt,
+            )
+        except CheckpointIntegrityError as error:
+            raise DiagnosisInputSnapshotIntegrityError(
+                f"Diagnosis input manifest does not match the verified durable inputs: {error}"
+            ) from error
         if checkpoint is None:
             raise DiagnosisInputSnapshotIntegrityError(
                 f"Unknown Jury checkpoint for Diagnosis input: {run_id}/jury_analysis/{jury_attempt}"
@@ -2002,11 +2166,16 @@ class ScanRepository:
             raise ForesightInputSnapshotIntegrityError(
                 "Foresight input snapshot Diagnosis checkpoint attempt is invalid."
             ) from error
-        checkpoint = self.load_checkpoint(
-            run_id=run_id,
-            stage_name="diagnosis",
-            attempt=diagnosis_attempt,
-        )
+        try:
+            checkpoint = self.load_checkpoint(
+                run_id=run_id,
+                stage_name="diagnosis",
+                attempt=diagnosis_attempt,
+            )
+        except CheckpointIntegrityError as error:
+            raise ForesightInputSnapshotIntegrityError(
+                f"Foresight input manifest does not match the verified durable inputs: {error}"
+            ) from error
         if checkpoint is None:
             raise ForesightInputSnapshotIntegrityError(
                 f"Unknown Diagnosis checkpoint for Foresight input: {run_id}/diagnosis/{diagnosis_attempt}"
@@ -2178,11 +2347,16 @@ class ScanRepository:
             raise SynthesisInputSnapshotIntegrityError(
                 "Synthesis input snapshot Foresight checkpoint attempt is invalid."
             ) from error
-        checkpoint = self.load_checkpoint(
-            run_id=run_id,
-            stage_name="foresight",
-            attempt=foresight_attempt,
-        )
+        try:
+            checkpoint = self.load_checkpoint(
+                run_id=run_id,
+                stage_name="foresight",
+                attempt=foresight_attempt,
+            )
+        except CheckpointIntegrityError as error:
+            raise SynthesisInputSnapshotIntegrityError(
+                f"Synthesis input manifest does not match the verified durable inputs: {error}"
+            ) from error
         if checkpoint is None:
             raise SynthesisInputSnapshotIntegrityError(
                 f"Unknown Foresight checkpoint for Synthesis input: {run_id}/foresight/{foresight_attempt}"
@@ -2354,11 +2528,16 @@ class ScanRepository:
             raise VerificationInputSnapshotIntegrityError(
                 "Verification input snapshot Synthesis checkpoint attempt is invalid."
             ) from error
-        checkpoint = self.load_checkpoint(
-            run_id=run_id,
-            stage_name="strategic_synthesis",
-            attempt=synthesis_attempt,
-        )
+        try:
+            checkpoint = self.load_checkpoint(
+                run_id=run_id,
+                stage_name="strategic_synthesis",
+                attempt=synthesis_attempt,
+            )
+        except CheckpointIntegrityError as error:
+            raise VerificationInputSnapshotIntegrityError(
+                f"Verification input manifest does not match the verified durable inputs: {error}"
+            ) from error
         if checkpoint is None:
             raise VerificationInputSnapshotIntegrityError(
                 f"Unknown Synthesis checkpoint for Verification input: {run_id}/strategic_synthesis/{synthesis_attempt}"
@@ -2610,7 +2789,7 @@ class ScanRepository:
         stage_name: str,
         attempt: int,
     ) -> ScanCheckpoint | None:
-        """Load one persisted checkpoint, or None if that attempt has no row."""
+        """Load one persisted checkpoint and verify its payload hashes, ID, gates, and refs."""
 
         if not run_id or not stage_name or attempt < 1:
             raise ValueError("run_id, stage_name, and a positive attempt are required.")
@@ -2627,21 +2806,52 @@ class ScanRepository:
             row = _mapping(cursor.fetchone())
         if row is None:
             return None
-        gate_result = row.get("gate_result")
-        snapshot = row.get("snapshot")
-        if not isinstance(gate_result, Mapping) or not isinstance(snapshot, Mapping):
-            raise ValueError("persisted checkpoint gate result and snapshot must be mappings.")
-        return ScanCheckpoint(
-            checkpoint_id=str(row["checkpoint_id"]),
-            run_id=str(row["run_id"]),
-            stage_name=str(row["stage_name"]),
-            attempt=int(row["attempt"]),
-            contract_version=str(row["contract_version"]),
-            input_hash=str(row["input_hash"]),
-            output_hash=str(row["output_hash"]),
-            gate_result=dict(gate_result),
-            snapshot=dict(snapshot),
+        checkpoint_id = row.get("checkpoint_id")
+        stored_run_id = row.get("run_id")
+        stored_stage_name = row.get("stage_name")
+        stored_attempt = row.get("attempt")
+        contract_version = row.get("contract_version")
+        input_hash = row.get("input_hash")
+        output_hash = row.get("output_hash")
+        if (
+            not isinstance(checkpoint_id, str)
+            or not isinstance(stored_run_id, str)
+            or not isinstance(stored_stage_name, str)
+            or type(stored_attempt) is not int
+            or not isinstance(contract_version, str)
+            or not isinstance(input_hash, str)
+            or not isinstance(output_hash, str)
+        ):
+            raise CheckpointIntegrityError(
+                "Persisted checkpoint identity or hash columns have invalid types."
+            )
+        if (
+            stored_run_id != run_id
+            or stored_stage_name != stage_name
+            or stored_attempt != attempt
+        ):
+            raise CheckpointIntegrityError(
+                "Persisted checkpoint row identity does not match the requested step."
+            )
+        gate_result = _checkpoint_json_mapping(
+            row.get("gate_result"), field_name="gate_result"
         )
+        snapshot = _checkpoint_json_mapping(row.get("snapshot"), field_name="snapshot")
+        checkpoint = ScanCheckpoint(
+            checkpoint_id=checkpoint_id,
+            run_id=stored_run_id,
+            stage_name=stored_stage_name,
+            attempt=stored_attempt,
+            contract_version=contract_version,
+            input_hash=input_hash,
+            output_hash=output_hash,
+            gate_result=gate_result,
+            snapshot=snapshot,
+        )
+        from scan_checkpoint_integrity import validate_checkpoint_integrity
+
+        validate_checkpoint_integrity(checkpoint, require_passed=True)
+        return checkpoint
 
     def _validate_checkpoint(self, lease: StepLease, checkpoint: ScanCheckpoint) -> None:
         if (
@@ -2660,6 +2870,9 @@ class ScanRepository:
             raise ValueError("only a passed gate may complete a step checkpoint.")
         if not isinstance(checkpoint.snapshot, Mapping):
             raise ValueError("checkpoint snapshot must be a mapping.")
+        from scan_checkpoint_integrity import validate_checkpoint_integrity
+
+        validate_checkpoint_integrity(checkpoint, require_passed=True)
 
     def _insert_checkpoint_on_cursor(
         self,

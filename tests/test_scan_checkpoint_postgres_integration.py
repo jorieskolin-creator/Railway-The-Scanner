@@ -33,6 +33,7 @@ def checkpoint_state_schema():
         (_BACKEND / "migrations" / "001_scan_execution_state.sql").read_text(encoding="utf-8"),
         (_BACKEND / "migrations" / "002_scan_materials.sql").read_text(encoding="utf-8"),
         (_BACKEND / "migrations" / "003_scan_checkpoints.sql").read_text(encoding="utf-8"),
+        (_BACKEND / "migrations" / "012_scan_runs_save_to_database.sql").read_text(encoding="utf-8"),
     ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
         connection.execute(

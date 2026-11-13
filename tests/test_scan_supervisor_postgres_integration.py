@@ -29,14 +29,20 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(autouse=True)
 def execution_state_schema():
     """Apply the exact migration to an empty disposable database."""
-    migration = (_BACKEND / "migrations" / "001_scan_execution_state.sql").read_text(
-        encoding="utf-8"
-    )
+    migrations = [
+        (_BACKEND / "migrations" / "001_scan_execution_state.sql").read_text(
+            encoding="utf-8"
+        ),
+        (_BACKEND / "migrations" / "012_scan_runs_save_to_database.sql").read_text(
+            encoding="utf-8"
+        ),
+    ]
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
         connection.execute(
             "DROP TABLE IF EXISTS scan_events, scan_steps, scan_runs CASCADE"
         )
-        connection.execute(migration)
+        for migration in migrations:
+            connection.execute(migration)
     yield
     with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
         connection.execute(
