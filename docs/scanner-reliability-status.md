@@ -1265,5 +1265,9 @@ Verification evidence:
   `5 passed` (`tests/test_foresight_buying_compatibility_contracts.py`); focused
   trust contracts `127 passed`; complete hermetic suite `567 passed, 63 skipped`
   with all provider keys cleared and socket/DNS guard active.
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43431466666](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43431466666)
+  completed successfully on pull request [#36](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/36)
+  for commit `281158f7f5e8c20797a11239afc038f08fb82bce` (`pull_request` event,
+  head branch `reliability-2b-foresight-buying-contracts`):
+  `focused-contracts` passed and `postgres-supervisor-contracts` passed. The
+  local replay above is not this GitHub CI run.

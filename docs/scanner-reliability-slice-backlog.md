@@ -1495,8 +1495,10 @@ trust boundaries.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43431466666](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43431466666)
+  on pull request [#36](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/36)
+  (`281158f7f5e8c20797a11239afc038f08fb82bce`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
