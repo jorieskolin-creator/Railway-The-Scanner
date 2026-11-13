@@ -18,7 +18,10 @@ def test_anthropic_receives_structured_schema_effort_and_logs_completion(monkeyp
         def create(self, **kwargs):
             captured.update(kwargs)
             return types.SimpleNamespace(
-                content=[types.SimpleNamespace(type="text", text='{"repairs": [], "notes": []}')],
+                content=[
+                    types.SimpleNamespace(type="thinking", thinking="Working through the repair"),
+                    types.SimpleNamespace(type="text", text='{"repairs": [], "notes": []}'),
+                ],
                 stop_reason="end_turn",
                 usage=types.SimpleNamespace(
                     input_tokens=120,
@@ -50,6 +53,7 @@ def test_anthropic_receives_structured_schema_effort_and_logs_completion(monkeyp
     )
 
     assert text.startswith("{")
+    assert captured["model"] == "claude-sonnet-5-5"
     assert captured["output_config"]["effort"] == "medium"
     assert captured["output_config"]["format"] == {"type": "json_schema", "schema": schema}
 
@@ -73,7 +77,7 @@ def test_anthropic_max_tokens_is_rejected_as_incomplete(monkeypatch):
     monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=Anthropic))
 
     try:
-        llm.call_anthropic_text("Test", model="claude-sonnet-5", max_tokens=4000)
+        llm.call_anthropic_text("Test", model="claude-sonnet-5-5", max_tokens=4000)
     except ValueError as exc:
         assert "incomplete" in str(exc).lower()
     else:

@@ -17,9 +17,10 @@ from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence, _call_openai_text
 from general_summary import generate_general_summary, fact_check_general_summary
+from llm_clients import call_anthropic_text
 from source_quality import manage_evidence_sources, is_foresight_context_eligible_source
 from prompts import PROMPT_VERSION, build_shared_guardrails
-from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
+from model_policy import CLAUDE_PREMIUM_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, policy_for
 import anthropic
 
 
@@ -126,18 +127,17 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
 
                 Output plain text only.
                 """
-        # Sonnet 5 fallback for AI context retrieval
+        # Sonnet fallback for AI context retrieval
         try:
             anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
             if anthropic_key:
-                import anthropic
-                claude_client = anthropic.Anthropic(api_key=anthropic_key)
-                resp = claude_client.messages.create(
+                text = call_anthropic_text(
+                    fallback_prompt,
                     model=CLAUDE_SONNET_MODEL,
                     max_tokens=2048,
-                    messages=[{"role": "user", "content": fallback_prompt}]
+                    timeout=45,
+                    reasoning_effort="low",
                 )
-                text = resp.content[0].text if resp.content else ""
                 if text:
                     print(f"   [Scanner 1] ✅ AI Context via {CLAUDE_SONNET_MODEL} for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SONNET FALLBACK) ---\n{text}"
@@ -474,7 +474,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             else:
                 foresight_links = [l for l in foresight_links if isinstance(l, dict)]
 
-            # 4. SYNTHESIS (Claude Opus 5 / GPT / Sonnet)
+            # 4. SYNTHESIS (premium Claude / GPT / standard Sonnet)
             summary_text = "Automated Analysis Complete."
             pitch_text = "Pitch unavailable."
             why_proposals = []
@@ -649,7 +649,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \\n\\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). The pitch value must also contain \\n\\n between its 3 paragraphs. The archetype field is audit-only and must not appear in summary, pitch, why_proposals, or what_proposals.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                    # --- Synthesis with fallback chain: Opus 5 → GPT frontier → Sonnet 5 ---
+                    # --- Synthesis with fallback chain: premium Claude → GPT frontier → standard Sonnet ---
                     response_text = ""
                     _seed_elapsed = time.time() - company_start
                     _seed_synth_remaining = COMPANY_BUDGET - _seed_elapsed
@@ -661,16 +661,16 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         company_scan_quality = "partial_synthesis"
                         print(f"   [{company_name}] ⏭ [Synthesis] Budget < 90s — skipping synthesis chain")
                     else:
-                        # Primary: Opus 5 with adaptive thinking
+                        # Primary: premium Claude with adaptive thinking
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Attempting {CLAUDE_OPUS_MODEL} with adaptive thinking...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Attempting {CLAUDE_PREMIUM_MODEL} with adaptive thinking...")
                                 synth_start = time.time()
                                 resp = claude_client.messages.create(
-                                    model=CLAUDE_OPUS_MODEL,
+                                    model=CLAUDE_PREMIUM_MODEL,
                                     max_tokens=16000,
                                     thinking={"type": "adaptive"},
-                                    extra_body={"output_config": {"effort": "xhigh"}},
+                                    extra_body={"output_config": {"effort": policy_for("ai_diagnosis")["effort"]}},
                                     messages=[{"role": "user", "content": synthesis_prompt}]
                                 )
                                 if resp.content:
@@ -678,9 +678,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                         if getattr(block, 'type', None) == 'text':
                                             response_text = block.text
                                             break
-                                print(f"   [{company_name}] ✅ [Synthesis] {CLAUDE_OPUS_MODEL} + adaptive thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                            except Exception as opus_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] {CLAUDE_OPUS_MODEL} failed: {opus_err}")
+                                print(f"   [{company_name}] ✅ [Synthesis] {CLAUDE_PREMIUM_MODEL} + adaptive thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                            except Exception as premium_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] {CLAUDE_PREMIUM_MODEL} failed: {premium_err}")
 
                         # Fallback 1: configured GPT frontier model
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
@@ -697,7 +697,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             except Exception as gpt_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                        # Fallback 2: Claude Sonnet 5
+                        # Fallback 2: standard Claude at medium effort
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
                                 print(f"   [{company_name}] 🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")
@@ -705,6 +705,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 sonnet_resp = claude_client.messages.create(
                                     model=CLAUDE_SONNET_MODEL,
                                     max_tokens=4000,
+                                    output_config={"effort": "medium"},
                                     messages=[{"role": "user", "content": synthesis_prompt}],
                                 )
                                 for block in sonnet_resp.content:
@@ -723,7 +724,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                              why_proposals = strip_archetype_labels_from_text(json_data.get("why_proposals", why_proposals) or why_proposals)
                              what_proposals = strip_archetype_labels_from_text(json_data.get("what_proposals", what_proposals) or what_proposals)
 
-                             # --- OPUS SCORE VERIFICATION ---
+                             # --- SYNTHESIS SCORE VERIFICATION ---
                              opus_reality = json_data.get("reality_score")
                              opus_intent = json_data.get("intent_score")
                              scanner2_reality = reality_results["score"]
@@ -736,9 +737,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                  reality_results["opus_reality_score"] = opus_reality
 
                                  if delta_r <= 5:
-                                     print(f"   [{company_name}] ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Final score: {opus_reality}")
+                                     print(f"   [{company_name}] ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ synthesis {opus_reality} (delta {delta_r}). Final score: {opus_reality}")
                                  else:
-                                     print(f"   [{company_name}] ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus is final judge → {opus_reality}")
+                                     print(f"   [{company_name}] ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs synthesis {opus_reality} (delta {delta_r}). Synthesis is final judge → {opus_reality}")
 
                                  reality_results["score"] = opus_reality
                                  reality_results["score_verification"] = "opus_final_judge"
@@ -750,17 +751,17 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                          washing_type = None
 
                              # Intent score is IMMUTABLE — Scanner 1's website analysis is the
-                             # sole source of intent. Opus may disagree, but overriding intent
+                             # sole source of intent. The synthesis model may disagree, but overriding intent
                              # would destroy the integrity delta (intent vs reality gap).
-                             # Log Opus's opinion for diagnostics only.
+                             # Log the synthesis model's opinion for diagnostics only.
                              if opus_intent is not None and isinstance(opus_intent, (int, float)):
                                  opus_intent = max(0, min(100, int(opus_intent)))
                                  delta_i = abs(opus_intent - scanner_intent)
                                  intent_results["opus_intent_score"] = opus_intent
                                  if delta_i <= 5:
-                                     print(f"   [{company_name}] ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
+                                     print(f"   [{company_name}] ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ synthesis {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
                                  else:
-                                     print(f"   [{company_name}] ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
+                                     print(f"   [{company_name}] ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs synthesis {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                      gap = intent_results["score"] - reality_results["score"]
 
                              # --- ARCHETYPE AUDIT ---
@@ -1134,7 +1135,7 @@ re-introduce any of the false claims listed above."""
                     except Exception as gpt_err:
                         print(f"   [{company_name}] ❌ [Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                    # Fallback: Claude Sonnet 5
+                    # Fallback: configured Sonnet
                     if not resynth_text:
                         try:
                             print(f"   [{company_name}] 🔄 [Re-Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")

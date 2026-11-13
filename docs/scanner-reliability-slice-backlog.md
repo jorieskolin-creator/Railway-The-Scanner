@@ -55,6 +55,41 @@ These are restated here so a slice agent does not need the whole PDF:
 9. One slice per agent run. Do not start the next card in the same run.
 10. Mark a slice complete only after CI evidence is recorded in `docs/scanner-reliability-status.md`.
 
+## Cross-feature compatibility guardrails
+
+Every reliability card must preserve the shared domain-data contracts consumed by
+other Scanner features and external solutions:
+
+- **Primary Blob master record (`companies/{slug}.json`):** authoritative shared
+  company record read by `CompanySummary.tsx`, `market_intelligence.py`,
+  `foresight_observatory.py`, `company_source_ledger.py`, and
+  `buying_potential.py`. Compact PostgreSQL checkpoints are operational lineage
+  only and must never overwrite or replace fields in `companies/{slug}.json`
+  (`general_summary`, `summary_text` AI Diagnosis, `detailed_report`,
+  `strategic_synthesis`, `activation_pairs`, `why_proposals`, `what_proposals`,
+  `evidence_links`, `strategic_foresight`, `foresight_links`, `key_people`,
+  `ai_verification`, `history`).
+- **Primary global index (`index/summary_list.json`):** compact dashboard/index
+  projection; also carries Buying Insight availability fields
+  (`buying_potential_available`, `buying_potential_updated_at`,
+  `buying_potential_confidence`). Never conflate this index row with the
+  generated `general_summary` narrative.
+- **Central Foresight KB & registry (`foresight_registry/strategic_themes.json`,
+  `foresight_kb/{theme}.json`, `foresight_kb_audit/{theme}.json`,
+  `observatory/latest.json`):** company-neutral external forces only. Central KB
+  signals cannot prove company action or deployment, and reliability work must
+  not trigger bulk KB cleanup or company-record rewrites as an integration side
+  effect.
+- **BLOB2 sales & background stores (`company_evidence/{slug}.json`,
+  `company_source_ledger/{slug}.json`, `buying_potential/{slug}.json`):**
+  Company Evidence DB supplies untrusted Scanner acquisition candidates that
+  must still pass current URL, readability, entity-scope, and claim-support
+  gates; Source Ledger stays `buying_insight_only`; Buying Insight remains a
+  separate admin workflow that reads the saved company record and BLOB2 stores.
+- **Model-policy & KB version binding:** checkpoint reuse and real-stage wraps
+  must record `MODEL_POLICY_VERSION` and central KB/registry hashes so model or
+  KB upgrades cannot silently reuse stale stage outputs.
+
 ## Envelope alignment without pulling Phase 4 forward
 
 Phase 4 still starts only after Phase 3's stage-wrap exit gate. To avoid a later
@@ -1334,7 +1369,124 @@ full stage chain. Do not start 3J, publication, Supervisor registration, or
 
 ### Exit
 
-Phase 3 stays open until the full restart matrix is proven. Next card is **3J-restart — full-chain restart matrix**. Do not implement it here.
+Phase 3 stays open until the full restart matrix, checkpoint payload-hash reload
+verification, cross-feature compatibility fixtures, and real cognitive parity
+are proven. Do not jump from `3J-loop` or `3J-restart` to `3J-cutover`.
+
+---
+
+## Card 1A — Synchronize `main` baseline into `reliability-v2`
+
+**Status:** Complete
+**Kind:** Branch synchronization & compatibility gate
+
+### In scope
+
+- Merge `main` (`4f05acfbd654e6a0920f15764de5dc48a19ed5a0`: model policy
+  `model-policy-v5-sonnet55`, Diagnosis high-effort tuning, Coresignal employee
+  ES DSL discovery, and centralized `stakeholder_policy.py`) into
+  `reliability-v2` without activating the Supervisor or changing `POST /scan`.
+- Preserve `reliability-v2` trust-boundary fixes (`_as_records` shallow copy +
+  `_id` fallback, Observatory dual-status Foresight eligibility check, fresh
+  cleanup URL re-verification, Jury passage verification, duplicate-definition
+  guard, and socket/DNS-blocking `tests/conftest.py`).
+- Record cross-feature compatibility guardrails and post-`3J-loop` card sequence.
+
+### Deliberate exclusions
+
+- No new database migration, Supervisor loop, `POST /scan` change, Blob write,
+  or Railway configuration change.
+- No behavioral rewrite of Market Intelligence, Foresight harvesting, or Buying
+  Insight during the merge.
+
+### Exit evidence
+
+- [Reliability contracts run 43414193888](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43414193888)
+  on pull request [#34](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/34)
+  (`1f8f32df901554e93ad03f68beefc403f0251fc3`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
+---
+
+## Card 2A — Golden company & Market Intelligence compatibility contracts
+
+**Status:** Next executable card
+**Proves:** deterministic read compatibility across the full `companies/{slug}.json`
+master contract and `market_intelligence.py` aggregations before any durable
+publication or real-stage replacement touches company records.
+
+### In scope
+
+- Add a hermetic golden-fixture test suite (`tests/test_company_and_mi_compatibility_contracts.py`)
+  built from a representative serialized `companies/{slug}.json` record and
+  matching `index/summary_list.json` row (including `general_summary`,
+  `summary_text`, `detailed_report`, `strategic_synthesis`, `why_proposals`,
+  `what_proposals`, `evidence_links`, `strategic_foresight`, `foresight_links`,
+  `key_people`, `ai_verification`, `history`, and Buying Insight index flags).
+- Lock direct deterministic contracts for `compute_top_foresights()`,
+  `compute_cross_impact()`, `compute_domain_dimension_matrix()`,
+  `compute_industry_radar()`, `compute_foresight_coverage()`, and
+  `compute_market_intelligence()` without network or model calls.
+- Explicitly document and assert current eligibility behavior between Market
+  Intelligence and Observatory so future Market Intelligence hardening changes
+  it deliberately rather than by accident.
+
+### Deliberate exclusions
+
+- No changes to `market_intelligence.py` scoring/filtering rules in this card
+  (freeze current behavior first).
+- No changes to `POST /scan`, `scan_supervisor.py`, PostgreSQL schemas, or
+  Railway settings.
+
+### Tests
+
+- Hermetic pytest suite under no-network `tests/conftest.py`.
+- Full hermetic suite + duplicate-definition guard remain green.
+
+### Likely files
+
+`tests/test_company_and_mi_compatibility_contracts.py`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+---
+
+## Card 2B — Foresight KB-first, Observatory & Buying Insight compatibility contracts
+
+**Status:** Planned after 2A
+**Proves:** KB-first and registry-fallback `strategic_foresight` / `foresight_links`
+outputs remain compatible with `buying_potential._build_input_payload()`,
+`foresight_observatory.py`, `company_source_ledger.py`, and `general_summary.py`
+trust boundaries.
+
+### In scope
+
+- Hermetic contract fixtures for:
+  1. KB-first `generate_foresight()` output (`trend`, `fp_theme`,
+     `kb_dimension`, `impact_on_company`, `_kb_description`, `kb_first=True`)
+     flowing into `extract_foresight_links()` and Buying Insight's
+     `_build_input_payload()` / `_build_account_signal_map()` (adding non-destructive
+     read-alias support in `buying_potential.py` only if KB-first force text
+     would otherwise be dropped, while keeping legacy `theme`/`dimension`/`description`
+     intact);
+  2. failed new Foresight synthesis preserving eligible prior `foresight_links`
+     via context-only fallback;
+  3. strict non-promotion of Foresight links into `general_summary` company facts
+     or `company_source_ledger` Scanner seeds.
+
+### Deliberate exclusions
+
+- No central KB harvest/cleanup changes, no Blob schema renames, no `POST /scan`
+  handoff, and no Supervisor changes.
+
+---
+
+## Card 3K-integrity — Checkpoint reload payload-hash verification & durable `save_to_database`
+
+**Status:** Planned after 2B (before `3J-restart` closure)
+**Proves:** `load_checkpoint()` recomputes snapshot/output hashes, validates
+checkpoint ID and embedded gate/ref consistency against JSON payload mutation,
+and persists `save_to_database` durably on `scan_runs`.
 
 ---
 
@@ -1342,10 +1494,12 @@ Phase 3 stays open until the full restart matrix is proven. Next card is **3J-re
 
 | Card | Outcome | Not this card |
 |---|---|---|
-| 3J-loop | Test-only Supervisor loop can drive the completed durable chain. Still not bound to `POST /scan`. | Railway enablement, live traffic |
+| 3J-loop | Test-only runner can drive the completed scaffold chain. Still not bound to `POST /scan`. | Real cognition, Railway enablement, live traffic |
+| 3J-restart | Full-chain restart/reclaim matrix across every stage boundary with verified checkpoint reload hashes. | Real-stage cutover or route swap |
+| Real-stage parity + Phases 4–6 | Real cognitive stage adapters (resolving Foresight's current-reality/company/KB input snapshot), post-Verification General Summary + Detailed Report + full `companies/{slug}.json` assembly, typed failure/blocked gates, and Blob-first publication reconciliation. | Silent empty scaffold outputs |
 | 3J-exclusive | Contract proving only one execution path can own a request (durable path cannot start while legacy thread can, and the reverse). | The actual route swap |
-| 3J-enablement | Written operational checklist: migration, `SCAN_SUPERVISOR_*`, verification queries, rollback. Review artifact, not a silent settings change. | Applying it to Railway |
-| 3J-cutover | Replace, not parallelize, the in-memory `/scan` handoff. Target size is a small route change after the proofs exist. | Inventing missing stage wraps |
+| 3J-enablement | Written operational checklist: external Blob backup, migrations, `SCAN_SUPERVISOR_*`, verification queries, rollback. Review artifact, not a silent settings change. | Applying it to Railway |
+| 3J-cutover | Replace, not parallelize, the in-memory `/scan` handoff once real cognitive output parity and Blob reconciliation are proven. | Inventing missing stage wraps |
 
 If 3J-cutover is not small, earlier cards leaked scope. Stop and split; do not
 “just finish the handoff.”
@@ -1394,11 +1548,13 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-3J-loop is complete. Specify then implement exactly slice 3J-restart from
-docs/scanner-reliability-slice-backlog.md (full-chain restart matrix). Do not
-start 3J-exclusive, 3J-enablement, 3J-cutover, publication, Supervisor
-registration, POST /scan, or Railway.
+Card 1A (main baseline sync) is complete. Implement exactly Card 2A from
+docs/scanner-reliability-slice-backlog.md (Golden company & Market Intelligence
+compatibility contracts). Freeze current serialized company/index/MI behavior in
+hermetic tests without network or model calls. Do not modify market_intelligence.py
+rules, POST /scan, Supervisor registration, PostgreSQL schemas, or Railway.
 ```
 
-After 3J-restart is specified and merged, replace `3J-restart` with the next
-specified card. Do not accumulate open cards in one run.
+After Card 2A is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, advance this prompt to **Card 2B**, then
+**Card 3K-integrity**, then **3J-restart**. Do not accumulate open cards in one run.

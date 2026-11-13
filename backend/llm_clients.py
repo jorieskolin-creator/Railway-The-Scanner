@@ -15,11 +15,12 @@ import time
 from typing import Any
 
 from model_policy import (
-    CLAUDE_OPUS_MODEL,
     CLAUDE_SONNET_MODEL,
     GPT_PRO_MODEL,
     GPT_REASONING_MODEL,
     GPT_VERIFIER_MODEL,
+    dedupe_chain,
+    resolve_model_id,
 )
 
 
@@ -143,7 +144,7 @@ def call_openai_text(
         kwargs["tools"] = [{"type": "web_search", "search_context_size": search_context_size}]
     reasoning: dict[str, Any] = {}
     if reasoning_mode:
-        # Pro is a mode on GPT-5.6 Sol, not a separate model slug.
+        # Pro is a Responses API reasoning mode on the configured Sol model.
         reasoning["mode"] = reasoning_mode
     if reasoning_effort:
         reasoning["effort"] = reasoning_effort
@@ -197,6 +198,7 @@ def call_anthropic_text(
     json_schema_name: str = "scanner_output",
     log_label: str = "Anthropic",
 ) -> str:
+    model = resolve_model_id(model)
     api_key = anthropic_api_key()
     if not api_key:
         raise ValueError("No ANTHROPIC_API_KEY configured")
@@ -273,7 +275,7 @@ def call_json_model_chain(
     log_label: str = "OpenAI JSON",
 ) -> tuple[str, str]:
     errors: list[str] = []
-    for model in model_chain:
+    for model in dedupe_chain(*model_chain):
         try:
             if model.startswith("gpt-"):
                 text = call_openai_text(

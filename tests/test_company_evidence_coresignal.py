@@ -182,7 +182,8 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
     def fake_coresignal_request(method, path, *, payload=None, errors=None):
-        assert "professional_network/employee" not in path
+        if "employee" in path:
+            return []
         if "company" in path and "search" in path:
             return [123]
         if "company" in path and "collect" in path:
@@ -230,6 +231,58 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     assert stakeholder["generation_eligible"] is False
     serialized = json.dumps(stakeholder)
     assert "do-not-store@example.com" not in serialized
+
+
+def test_employee_api_runs_after_executive_filter_and_checks_current_employer(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
+    monkeypatch.setenv("CORESIGNAL_ENABLED", "true")
+    monkeypatch.setenv("CORESIGNAL_MAX_STAKEHOLDERS", "1")
+    monkeypatch.delenv("CORESIGNAL_EMPLOYEE_SEARCH_PATH", raising=False)
+    monkeypatch.delenv("CORESIGNAL_EMPLOYEE_COLLECT_PATH", raising=False)
+    collected_ids = []
+
+    def fake_request(method, path, *, payload=None, errors=None):
+        if "/company_multi_source/enrich" in path:
+            return {
+                "company_id": "10791716",
+                "id": 888,
+                "name": "Example Oy",
+                "website": "https://example.fi",
+                "key_executives": [{"member_full_name": "Unmatched Person", "member_position_title": "Junior Designer"}],
+            }
+        if method == "POST":
+            assert path == "/cdapi/v2/employee_multi_source/search/es_dsl"
+            assert payload["query"]["bool"]["filter"] == [{"term": {"active_experience_company_id": 10791716}}]
+            return [91, 91, 92, 93, 94]
+        assert path.startswith("/cdapi/v2/employee_multi_source/collect/")
+        assert "fields=active_experience_title" in path and "fields=active_experience_company_id" in path
+        employee_id = int(path.split("?")[0].rsplit("/", 1)[1])
+        collected_ids.append(employee_id)
+        if employee_id == 91:
+            return {"full_name": "Former Employee", "active_experience_title": "CIO", "active_experience_company_id": 99}
+        if employee_id == 92:
+            errors.append({"method": "GET", "status_code": 404})
+            return None
+        return {
+            "id": employee_id,
+            "full_name": "Current Executive",
+            "active_experience_title": "Chief Information Officer",
+            "active_experience_company_id": "10791716",
+            "professional_network_url": "https://www.linkedin.com/in/example",
+        }
+
+    monkeypatch.setattr(ce, "_coresignal_request", fake_request)
+    records, diagnostics, warnings = ce._coresignal_records({
+        "companyName": "Example Oy", "companyUrl": "https://example.fi", "summary_text": "AI and data platform",
+    })
+    stakeholders = [rec["stakeholder"] for rec in records if "stakeholder" in rec]
+    assert diagnostics["employee_search_attempted"] is True
+    assert diagnostics["blocked_or_unmatched"] == 3
+    assert diagnostics["rejected_by_reason"]["duplicate_person"] == 1
+    assert [(person["name"], person["role"]) for person in stakeholders] == [("Current Executive", "Chief Information Officer")]
+    assert collected_ids == [91, 92, 93, 94]
+    assert any("404" in warning for warning in warnings)
 
 
 def test_coresignal_stakeholder_groups_are_title_specific(monkeypatch):
@@ -296,11 +349,7 @@ def test_coresignal_executive_generalist_and_retired_roles(monkeypatch):
         {"name": "Raimo Seppänen", "title": "Airport Director Ret."},
         demand_profile,
     )
-    assert retired["stakeholder_role_match_reason"] == "historical_or_retired_role"
-    assert retired["sales_use"] == "internal_only"
-    assert retired["internal_only"] is True
-    assert retired["buying_evidence_eligible"] is False
-    assert retired["demand_signal_ids"] == []
+    assert retired is None
 
 
 def test_company_evidence_warnings_distinguish_coresignal_trigger_updates(monkeypatch):
@@ -454,6 +503,8 @@ def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
                     "stakeholder": {
                         "name": "Jane Example",
                         "role": "CIO",
+                        "current_affiliation_verified": True,
+                        "affiliation_basis": "active_company_id",
                         "public_profile_url": "https://www.linkedin.com/in/jane-example",
                         "allowed_use": "allowed_as_discovery_question",
                         "matched_demand_groups": ["ai_data_cloud_platform"],
@@ -537,3 +588,29 @@ def test_coresignal_422_is_classified_as_payload_shape_error(monkeypatch):
     assert ids == []
     assert diagnostics["company_search_error_type"] == "payload_shape_error"
     assert any("422 payload_shape_error" in warning for warning in warnings)
+
+
+def test_as_records_preserves_ids_without_mutating_caller_payloads(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    nested_source = {"company_name": "Sisu Auto"}
+    empty_id_source = {"id": "", "company_name": "Empty Id Oy"}
+    existing_id_source = {"id": "explicit-id", "company_name": "Explicit Id Oy"}
+    top_level_item = {"_id": "top-1", "company_name": "Top Level Oy"}
+    payload = {
+        "hits": {
+            "hits": [
+                {"_id": "es-1", "_source": nested_source},
+                {"_id": "es-2", "_source": empty_id_source},
+                {"_id": "es-3", "_source": existing_id_source},
+                top_level_item,
+            ]
+        }
+    }
+
+    records = ce._as_records(payload)
+
+    assert [rec.get("id") for rec in records] == ["es-1", "es-2", "explicit-id", "top-1"]
+    records[0]["company_name"] = "Mutated"
+    records[3]["company_name"] = "Mutated Top"
+    assert nested_source == {"company_name": "Sisu Auto"}
+    assert top_level_item == {"_id": "top-1", "company_name": "Top Level Oy"}

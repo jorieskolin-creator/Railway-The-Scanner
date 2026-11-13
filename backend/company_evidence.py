@@ -19,6 +19,10 @@ from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from stakeholder_policy import (
+    demand_profile, is_historical_role, role_context, search_rounds,
+    rank_stakeholders, employee_count, candidate_reason, person_key,
+)
 
 
 SOURCE_TARGET_REGISTRY = (
@@ -181,37 +185,6 @@ INDEPENDENT_PUBLIC_HOSTS = (
 PARTNER_VENDOR_MARKERS = (
     "partner", "partners", "vendor", "case", "customer", "client", "success",
     "reference", "marketplace", "technology-partner", "customer-story",
-)
-ROLE_DEMAND_MAP = {
-    "ai_data_cloud_platform": {
-        "keywords": ("ai", "tekoäly", "genai", "copilot", "agent", "data", "analytics", "cloud", "azure", "aws", "gcp", "platform", "devops", "architecture"),
-        "roles": ("CIO", "CTO", "CDO", "Chief Data Officer", "Head of Data", "Head of AI", "Enterprise Architect", "IT Director", "Head of Platform"),
-    },
-    "erp_workplace_cyber": {
-        "keywords": ("erp", "sap", "dynamics", "salesforce", "oracle", "workday", "m365", "cyber", "security", "nis2", "dora", "iam", "soc", "workplace"),
-        "roles": ("CIO", "CISO", "Head of Infrastructure", "Head of Applications", "IT Director", "Procurement Director", "Chief Information Security Officer"),
-    },
-    "operations_manufacturing_automation": {
-        "keywords": ("manufacturing", "production", "operations", "automation", "rpa", "process mining", "supply", "logistics", "factory", "plant", "tuotanto"),
-        "roles": ("COO", "Chief Operating Officer", "Operations Director", "Production Director", "Head of Digitalization", "Automation Lead", "Supply Chain Director"),
-    },
-    "finance_risk_regulatory": {
-        "keywords": ("finance", "risk", "compliance", "regulation", "csrd", "esrs", "dora", "audit", "governance", "investor", "margin", "cost"),
-        "roles": ("CFO", "Chief Financial Officer", "Risk Director", "Compliance Director", "Legal Counsel", "General Counsel", "Head of Governance"),
-    },
-    "hr_workforce_culture": {
-        "keywords": ("hr", "people", "talent", "workforce", "culture", "employee", "training", "skills", "reskilling", "recruit", "career"),
-        "roles": ("CHRO", "HR Director", "People Director", "Talent Director", "Head of People", "Learning and Development Director"),
-    },
-    "strategy_growth_customer": {
-        "keywords": ("strategy", "growth", "customer", "sales", "market", "business unit", "transformation", "digital", "innovation", "service"),
-        "roles": ("CEO", "Chief Executive Officer", "Chief Strategy Officer", "Strategy Director", "Business Unit Director", "Commercial Director", "Customer Experience Director"),
-    },
-}
-TOP_MANAGEMENT_ROLES = (
-    "CEO", "Chief Executive Officer", "CFO", "Chief Financial Officer", "CIO",
-    "CTO", "COO", "CHRO", "CISO", "Chief Digital Officer", "Chief Data Officer",
-    "Strategy Director", "Business Development Director",
 )
 LEGAL_SUFFIXES = (
     "Oyj", "Oy", "Oy Ab", "Ab", "Abp", "Ltd", "Limited", "Plc", "Corporation", "Corp",
@@ -1523,8 +1496,8 @@ def _as_records(data: Any) -> list[dict]:
                 source = source_payload if isinstance(source_payload, dict) else item
                 if source:
                     record = dict(source)
-                    if isinstance(source_payload, dict) and item.get("_id"):
-                        record.setdefault("id", item.get("_id"))
+                    if item.get("_id") and not record.get("id"):
+                        record["id"] = item["_id"]
                     records.append(record)
         return records
     if isinstance(data, dict):
@@ -1796,150 +1769,15 @@ def _coresignal_search_payloads(company_name: str, domain: str, limit: int, targ
 
 
 def _demand_profile(company_data: dict) -> dict:
-    text_parts = [
-        company_data.get("summary_text"),
-        company_data.get("general_summary"),
-        company_data.get("pitch_text"),
-        company_data.get("domain_force_dossier"),
-        company_data.get("domain"),
-        company_data.get("archetype"),
-    ]
-    for key in ("why_proposals", "what_proposals"):
-        for item in _list(company_data.get(key)):
-            text_parts.append(_flatten_text(item, 500))
-    strategic = company_data.get("strategic_foresight")
-    if isinstance(strategic, dict):
-        text_parts.append(_flatten_text(strategic.get("dimension_forces"), 1200))
-    text = " ".join(_clip(part, 3000) for part in text_parts if part).lower()
-    groups = []
-    reasons = []
-    roles = []
-    for group, spec in ROLE_DEMAND_MAP.items():
-        matches = [kw for kw in spec["keywords"] if kw in text]
-        if matches:
-            groups.append(group)
-            reasons.append({"group": group, "matched_keywords": matches[:8]})
-            roles.extend(spec["roles"])
-    if not groups:
-        groups.append("strategy_growth_customer")
-        reasons.append({"group": "strategy_growth_customer", "matched_keywords": ["default_top_management"]})
-        roles.extend(ROLE_DEMAND_MAP["strategy_growth_customer"]["roles"])
-    roles = list(dict.fromkeys(list(TOP_MANAGEMENT_ROLES) + roles))
-    return {"groups": groups, "roles": roles[:24], "reasons": reasons}
-
-
-def _role_matches(title: str, demand_profile: dict) -> tuple[bool, str]:
-    title_l = (title or "").lower()
-    if not title_l:
-        return False, "missing_title"
-    role_terms = []
-    for role in _list(demand_profile.get("roles")):
-        role_l = str(role).lower()
-        role_terms.append(role_l)
-        for part in re.split(r"[/,&()\-]", role_l):
-            part = part.strip()
-            if len(part) >= 4:
-                role_terms.append(part)
-    leadership_terms = (
-        "chief", "ceo", "cfo", "cio", "cto", "coo", "ciso", "director", "head of",
-        "vp", "vice president", "management", "johtaja", "päällikkö", "paallikko",
-    )
-    if any(term and term in title_l for term in role_terms):
-        return True, "role_matches_detected_demand"
-    if any(term in title_l for term in leadership_terms):
-        return True, "top_management_or_senior_role"
-    return False, "role_not_matched_to_detected_demand"
-
-
-HISTORICAL_ROLE_MARKERS = (
-    "retired", " ret,", " ret.", "ret.", "former", "ex-", "emeritus",
-    "previous", "ex ", "alumni", "entinen",
-)
-EXECUTIVE_GENERALIST_MARKERS = (
-    "ceo", "chief executive", "chair", "board", "hallitus", "strategy",
-    "business development", "commercial", "managing director", "toimitusjohtaja",
-)
-TITLE_GROUP_HINTS = {
-    "ai_data_cloud_platform": (
-        "cio", "cto", "cdo", "data", "ai", "application", "applications",
-        "platform", "architecture", "architect", "digital", "technology",
-        "information", "it", "software", "cloud",
-    ),
-    "erp_workplace_cyber": (
-        "ciso", "security", "cyber", "infrastructure", "applications",
-        "application", "it", "procurement", "sourcing", "workplace",
-        "enterprise systems", "erp", "sap",
-    ),
-    "operations_manufacturing_automation": (
-        "coo", "operations", "operation", "production", "maintenance",
-        "equipment", "infrastructure", "airport development", "automation",
-        "supply", "logistics", "network",
-    ),
-    "finance_risk_regulatory": (
-        "cfo", "finance", "financial", "business control", "controller",
-        "risk", "compliance", "legal", "governance", "audit",
-    ),
-    "hr_workforce_culture": (
-        "chro", "hr", "human resources", "people", "talent", "learning",
-        "workforce", "culture",
-    ),
-    "strategy_growth_customer": (
-        "ceo", "strategy", "business development", "commercial", "sales",
-        "customer", "marketing", "growth", "board", "chair", "director",
-    ),
-}
+    return demand_profile(company_data)
 
 
 def _is_historical_role(title: str) -> bool:
-    title_l = f" {(title or '').lower()} "
-    return any(marker in title_l for marker in HISTORICAL_ROLE_MARKERS)
+    return is_historical_role(title)
 
 
 def _stakeholder_role_context(title: str, demand_profile: dict) -> dict:
-    title_l = (title or "").lower()
-    if not title_l:
-        return {"matched": False, "reason": "missing_title", "groups": [], "historical": False}
-    detected_groups = _list(demand_profile.get("groups"))
-    if _is_historical_role(title):
-        return {
-            "matched": True,
-            "reason": "historical_or_retired_role",
-            "groups": [],
-            "historical": True,
-        }
-    if any(marker in title_l for marker in EXECUTIVE_GENERALIST_MARKERS):
-        general_groups = [
-            group for group in ("strategy_growth_customer", "finance_risk_regulatory", "ai_data_cloud_platform")
-            if group in detected_groups
-        ] or ["strategy_growth_customer"]
-        return {
-            "matched": True,
-            "reason": "executive_generalist",
-            "groups": _dedupe_preserve(general_groups)[:3],
-            "historical": False,
-        }
-    title_groups = [
-        group for group, hints in TITLE_GROUP_HINTS.items()
-        if any(hint in title_l for hint in hints)
-    ]
-    scoped_groups = [group for group in title_groups if group in detected_groups] or title_groups
-    if scoped_groups:
-        return {
-            "matched": True,
-            "reason": "role_matches_title_specific_demand",
-            "groups": _dedupe_preserve(scoped_groups)[:3],
-            "historical": False,
-        }
-    matched, reason = _role_matches(title, demand_profile)
-    if matched:
-        fallback_groups = [group for group in detected_groups if group in title_groups] or detected_groups[:1]
-        return {
-            "matched": True,
-            "reason": reason,
-            "groups": fallback_groups[:2],
-            "historical": False,
-        }
-    return {"matched": False, "reason": reason, "groups": [], "historical": False}
+    return role_context(title, demand_profile)
 
 
 def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, target_country: str = "", identity: dict | None = None) -> dict:
@@ -2019,10 +1857,10 @@ def _confirmed_coresignal_pairs(
     for idx, record in enumerate(candidate_records):
         decision = _coresignal_entity_decision(company_name, company_url, record, target_country, identity)
         if decision["confirmed"]:
-            record_id = (
+            record_id = record.get("company_id") or (
                 collected_pairs[idx][0]
                 if idx < len(collected_pairs)
-                else _first_key(record, ("id", "company_id", "source_id"))
+                else _first_key(record, ("id", "source_id"))
             )
             confirmed_pairs.append((record_id, record))
         elif len(rejection_samples) < 6:
@@ -2165,36 +2003,90 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int, 
     return records[:limit], company_ids[:limit], diagnostics, warnings
 
 
-def _coresignal_employee_search(company_id: Any, company_name: str, demand_profile: dict, max_people: int) -> tuple[list[dict], list[str]]:
-    warnings = []
-    if not company_id:
-        return [], ["Coresignal stakeholder search skipped because no company id was available."]
-    path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_SEARCH_PATH")) or "/cdapi/v1/professional_network/employee/search/filter"
-    collect_path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_COLLECT_PATH")) or "/cdapi/v1/professional_network/employee/collect/{id}"
-    role_terms = _list(demand_profile.get("roles"))[:18]
-    payload = {
-        "current_company_id": company_id,
-        "company_id": company_id,
-        "company_name": company_name,
-        "title": role_terms,
-        "active": True,
-        "limit": max(max_people * 2, 8),
-    }
-    raw = _coresignal_request("POST", path, payload=payload)
-    people_ids = _extract_ids(raw, max(max_people * 2, 8))
-    records = _as_records(raw)
-    collected = []
-    for person_id in people_ids[:max(max_people * 2, 8)]:
-        data = _coresignal_request("GET", collect_path.format(id=person_id))
-        if isinstance(data, dict):
-            collected.append(data)
-        if len(collected) >= max_people:
+def _coresignal_employee_search(
+    company_id: int, company_name: str, company_url: str, demand_profile: dict, max_people: int, start_idx: int,
+) -> tuple[list[dict], dict, list[str]]:
+    path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_SEARCH_PATH"))
+    if not path or path == "/cdapi/v1/professional_network/employee/search/filter":
+        path = "/cdapi/v2/employee_multi_source/search/es_dsl"
+    collect_path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_COLLECT_PATH"))
+    if not collect_path or collect_path == "/cdapi/v1/professional_network/employee/collect/{id}":
+        collect_path = "/cdapi/v2/employee_multi_source/collect/{id}"
+    # Reserve collection budget for every demand round. Never stop at display limit.
+    rounds = search_rounds(demand_profile)
+    budget = min(80, max(24, max_people * 4))
+    diagnostics = {"employee_ids_returned": 0, "profiles_collected": 0, "collection_attempts": 0,
+                   "collection_budget": budget, "search_rounds": [], "employee_request_errors": []}
+    errors: list[dict] = []
+    candidates, seen_ids, returned_unique_ids = [], set(), set()
+    fields = urlencode({"fields": ("id", "full_name", "professional_network_url", "active_experience_title", "active_experience_company_id")}, doseq=True)
+    separator = "&" if "?" in collect_path else "?"
+    stop = False
+    for round_idx, (round_name, role_query) in enumerate(rounds):
+        # Role-family clauses are mandatory, not optional scoring suggestions.
+        payload = {"query": {"bool": {
+            "filter": [{"term": {"active_experience_company_id": company_id}}],
+            "must": [role_query],
+        }}, "sort": ["_score"]}
+        raw = _coresignal_request("POST", path, payload=payload, errors=errors)
+        returned_ids = _extract_ids(raw, max(1, len(_result_values(raw))))
+        people_ids = list(dict.fromkeys(str(pid) for pid in returned_ids if re.fullmatch(r"[1-9][0-9]*", str(pid))))
+        round_stats = {"round": round_name, "employee_ids_returned": len(returned_ids), "unique_ids_returned": len(people_ids),
+                       "profiles_collected": 0, "collection_attempts": 0, "rejected_by_reason": {}}
+        diagnostics["search_rounds"].append(round_stats)
+        diagnostics["employee_ids_returned"] += len(returned_ids)
+        returned_unique_ids.update(people_ids)
+        remaining = budget - diagnostics["collection_attempts"]
+        quota = max(1, remaining // (len(rounds) - round_idx))
+        if round_idx == 0:
+            quota = min(remaining, max(quota, min(8, budget // 2)))
+        if errors and errors[-1].get("status_code") in {401, 402, 403, 429}:
+            stop = True
+        for pid in people_ids:
+            if stop or round_stats["collection_attempts"] >= quota or diagnostics["collection_attempts"] >= budget:
+                break
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            round_stats["collection_attempts"] += 1
+            diagnostics["collection_attempts"] += 1
+            data = _coresignal_request("GET", collect_path.format(id=pid) + separator + fields, errors=errors)
+            if not isinstance(data, dict):
+                reason = "collection_failed"
+                if errors and errors[-1].get("status_code") in {401, 402, 403, 429}:
+                    stop = True
+            else:
+                round_stats["profiles_collected"] += 1
+                diagnostics["profiles_collected"] += 1
+                person = _coresignal_person(data, verified=str(data.get("active_experience_company_id")) == str(company_id), basis="active_company_id")
+                candidates.append(person)
+                reason = candidate_reason(person, demand_profile)
+            if reason:
+                counts = round_stats["rejected_by_reason"]
+                counts[reason] = counts.get(reason, 0) + 1
+        round_stats["uncollected_ids"] = sum(pid not in seen_ids for pid in people_ids)
+        if stop:
+            diagnostics["stopped_on_provider_error"] = True
             break
-    if collected:
-        records = collected
-    if not records:
-        warnings.append("Coresignal stakeholder search returned no usable records.")
-    return records[:max(max_people * 2, 8)], warnings
+    diagnostics["employee_unique_ids_returned"] = len(returned_unique_ids)
+    diagnostics["collection_failed"] = diagnostics["collection_attempts"] - diagnostics["profiles_collected"]
+    diagnostics["employee_request_errors"] = [{"method": e.get("method"), "status_code": e.get("status_code"), "error_type": e.get("error_type")} for e in errors]
+    warnings = [f"Coresignal employee {method} failed ({status})." for method, status in dict.fromkeys(
+        (e.get("method"), e.get("status_code") or "request error") for e in errors)]
+    return candidates, diagnostics, warnings
+
+
+def _coresignal_person(raw: dict, *, verified: bool, basis: str) -> dict:
+    return {
+        "name": _clip(_first_key(raw, ("name", "full_name", "member_full_name", "person_name")), 160),
+        "role": _clip(_first_key(raw, ("active_experience_title", "title", "current_title", "job_title", "position", "role", "member_position_title")), 180),
+        "public_profile_url": _public_profile_url(raw),
+        "provider_person_id": _first_key(raw, ("provider_person_id", "parent_id", "id", "member_id", "person_id")),
+        "provider": "coresignal",
+        "current_affiliation_verified": verified and raw.get("is_current") is not False and raw.get("current_affiliation_verified") is not False,
+        "affiliation_basis": basis,
+        "allowed_use": "allowed_as_discovery_question",
+    }
 
 
 def _coresignal_company_record(idx: int, company_name: str, company_url: str, raw: dict, target_country: str = "", identity: dict | None = None) -> dict:
@@ -2294,11 +2186,12 @@ def _coresignal_company_record(idx: int, company_name: str, company_url: str, ra
                     "name": _clip(_first_key(executive, ("member_full_name", "name", "full_name", "person_name")), 160),
                     "title": _clip(_first_key(executive, ("member_position_title", "title", "current_title", "job_title", "position", "role")), 180),
                     "parent_id": _first_key(executive, ("parent_id", "id", "member_id", "person_id")),
+                    "is_current": executive.get("is_current"),
+                    "current_affiliation_verified": executive.get("current_affiliation_verified"),
+                    "public_profile_url": _public_profile_url(executive),
                 }
-                for executive in _list(raw.get("key_executives"))[:24]
+                for executive in _list(raw.get("key_executives"))
                 if isinstance(executive, dict)
-                and _first_key(executive, ("member_full_name", "name", "full_name", "person_name"))
-                and _first_key(executive, ("member_position_title", "title", "current_title", "job_title", "position", "role"))
             ],
         },
     }
@@ -2381,7 +2274,7 @@ def _coresignal_stakeholder_record(
     demand_profile: dict,
 ) -> dict | None:
     name = _clip(_first_key(raw, ("name", "full_name", "member_full_name", "person_name")), 160)
-    title = _clip(_first_key(raw, ("title", "current_title", "job_title", "position", "role", "member_position_title")), 180)
+    title = _clip(_first_key(raw, ("active_experience_title", "title", "current_title", "job_title", "position", "role", "member_position_title")), 180)
     if not name or not title:
         return None
     role_context = _stakeholder_role_context(title, demand_profile)
@@ -2446,7 +2339,10 @@ def _coresignal_stakeholder_record(
             "name": name,
             "role": title,
             "public_profile_url": profile_url,
-            "provider_person_id": _first_key(raw, ("parent_id", "id", "member_id", "person_id")),
+            "provider_person_id": _first_key(raw, ("provider_person_id", "parent_id", "id", "member_id", "person_id")),
+            "current_affiliation_verified": raw.get("current_affiliation_verified") is True,
+            "affiliation_basis": raw.get("affiliation_basis"),
+            "seniority_tier": role_context.get("seniority_tier"),
             "matched_demand_groups": matched_groups,
             "stakeholder_role_match_reason": reason,
             "demand_signal_ids": matched_groups,
@@ -2461,29 +2357,6 @@ def _coresignal_stakeholder_record(
     }
 
 
-def _coresignal_key_executive_records(company_record: dict, max_people: int) -> list[dict]:
-    if max_people <= 0:
-        return []
-    fields = company_record.get("coresignal_fields") or {}
-    executives = []
-    for executive in _list(fields.get("key_executives")):
-        if not isinstance(executive, dict):
-            continue
-        name = _clip(_first_key(executive, ("name", "member_full_name", "full_name", "person_name")), 160)
-        title = _clip(_first_key(executive, ("title", "member_position_title", "current_title", "job_title", "position", "role")), 180)
-        if not name or not title:
-            continue
-        executives.append({
-            "name": name,
-            "title": title,
-            "parent_id": _first_key(executive, ("parent_id", "id", "member_id", "person_id")),
-            "source": "coresignal_key_executives",
-        })
-        if len(executives) >= max_people:
-            break
-    return executives
-
-
 def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callback=None) -> tuple[list[dict], dict, list[str]]:
     diagnostics = {
         "enabled": _coresignal_enabled(),
@@ -2491,6 +2364,7 @@ def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callbac
         "company_records": 0,
         "technology_records": 0,
         "stakeholder_candidates": 0,
+        "employee_search_attempted": False,
         "blocked_or_unmatched": 0,
         "base_url": _coresignal_base_url() if _coresignal_enabled() else None,
         "entity_first": True,
@@ -2528,32 +2402,49 @@ def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callbac
         if tech_record:
             records.append(tech_record)
 
-    demand_profile = _demand_profile(company_data)
-    people_records = []
-    if max_stakeholders > 0 and company_items and company_ids:
-        for company_record in [record for record in records if record.get("provider_record_type") == "company_enrichment"]:
-            people_records.extend(_coresignal_key_executive_records(company_record, max_stakeholders - len(people_records)))
-            if len(people_records) >= max_stakeholders:
-                break
-        if not people_records and _env_bool("CORESIGNAL_USE_EMPLOYEE_API", default=False):
-            for company_id in company_ids[:1]:
-                people, people_warnings = _coresignal_employee_search(company_id, company_name, demand_profile, max_stakeholders)
-                warnings.extend(people_warnings)
-                people_records.extend(people)
-                if people_records:
-                    break
-        elif not people_records:
-            warnings.append("Coresignal company record did not include role-matched key executives; legacy employee API fallback disabled.")
-    elif max_stakeholders > 0 and company_items:
-        warnings.append("Coresignal stakeholder search skipped because the confirmed company record did not include a collectable company id.")
-    elif max_stakeholders > 0:
-        warnings.append("Coresignal stakeholder search skipped because no entity-confirmed company record was found.")
-    for raw in people_records:
-        stakeholder_record = _coresignal_stakeholder_record(start_idx + len(records), company_name, company_url, raw, demand_profile)
-        if stakeholder_record:
-            records.append(stakeholder_record)
+    profile = _demand_profile(company_data)
+    candidates, stakeholders = [], []
+    diagnostics.update({"executives_received": sum(len(_list(r.get("key_executives"))) for r in company_items),
+                        "employee_ids_returned": 0, "profiles_collected": 0, "search_rounds": [],
+                        "demand_groups": profile["groups"]})
+    if max_stakeholders > 0:
+        for company_record in [r for r in records if r.get("provider_record_type") == "company_enrichment"]:
+            for raw in _list(company_record.get("coresignal_fields", {}).get("key_executives")):
+                candidates.append(_coresignal_person(raw, verified=company_record.get("entity_verified") is True, basis="confirmed_company_executive_roster"))
+        company_id = next((int(value) for value in company_ids if re.fullmatch(r"[1-9][0-9]*", str(value))), None)
+        if company_id:
+            diagnostics["employee_search_attempted"] = True
+            employees, employee_diagnostics, employee_warnings = _coresignal_employee_search(
+                company_id, company_name, company_url, profile, max_stakeholders, start_idx + len(records),
+            )
+            candidates.extend(employees)
+            diagnostics.update(employee_diagnostics)
+            warnings.extend(employee_warnings)
         else:
-            diagnostics["blocked_or_unmatched"] += 1
+            warnings.append("Coresignal employee search skipped because no entity-confirmed numeric company ID was available.")
+        size = employee_count(company_data) or next((employee_count(raw) for raw in company_items if employee_count(raw)), None)
+        ranked, ranking = rank_stakeholders(candidates, profile, employees=size, limit=max_stakeholders)
+        diagnostics.update(ranking)
+        diagnostics["employees_for_ranking"] = size
+        diagnostics["blocked_or_unmatched"] = sum(ranking["rejected_by_reason"].values())
+        for person in ranked:
+            record = _coresignal_stakeholder_record(start_idx + len(records) + len(stakeholders), company_name, company_url, person, profile)
+            if record:
+                stakeholders.append(record)
+    print("[Coresignal stakeholders] " + json.dumps({"company": company_name, **{key: diagnostics.get(key) for key in (
+        "executives_received", "employee_ids_returned", "employee_unique_ids_returned", "profiles_collected", "collection_attempts", "collection_failed", "collection_budget",
+        "search_rounds", "rejected_by_reason", "candidates_retained", "candidates_selected", "display_limit_excluded",
+    )}}, ensure_ascii=False))
+    # Persist negative affiliation evidence so stale titles in another source
+    # cannot resurrect a rejected person during report generation.
+    diagnostics["stakeholder_conflicts"] = [
+        {key: p.get(key) for key in ("name", "role", "public_profile_url", "provider_person_id", "provider", "current_affiliation_verified", "affiliation_basis")}
+        for p in candidates if p.get("current_affiliation_verified") is False or is_historical_role(p.get("role", ""))
+    ]
+    for record in records:
+        if record.get("provider_record_type") == "company_enrichment":
+            record["stakeholder_selection_applied"] = True
+    records.extend(stakeholders)
     diagnostics["company_records"] = sum(1 for r in records if r.get("provider_record_type") == "company_enrichment")
     diagnostics["technology_records"] = sum(1 for r in records if r.get("provider_record_type") == "technology_signal")
     diagnostics["company_update_triggers"] = sum(1 for r in records if r.get("provider_record_type") == "company_update_trigger")
