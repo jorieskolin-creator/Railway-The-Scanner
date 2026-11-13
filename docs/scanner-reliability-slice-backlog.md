@@ -1703,11 +1703,120 @@ or skipping stage gates.
 
 ## Card 3L-Jury-parity — Five-Jury cognitive parity & model-policy binding on durable packets
 
-**Status:** Next executable card (first real-stage parity card; Intent already calls `analyze_intent` in 3G2)
+**Status:** Implemented — awaiting pull-request GitHub CI evidence
 **Proves:** `JuryStageExecutor` can invoke the existing no-web five-Jury packet
 analysis path (without `x_ray_search` or live scraping) on verified durable Jury
 packets, bind `MODEL_POLICY_VERSION` on the Jury checkpoint contract, and
 preserve deterministic Jury passage/finding normalization contracts.
+
+### In scope
+
+- New module `backend/scan_jury_cognition.py`:
+  - `analyze_jury_projection_with_cognition(...)` and
+    `build_no_web_jury_analyzer(...)` run the five-Jury no-web packet analysis
+    pipeline on verified durable Jury packets (`JuryInputProjection`) using
+    existing `FORENSIC_JURIES`, `_split_jury_packets`,
+    `build_jury_evidence_packages`, `_build_jury_analysis_prompt`,
+    `_build_jury_rescue_prompt`, `_merge_jury_payloads`,
+    `_FORENSIC_JURY_JSON_SCHEMA`, `FORENSIC_SKIP_SONNET_ANALYSIS_FALLBACK_JURIES`,
+    and `policy_for("forensic_jury")` (`GPT_REASONING_MODEL` primary ->
+    `CLAUDE_SONNET_MODEL` fallback where enabled -> compact no-web
+    `GPT_REASONING_MODEL` rescue when findings are empty), hard-locking
+    `web_search=False`;
+  - raises explicit `JuryCognitiveUnavailableError` when a lane has judgeable
+    evidence packages (`build_jury_evidence_packages` non-empty) and all no-web
+    provider attempts fail or return unparseable output (Reliability Plan Rule
+    #6: provider unavailability is never silently converted to `passed`), while
+    returning an empty valid lane without model calls when packets yield zero
+    evidence packages;
+  - `normalize_jury_lane_payload(...)` applies transient in-memory
+    `assess_entity_match` enrichment from `(company_name, company_url)`, rejects
+    off-packet / empty-URL / wrong-entity findings into `rejected_evidence`,
+    verifies source-passage support and claim atomicity
+    (`_claim_supported_by_source_text`, `_is_atomic_supported_claim`), narrows
+    overreaching claims via `_derive_narrow_claim_from_source` or downgrades
+    readable target-entity context to `context_only`, binds deterministic
+    `PKG-...` / `PROP-...` / `PASS-...` and durable `source_id` (`JSC-...` /
+    `SR-...`) lineage, and emits only compact `scanner.jury/v1` keys with zero
+    forbidden evidence-promotion fields.
+- Bind `model_policy_version` (defaulting to `MODEL_POLICY_VERSION` from
+  `model_policy.py`) onto `scanner.jury/v1` checkpoints:
+  - `build_jury_checkpoint(..., model_policy_version=MODEL_POLICY_VERSION)` in
+    `backend/scan_jury_checkpoint.py` records non-empty `model_policy_version`
+    inside `snapshot` (binding it into `output_hash` and `checkpoint_id`);
+  - `JuryStageExecutor` and `JuryStageExecutor.with_cognitive_parity(...)` in
+    `backend/scan_jury_adapter.py` bind `model_policy_version` while keeping the
+    default `JuryStageExecutor(loader)` scaffold wrap deterministic and
+    network-free;
+  - `commit_jury_stage` in `backend/scan_jury_commit.py` requires non-empty
+    `model_policy_version` and rejects replay across a policy version upgrade;
+  - `validate_checkpoint_integrity` in `backend/scan_checkpoint_integrity.py`
+    enforces non-empty `model_policy_version` on `scanner.jury/v1` reload.
+
+### Deliberate exclusions
+
+- Do not call `x_ray_search`, `scrape_strategic_content`, Brave, Firecrawl, or
+  Coresignal, and never pass `web_search=True`.
+- Do not start Diagnosis, Foresight, Strategic Synthesis, or Verification
+  cognitive parity in this card.
+- Do not modify `POST /scan` (`backend/main.py`), register a Supervisor loop,
+  touch Blob publication paths, add a database migration, or change Railway
+  settings.
+
+### Tests
+
+- Hermetic `tests/test_scan_jury_cognition.py`:
+  - five-Jury no-web cognitive parity via `JuryStageExecutor.with_cognitive_parity`,
+    verifying `web_search=False`, company-scoped `PKG-...`/`PROP-...`/`PASS-...`
+    prompts, hallucinated package-ID replacement with deterministic package
+    lineage, durable `source_id` preservation, `model_policy_version` binding,
+    and zero forbidden evidence keys on `snapshot`;
+  - off-packet URL rejection, bundled/overreaching claim narrowing via
+    `_derive_narrow_claim_from_source`, `context_only` fallback on short generic
+    target pages, and outright rejection of wrong same-name entities via
+    `assess_entity_match`;
+  - split-packet chunking (>8 Service Portfolio packets), Sonnet fallback on
+    primary GPT timeout, `AI & DATA JURY` Sonnet-skip + compact GPT rescue, and
+    `JuryCognitiveUnavailableError` when all providers fail on non-empty
+    packages;
+  - empty-packet zero-call pass, malformed model payload ->
+    `validation_failed`, `model_policy_version` hash/ID/replay/reload guards,
+    and source-isolation checks.
+- Disposable PostgreSQL `tests/test_scan_jury_cognition_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - end-to-end PostgreSQL prepare -> fenced `commit_jury_stage` ->
+    `load_checkpoint()` -> `build_diagnosis_input_snapshot` ->
+    `load_verified_diagnosis_inputs` -> `build_diagnosis_input_projection`
+    hydration of passage-verified five-Jury findings, policy-upgrade replay
+    rejection, and fail-closed `CheckpointIntegrityError` on PostgreSQL `JSONB`
+    `model_policy_version` tamper.
+
+### Likely files
+
+`backend/scan_jury_cognition.py`, `backend/scan_jury_checkpoint.py`,
+`backend/scan_jury_adapter.py`, `backend/scan_jury_commit.py`,
+`backend/scan_checkpoint_integrity.py`, `tests/test_scan_jury_cognition.py`,
+`tests/test_scan_jury_cognition_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+
+---
+
+## Card 3L-Diagnosis-parity — Diagnosis cognitive parity & model-policy binding on durable Jury output
+
+**Status:** Planned after 3L-Jury-parity CI closure
+**Proves:** `DiagnosisStageExecutor` can invoke the existing no-web AI Diagnosis
+cognitive path (`ai_diagnosis` high-effort policy) on verified durable Intent +
+five-Jury inputs, bind `MODEL_POLICY_VERSION` on the `scanner.diagnosis/v1`
+checkpoint contract, and fail explicitly on provider unavailability or malformed
+output without touching Foresight, Synthesis, Verification, `POST /scan`, or
+Blob stores.
 
 ---
 
@@ -1769,16 +1878,16 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 3J-restart (Full-chain restart/reclaim matrix across every stage boundary
-with verified checkpoint reload hashes) is complete. Specify then implement
-exactly Card 3L-Jury-parity from docs/scanner-reliability-slice-backlog.md
-(Five-Jury cognitive parity & model-policy binding on durable packets). Keep
-tests hermetic with no live network or provider calls. Do not call x_ray_search,
-modify POST /scan, register a Supervisor loop, touch Blob publication paths, or
-change Railway settings.
+Once Card 3L-Jury-parity pull-request CI is recorded in
+docs/scanner-reliability-status.md, specify then implement exactly Card
+3L-Diagnosis-parity from docs/scanner-reliability-slice-backlog.md (Diagnosis
+cognitive parity & model-policy binding on durable Jury output). Keep tests
+hermetic with no live network or provider calls. Do not modify POST /scan,
+register a Supervisor loop, touch Blob publication paths, or change Railway
+settings.
 ```
 
-After Card 3L-Jury-parity is merged with CI evidence recorded in
+After Card 3L-Diagnosis-parity is merged with CI evidence recorded in
 `docs/scanner-reliability-status.md`, advance this prompt one stage at a time
-through Diagnosis, Foresight, Strategic Synthesis, and Verification real-stage
-parity. Do not accumulate open cards in one run.
+through Foresight, Strategic Synthesis, and Verification real-stage parity. Do
+not accumulate open cards in one run.
