@@ -30,14 +30,13 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3K-integrity — Checkpoint reload
-payload-hash verification & durable `save_to_database`** (implemented locally
-and awaiting pull-request GitHub CI before advancing to **3J-restart**). Phase 3
-stays open, and `3J-cutover` stays blocked until real cognitive stage parity,
-post-Verification report/summary assembly, and Phase 6 Blob-first publication
-reconciliation pass. Process card **3G0**, scaffold card **3J-loop**, product
-cards **3G1** through **3I-V3**, synchronization card **1A**, and compatibility
-cards **2A** and **2B** are complete.
+Immediate next product card: **Card 3J-restart — Full-chain restart and reclaim
+matrix**. Phase 3 stays open, and `3J-cutover` stays blocked until real
+cognitive stage parity, post-Verification report/summary assembly, and Phase 6
+Blob-first publication reconciliation pass. Process card **3G0**, scaffold card
+**3J-loop**, product cards **3G1** through **3I-V3**, synchronization card
+**1A**, compatibility cards **2A** and **2B**, and integrity card
+**3K-integrity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1323,9 +1322,8 @@ changing Railway settings:
      lease expiry/reclaim, retryable/terminal failures, and full-chain
      completion.
 
-Phase 3 remains open. Once pull-request GitHub CI is recorded for Card
-3K-integrity, the next bounded card is **Card 3J-restart — Full-chain restart
-and reclaim matrix**.
+Phase 3 remains open. The next bounded card is **Card 3J-restart — Full-chain
+restart and reclaim matrix**.
 
 Verification evidence:
 
@@ -1336,5 +1334,9 @@ Verification evidence:
   with all provider keys cleared and socket/DNS guard active; local disposable
   PostgreSQL replay of `postgres-supervisor-contracts` `67 passed` (including
   `4 passed` in `tests/test_scan_checkpoint_integrity_postgres_integration.py`).
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43454821231](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43454821231)
+  completed successfully on pull request [#37](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/37)
+  for commit `a19907f79284e82f313b8fc97de25185fd46f911` (`pull_request` event,
+  head branch `reliability-3k-checkpoint-integrity`): `focused-contracts`
+  passed and `postgres-supervisor-contracts` passed. The local replay above is
+  not this GitHub CI run.

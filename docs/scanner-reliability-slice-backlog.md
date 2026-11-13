@@ -1504,7 +1504,7 @@ trust boundaries.
 
 ## Card 3K-integrity — Checkpoint reload payload-hash verification & durable `save_to_database`
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence
+**Status:** Complete
 **Proves:** `load_checkpoint()` recomputes snapshot/output hashes, validates
 checkpoint ID and embedded gate/ref consistency against JSON payload mutation,
 and persists `save_to_database` durably on `scan_runs`.
@@ -1602,14 +1602,16 @@ and persists `save_to_database` durably on `scan_runs`.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43454821231](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43454821231)
+  on pull request [#37](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/37)
+  (`a19907f79284e82f313b8fc97de25185fd46f911`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 3J-restart — Full-chain restart and reclaim matrix
 
-**Status:** Next executable card (after Card 3K-integrity pull-request CI is recorded)
+**Status:** Next executable card
 **Proves:** lease expiry, process loss, and reclaim across every stage boundary
 in the 7-stage durable chain resume from hash-verified checkpoints without
 re-uploading material, mutating completed snapshots, losing `save_to_database`,
@@ -1675,12 +1677,12 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3K-integrity pull-request CI is recorded in
-docs/scanner-reliability-status.md, specify then implement exactly Card
-3J-restart from docs/scanner-reliability-slice-backlog.md (Full-chain
-restart/reclaim matrix across every stage boundary with verified checkpoint
-reload hashes). Do not modify POST /scan, Supervisor loop registration, Blob
-publication paths, or Railway settings.
+Card 3K-integrity (Checkpoint reload payload-hash verification & durable
+save_to_database) is complete. Specify then implement exactly Card 3J-restart
+from docs/scanner-reliability-slice-backlog.md (Full-chain restart/reclaim
+matrix across every stage boundary with verified checkpoint reload hashes). Do
+not modify POST /scan, Supervisor loop registration, Blob publication paths, or
+Railway settings.
 ```
 
 After Card 3J-restart is merged with CI evidence recorded in
