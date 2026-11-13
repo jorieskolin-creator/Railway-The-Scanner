@@ -1703,7 +1703,7 @@ or skipping stage gates.
 
 ## Card 3L-Jury-parity — Five-Jury cognitive parity & model-policy binding on durable packets
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence
+**Status:** Complete
 **Proves:** `JuryStageExecutor` can invoke the existing no-web five-Jury packet
 analysis path (without `x_ray_search` or live scraping) on verified durable Jury
 packets, bind `MODEL_POLICY_VERSION` on the Jury checkpoint contract, and
@@ -1803,14 +1803,16 @@ preserve deterministic Jury passage/finding normalization contracts.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43464907449](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43464907449)
+  on pull request [#39](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/39)
+  (`d9c915589069c9ede7abfb089ce0aab528e9cb5a`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 3L-Diagnosis-parity — Diagnosis cognitive parity & model-policy binding on durable Jury output
 
-**Status:** Planned after 3L-Jury-parity CI closure
+**Status:** Next executable card
 **Proves:** `DiagnosisStageExecutor` can invoke the existing no-web AI Diagnosis
 cognitive path (`ai_diagnosis` high-effort policy) on verified durable Intent +
 five-Jury inputs, bind `MODEL_POLICY_VERSION` on the `scanner.diagnosis/v1`
@@ -1878,8 +1880,8 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3L-Jury-parity pull-request CI is recorded in
-docs/scanner-reliability-status.md, specify then implement exactly Card
+Card 3L-Jury-parity (Five-Jury cognitive parity & model-policy binding on
+durable packets) is complete. Specify then implement exactly Card
 3L-Diagnosis-parity from docs/scanner-reliability-slice-backlog.md (Diagnosis
 cognitive parity & model-policy binding on durable Jury output). Keep tests
 hermetic with no live network or provider calls. Do not modify POST /scan,
