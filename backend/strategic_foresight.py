@@ -2521,6 +2521,7 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
             # company-specific interpretation.
             _neutral_desc = (
                 force.get("description")
+                or force.get("_kb_description")
                 or force.get("trend_description")
                 or force.get("trend", "Unknown Force")
             )
@@ -2533,6 +2534,7 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                 "possible_relevance": _impact,
                 "source_type": force.get("source_type", "unknown"),
                 "verified": force.get("url_verified", False),
+                "url_verified": force.get("url_verified", False),
                 "source_credibility": force.get("source_credibility", "unknown"),
                 "validated": force_context_ok,
                 "foresight_context_eligible": force.get("foresight_context_eligible", force_context_ok),
@@ -2550,6 +2552,9 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                 "not_evidence_of_deployment": True,
                 "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
             }
+            for gate_key in ("source_readable", "content_verified", "theme_match", "trend_supported"):
+                if gate_key in force:
+                    link[gate_key] = force[gate_key]
             links.append(mark_company_foresight_interpretation(
                 annotate_foresight_link(link, domain=domain, company_name=company_name)
             ))

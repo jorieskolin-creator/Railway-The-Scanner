@@ -30,13 +30,13 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 2B — Foresight KB-first, Observatory &
-Buying Insight compatibility contracts** (followed by **Card 3K-integrity** and
+Immediate next product card: **Card 3K-integrity — Checkpoint reload
+payload-hash verification & durable `save_to_database`** (followed by
 **3J-restart**). Phase 3 stays open, and `3J-cutover` stays blocked until real
 cognitive stage parity, post-Verification report/summary assembly, and Phase 6
 Blob-first publication reconciliation pass. Process card **3G0**, scaffold card
 **3J-loop**, product cards **3G1** through **3I-V3**, synchronization card
-**1A**, and compatibility card **2A** are complete.
+**1A**, and compatibility cards **2A** and **2B** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1191,3 +1191,79 @@ Verification evidence:
   head branch `reliability-2a-golden-mi-contracts`): `focused-contracts` passed
   and `postgres-supervisor-contracts` passed. The local replay above is not this
   GitHub CI run.
+
+
+## Card 2B — Foresight KB-first, Observatory & Buying Insight compatibility contracts
+
+KB-first, registry-fallback, and retained context-only Foresight outputs are now
+compatibility-locked across `extract_foresight_links()`, Observatory, Buying
+Insight, General Summary, and Company Source Ledger without network or model
+calls, and without modifying central KB harvest/cleanup rules, Blob schema
+names, `POST /scan`, `scan_supervisor.py`, PostgreSQL schemas, or Railway
+settings:
+
+- **Non-destructive Buying Insight read-aliases (`backend/buying_potential.py`):**
+  `_build_input_payload()` and `_build_account_signal_map()` previously read
+  only legacy `theme`/`force`/`name`, `dimension`, and
+  `description`/`rationale`/`signal` keys on `strategic_foresight.dimension_forces`,
+  which dropped KB-first and registry-fallback `generate_foresight()` force text
+  (`trend`, `fp_theme`, `kb_dimension`, `_kb_description`, `impact_on_company`)
+  and retained-link `source_quote`/`title` text from `foresight_forces` and the
+  `external_pressure` signal lane. Fallback read-aliases now preserve those
+  fields (mapping company-neutral `_kb_description`/`source_quote` to
+  `source_says` and modal `impact_on_company` to `domain_relevance`) while
+  keeping explicit legacy `theme`, `dimension`, `description`,
+  `domain_relevance`, and `source_says` strictly authoritative.
+- **Primary-link metadata preservation (`backend/strategic_foresight.py`):**
+  `extract_foresight_links()` now reads `_kb_description` after `description`
+  for company-neutral `source_says`/`snippet` text (instead of echoing `trend`)
+  and preserves existing `url_verified`, `source_readable`, `content_verified`,
+  `theme_match`, and `trend_supported` verdicts from `force` onto the extracted
+  primary `foresight_link` without fabricating `True` when absent. Unvalidated
+  registry-fallback forces continue to fail closed (`foresight_context_eligible=False`)
+  until claim validation audits readability and macro trend support, while
+  audited KB-first and claim-validated registry-fallback primary links satisfy
+  both `is_foresight_context_eligible_source()` and
+  `foresight_observatory._is_eligible_foresight_context()`.
+- **Failed-synthesis fallback & non-promotion contracts
+  (`tests/test_foresight_buying_compatibility_contracts.py`):**
+  1. when a subsequent scan's Foresight synthesis returns `None`, only prior
+     `foresight_links` passing `is_foresight_context_eligible_source()` survive
+     into `_fallback_foresight_from_links()` as `context_only=True` macro
+     context (excluding dead, unreadable, display-only, duplicate-URL, and
+     company-specific links), and remain readable by both Observatory and
+     Buying Insight's `external_pressure` hypothesis lane;
+  2. Foresight links never promote into `general_summary._build_input_payload()`
+     company facts (`evidence_links`, `attributed_company_context`,
+     `key_findings`), Buying Insight's `verified_evidence` (`account_fact`
+     lane), or `company_source_ledger` Scanner seeds (`ledger_scope ==
+     "buying_insight_only"`, `scanner_seed_links == []`,
+     `usable_as_scanner_seed is False`).
+- **Subtle findings documented (without expanding Card 2B scope):**
+  1. `_fallback_foresight_from_links()` (`backend/main.py`) reads
+     `link.get("theme") or link.get("dimension") or link.get("source_type")`, so
+     links produced by `extract_foresight_links()` (which store `fp_theme` and
+     `kb_dimension`) populate `retained_force["theme"]` with `source_type`
+     (e.g. `"government"`), while `retained_force["title"]` and
+     `retained_force["source_quote"]` preserve the concrete force title and
+     neutral KB description.
+  2. `source_quality.is_generation_eligible_source()` relies on
+     `classify_source_registry_items()` / `evidence_cleaner` stripping
+     `generation_eligible` and `analysis_verified` from `foresight_links` rather
+     than checking `excluded_from_company_fact_generation` directly; Phase 5
+     (**Summary and tagging hardening**) should guard against uncleaned
+     `excluded_from_company_fact_generation=True` records directly if
+     `evidence_links` is ever assembled outside the sanitizer path.
+
+Phase 3 remains open. The next bounded card is **Card 3K-integrity — Checkpoint
+reload payload-hash verification & durable `save_to_database`**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card 2B suite
+  `5 passed` (`tests/test_foresight_buying_compatibility_contracts.py`); focused
+  trust contracts `127 passed`; complete hermetic suite `567 passed, 63 skipped`
+  with all provider keys cleared and socket/DNS guard active.
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
