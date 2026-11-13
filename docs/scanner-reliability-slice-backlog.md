@@ -1451,8 +1451,10 @@ publication or real-stage replacement touches company records.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43421474359](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43421474359)
+  on pull request [#35](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/35)
+  (`9e701c87e60e8066ee518de5003e0ec139da3f6e`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
