@@ -61,6 +61,9 @@ def commit_verification_stage(
         raise ValueError("only a passed Verification gate may be committed.")
     if result.next_stage is not None:
         raise ValueError("Verification commit cannot queue a successor stage.")
+    policy_version = checkpoint.snapshot.get("model_policy_version")
+    if not isinstance(policy_version, str) or not policy_version.strip():
+        raise ValueError("Verification checkpoint requires a non-empty model_policy_version.")
 
     existing = repository.load_checkpoint(
         run_id=lease.run_id,
@@ -72,6 +75,7 @@ def commit_verification_stage(
             existing.checkpoint_id != checkpoint.checkpoint_id
             or existing.input_hash != checkpoint.input_hash
             or existing.output_hash != checkpoint.output_hash
+            or existing.snapshot.get("model_policy_version") != policy_version
         ):
             raise ValueError("a different Verification checkpoint already exists for this attempt.")
         return existing

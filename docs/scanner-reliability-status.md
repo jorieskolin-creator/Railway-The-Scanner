@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, 3L-Diagnosis-parity, 3L-Foresight-parity, and 3L-Synthesis-parity proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | Complete — scaffold chain, 3K-integrity, 3J-restart matrix, and real cognitive parity (`3L-Jury-parity`..`3L-Verification-parity`) proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -30,16 +30,16 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3L-Verification-parity — Verification
-cognitive parity & model-policy binding on durable Synthesis + upstream
-output**. Phase 3 stays open until real cognitive stage parity closes
-Verification, and `3J-cutover` stays blocked until real cognitive stage parity,
-post-Verification report/summary assembly, and Phase 6 Blob-first publication
-reconciliation pass. Process card **3G0**, scaffold cards **3J-loop** and
+Immediate next product card: **Card 4A — Typed stage envelopes & deterministic
+gate persistence**. Phase 3 is complete, and `3J-cutover` stays blocked until
+Phase 4–6 (typed failure/blocked gates, Summary/tagging hardening,
+post-Verification report/summary assembly, and Blob-first publication
+reconciliation) pass. Process card **3G0**, scaffold cards **3J-loop** and
 **3J-restart**, product cards **3G1** through **3I-V3**, synchronization card
-**1A**, compatibility cards **2A** and **2B**, integrity card **3K-integrity**,
-and parity cards **3L-Jury-parity**, **3L-Diagnosis-parity**,
-**3L-Foresight-parity**, and **3L-Synthesis-parity** are complete.
+**1A**, compatibility cards **2A** and **2B**, integrity card
+**3K-integrity**, and parity cards **3L-Jury-parity**,
+**3L-Diagnosis-parity**, **3L-Foresight-parity**, **3L-Synthesis-parity**, and
+**3L-Verification-parity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1700,5 +1700,69 @@ Verification evidence:
   completed successfully on pull request [#44](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/44)
   for commit `6a8382f9e213c5e1822c5f545c1b3ae2f888b062` (`pull_request` event,
   head branch `reliability-3l-synthesis-parity`): `focused-contracts` passed
+  and `postgres-supervisor-contracts` passed. The local replay above is not
+  this GitHub CI run.
+
+
+## Card 3L-Verification-parity — Verification cognitive parity & model-policy binding on durable Synthesis + upstream output
+
+No-web independent Verification (`validate_summary` + `ai_fact_check_summary`)
+and `MODEL_POLICY_VERSION` checkpoint binding are now implemented across the
+complete 7-stage durable cognitive chain without touching `POST /scan`,
+registering a Supervisor loop, writing Blob objects, or changing Railway
+settings:
+
+- **No-web Verification cognitive parity (`backend/scan_verification_cognition.py`,
+  `backend/scan_verification_adapter.py`):**
+  1. `VerificationStageExecutor.with_cognitive_parity(...)`,
+     `build_no_web_verification_analyzer(...)`, and
+     `analyze_verification_projection_with_cognition(...)` resolve durable
+     `ScanRun` company identity and upstream `strategic_synthesis` ->
+     `foresight` -> `diagnosis` -> `jury_analysis` -> `intent` results via
+     `context_loader`, rebuild the canonical bibliography and evidence graph
+     (`attach_evidence_graph`, `extract_foresight_links`), and invoke both
+     deterministic heuristic validation (`validate_summary`) and the
+     independent provider-separated fact-checker (`ai_fact_check_summary` with
+     `verification_only=True` and `(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)`)
+     with `web_search=False`;
+  2. raises explicit `VerificationCognitiveUnavailableError` when
+     `ai_fact_check_summary` reports `fact_check_skipped=True` or
+     `verification_status="unavailable"` (Reliability Plan Rule #6);
+  3. `normalize_verification_record(...)` and `parse_verification_record(...)`
+     serialize deterministic + AI verdicts into a canonical JSON string
+     `verification_record` inside `scanner.verification/v1` (`next_stage=None`),
+     keeping raw texts, source extracts, and publication authority off the
+     checkpoint.
+- **`MODEL_POLICY_VERSION` binding & reload enforcement
+  (`backend/scan_verification_checkpoint.py`,
+  `backend/scan_verification_commit.py`, `backend/scan_checkpoint_integrity.py`):**
+  1. `build_verification_checkpoint()` binds non-empty `model_policy_version`
+     (defaulting to `MODEL_POLICY_VERSION` = `model-policy-v5-sonnet55`) into
+     `snapshot`, `output_hash`, and `checkpoint_id`;
+  2. `commit_verification_stage()` enforces non-empty `model_policy_version`
+     and rejects replay across policy version upgrades while leaving
+     `next_stage=None`;
+  3. `validate_checkpoint_integrity()` enforces non-empty
+     `model_policy_version` on `scanner.verification/v1` reload so tampering
+     fails closed with `CheckpointIntegrityError` on `load_checkpoint()`.
+
+Phase 3 real-stage parity is complete. The next bounded card is **Card 4A —
+Typed stage envelopes & deterministic gate persistence**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card
+  3L-Verification-parity hermetic suite `4 passed`
+  (`tests/test_scan_verification_cognition.py`); focused trust contracts `127
+  passed`; complete hermetic suite `606 passed, 82 skipped` with all provider
+  keys cleared and socket/DNS guard active; local disposable PostgreSQL replay
+  of `postgres-supervisor-contracts` `82 passed` (including `1 passed` full
+  7-stage no-web cognitive parity + policy-tamper contract in
+  `tests/test_scan_verification_cognition_postgres_integration.py`).
+- [Reliability contracts run 43887562983](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43887562983)
+  completed successfully on pull request [#45](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/45)
+  for commit `38efe83d2cb477babef4a8f32c4b3863f079790b` (`pull_request` event,
+  head branch `reliability-3l-verification-parity`): `focused-contracts` passed
   and `postgres-supervisor-contracts` passed. The local replay above is not
   this GitHub CI run.
