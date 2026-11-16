@@ -1812,7 +1812,7 @@ preserve deterministic Jury passage/finding normalization contracts.
 
 ## Card 3L-Diagnosis-parity — Diagnosis cognitive parity & model-policy binding on durable Jury output
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence
+**Status:** Complete
 **Proves:** `DiagnosisStageExecutor` can invoke the existing no-web AI Diagnosis
 cognitive path (`ai_diagnosis` high-effort policy) on verified durable Intent +
 five-Jury inputs, bind `MODEL_POLICY_VERSION` on the `scanner.diagnosis/v1`
@@ -1911,14 +1911,16 @@ Blob stores.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43829404476](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43829404476)
+  on pull request [#42](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/42)
+  (`34668310ae916dd525d66042683b5c29340fecaf`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash binding & model-policy binding on durable Diagnosis output
 
-**Status:** Planned after 3L-Diagnosis-parity CI closure
+**Status:** Next executable card
 **Proves:** `ForesightStageExecutor` can invoke the existing no-web KB-first
 Strategic Foresight cognitive path on verified durable Diagnosis + upstream
 company context and supplied central Foresight KB/registry artifacts (without
@@ -1987,8 +1989,8 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3L-Diagnosis-parity pull-request CI is recorded in
-docs/scanner-reliability-status.md, specify then implement exactly Card
+Card 3L-Diagnosis-parity (Diagnosis cognitive parity & model-policy binding on
+durable Jury output) is complete. Specify then implement exactly Card
 3L-Foresight-parity from docs/scanner-reliability-slice-backlog.md (Foresight
 cognitive parity, central KB/registry hash binding & model-policy binding on
 durable Diagnosis output). Keep tests hermetic with no live network or provider

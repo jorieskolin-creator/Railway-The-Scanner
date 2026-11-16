@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, and 3L-Jury-parity proven; 3L-Diagnosis-parity implemented locally; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, and 3L-Diagnosis-parity proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -30,17 +30,16 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3L-Diagnosis-parity — Diagnosis cognitive
-parity & model-policy binding on durable Jury output** (implemented locally and
-awaiting pull-request GitHub CI before advancing to **Card
-3L-Foresight-parity**). Phase 3 stays open until real cognitive stage parity
-closes across Foresight, Strategic Synthesis, and Verification, and `3J-cutover`
-stays blocked until real cognitive stage parity, post-Verification
-report/summary assembly, and Phase 6 Blob-first publication reconciliation pass.
-Process card **3G0**, scaffold cards **3J-loop** and **3J-restart**, product
-cards **3G1** through **3I-V3**, synchronization card **1A**, compatibility
-cards **2A** and **2B**, integrity card **3K-integrity**, and parity card
-**3L-Jury-parity** are complete.
+Immediate next product card: **Card 3L-Foresight-parity — Foresight cognitive
+parity, central KB/registry hash binding & model-policy binding on durable
+Diagnosis output**. Phase 3 stays open until real cognitive stage parity closes
+across Foresight, Strategic Synthesis, and Verification, and `3J-cutover` stays
+blocked until real cognitive stage parity, post-Verification report/summary
+assembly, and Phase 6 Blob-first publication reconciliation pass. Process card
+**3G0**, scaffold cards **3J-loop** and **3J-restart**, product cards **3G1**
+through **3I-V3**, synchronization card **1A**, compatibility cards **2A** and
+**2B**, integrity card **3K-integrity**, and parity cards **3L-Jury-parity**
+and **3L-Diagnosis-parity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1539,8 +1538,7 @@ loop registration, Blob publication paths, or Railway settings:
      `ForesightInputSnapshotIntegrityError` on downstream Foresight hydration.
 
 Phase 3 remains open until real cognitive stage parity closes across Foresight,
-Strategic Synthesis, and Verification. Once pull-request GitHub CI is recorded
-for Card 3L-Diagnosis-parity, the next bounded card is **Card
+Strategic Synthesis, and Verification. The next bounded card is **Card
 3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash
 binding & model-policy binding on durable Diagnosis output**.
 
@@ -1555,5 +1553,9 @@ Verification evidence:
   of `postgres-supervisor-contracts` `79 passed` (including `1 passed`
   end-to-end cognitive-parity + Foresight hydration + policy-tamper contract in
   `tests/test_scan_diagnosis_cognition_postgres_integration.py`).
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43829404476](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43829404476)
+  completed successfully on pull request [#42](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/42)
+  for commit `34668310ae916dd525d66042683b5c29340fecaf` (`pull_request` event,
+  head branch `reliability-3l-diagnosis-parity`): `focused-contracts` passed
+  and `postgres-supervisor-contracts` passed. The local replay above is not
+  this GitHub CI run.
