@@ -127,6 +127,7 @@ class _CognitiveCheckpointSpec:
     upstream_stage: str | None = None
     upstream_contract: str | None = None
     binds_single_upstream_input_ref: bool = False
+    requires_model_policy_version: bool = False
 
 
 _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
@@ -159,6 +160,7 @@ _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
         upstream_stage=INTENT_STAGE,
         upstream_contract=INTENT_CHECKPOINT_CONTRACT,
         binds_single_upstream_input_ref=False,
+        requires_model_policy_version=True,
     ),
     DIAGNOSIS_STAGE: _CognitiveCheckpointSpec(
         stage_name=DIAGNOSIS_STAGE,
@@ -494,6 +496,8 @@ def _validate_cognitive_checkpoint(
     }
     if spec.upstream_ref_key is not None:
         expected_keys.add(spec.upstream_ref_key)
+    if spec.requires_model_policy_version:
+        expected_keys.add("model_policy_version")
     status = gate_result["status"]
     if status == "passed":
         expected_keys.add(spec.result_key)
@@ -501,6 +505,16 @@ def _validate_cognitive_checkpoint(
         raise CheckpointIntegrityError(
             f"{spec.stage_name} checkpoint snapshot has unexpected or missing keys."
         )
+    if spec.requires_model_policy_version:
+        policy_version = snapshot.get("model_policy_version")
+        if (
+            not isinstance(policy_version, str)
+            or not policy_version.strip()
+            or policy_version != policy_version.strip()
+        ):
+            raise CheckpointIntegrityError(
+                f"{spec.stage_name} checkpoint model_policy_version must be a non-empty string."
+            )
 
     gate_results = snapshot.get("gate_results")
     if not isinstance(gate_results, list) or gate_results != [gate_result]:

@@ -8,8 +8,9 @@ scrapes content, or registers with FastAPI.
 
 from __future__ import annotations
 
-from typing import Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_jury_candidates import JURY_ANALYSIS_STAGE
 from scan_jury_checkpoint import (
     JURY_CHECKPOINT_LANES,
@@ -98,9 +99,50 @@ class JuryStageExecutor:
         input_loader: VerifiedJuryInputLoader,
         *,
         analyze_jury: JuryAnalyzer | None = None,
+        model_policy_version: str = MODEL_POLICY_VERSION,
     ) -> None:
+        normalized_policy = (
+            model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+        )
+        if not normalized_policy:
+            raise ValueError("model_policy_version is required.")
         self._input_loader = input_loader
         self._analyze_jury = analyze_jury or analyze_jury_lanes
+        self._model_policy_version = normalized_policy
+
+    @property
+    def model_policy_version(self) -> str:
+        return self._model_policy_version
+
+    @classmethod
+    def with_cognitive_parity(
+        cls,
+        input_loader: VerifiedJuryInputLoader,
+        *,
+        company_name: str | None = None,
+        company_url: str | None = None,
+        openai_caller: Callable[..., Any] | None = None,
+        anthropic_caller: Callable[..., Any] | None = None,
+        model_policy: Mapping[str, Any] | None = None,
+        model_policy_version: str = MODEL_POLICY_VERSION,
+    ) -> "JuryStageExecutor":
+        """Build a prepare-only Jury executor bound to the no-web five-Jury pipeline."""
+
+        from scan_jury_cognition import build_no_web_jury_analyzer
+
+        run_loader = input_loader if hasattr(input_loader, "load_run") else None
+        return cls(
+            input_loader,
+            analyze_jury=build_no_web_jury_analyzer(
+                company_name=company_name,
+                company_url=company_url,
+                run_loader=run_loader,  # type: ignore[arg-type]
+                openai_caller=openai_caller,
+                anthropic_caller=anthropic_caller,
+                model_policy=model_policy,
+            ),
+            model_policy_version=model_policy_version,
+        )
 
     def execute(self, lease: StepLease) -> StageExecutionResult:
         if lease.stage_name != JURY_ANALYSIS_STAGE:
@@ -120,6 +162,7 @@ class JuryStageExecutor:
         checkpoint = build_jury_checkpoint(
             projection,
             jury_result=self._analyze_jury(projection),
+            model_policy_version=self._model_policy_version,
         )
         return StageExecutionResult(
             output_hash=checkpoint.output_hash,

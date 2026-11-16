@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_jury_candidates import FORBIDDEN_METADATA_KEYS, JURY_ANALYSIS_STAGE
 from scan_jury_snapshot import assert_jury_input_snapshot_matches
 from scan_supervisor import (
@@ -140,6 +141,7 @@ def build_jury_checkpoint(
     projection: JuryInputProjection,
     *,
     jury_result: Mapping[str, Any] | object,
+    model_policy_version: str = MODEL_POLICY_VERSION,
 ) -> ScanCheckpoint:
     """Build a Jury output checkpoint from a projection and a supplied result.
 
@@ -148,6 +150,11 @@ def build_jury_checkpoint(
     """
 
     _validate_projection(projection)
+    normalized_policy_version = (
+        model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+    )
+    if not normalized_policy_version:
+        raise ValueError("model_policy_version is required for Jury checkpoints.")
     compact_result = _compact_jury_result(jury_result)
     if compact_result is None:
         gate_result = {
@@ -195,6 +202,7 @@ def build_jury_checkpoint(
         "input_snapshot_ref": projection.snapshot_ref,
         "intent_checkpoint_ref": dict(projection.intent_checkpoint_ref),
         "payload_sha256": projection.payload_sha256,
+        "model_policy_version": normalized_policy_version,
     }
     if jury_payload is not None:
         snapshot["jury_result"] = jury_payload

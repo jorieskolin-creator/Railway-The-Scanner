@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, and 3J-restart matrix proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, and 3L-Jury-parity proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -30,14 +30,15 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3L-Jury-parity — Five-Jury cognitive parity
-& model-policy binding on durable packets**. Phase 3 stays open until real
-cognitive stage parity closes, and `3J-cutover` stays blocked until real
+Immediate next product card: **Card 3L-Diagnosis-parity — Diagnosis cognitive
+parity & model-policy binding on durable Jury output**. Phase 3 stays open
+until real cognitive stage parity closes across Diagnosis, Foresight, Strategic
+Synthesis, and Verification, and `3J-cutover` stays blocked until real
 cognitive stage parity, post-Verification report/summary assembly, and Phase 6
 Blob-first publication reconciliation pass. Process card **3G0**, scaffold
 cards **3J-loop** and **3J-restart**, product cards **3G1** through **3I-V3**,
-synchronization card **1A**, compatibility cards **2A** and **2B**, and
-integrity card **3K-integrity** are complete.
+synchronization card **1A**, compatibility cards **2A** and **2B**, integrity
+card **3K-integrity**, and parity card **3L-Jury-parity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1414,5 +1415,78 @@ Verification evidence:
   completed successfully on pull request [#38](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/38)
   for commit `b94b937a00619233b649ff3e68091fabd10e7d34` (`pull_request` event,
   head branch `reliability-3j-restart`): `focused-contracts` passed and
+  `postgres-supervisor-contracts` passed. The local replay above is not this
+  GitHub CI run.
+
+
+## Card 3L-Jury-parity — Five-Jury cognitive parity & model-policy binding on durable packets
+
+Five-Jury no-web cognitive packet analysis and `MODEL_POLICY_VERSION` checkpoint
+binding are now implemented on verified durable Jury inputs without calling
+`x_ray_search` or live acquisition, modifying `POST /scan`, registering a
+Supervisor loop, writing Blob objects, or changing Railway settings:
+
+- **No-web five-Jury cognitive parity (`backend/scan_jury_cognition.py`,
+  `backend/scan_jury_adapter.py`):**
+  1. `JuryStageExecutor.with_cognitive_parity(...)` and
+     `analyze_jury_projection_with_cognition(...)` execute the five-Jury packet
+     pipeline on `JuryInputProjection` using `FORENSIC_JURIES`,
+     `_split_jury_packets`, `build_jury_evidence_packages`,
+     `_build_jury_analysis_prompt`, `_build_jury_rescue_prompt`,
+     `_merge_jury_payloads`, `_FORENSIC_JURY_JSON_SCHEMA`,
+     `FORENSIC_SKIP_SONNET_ANALYSIS_FALLBACK_JURIES`, and
+     `policy_for("forensic_jury")` (`GPT_REASONING_MODEL` primary ->
+     `CLAUDE_SONNET_MODEL` fallback where enabled -> compact no-web
+     `GPT_REASONING_MODEL` rescue when findings are empty), hard-locking
+     `web_search=False`;
+  2. when a lane has judgeable evidence packages and all no-web provider
+     attempts fail or return unparseable output, raises explicit
+     `JuryCognitiveUnavailableError` (Reliability Plan Rule #6: provider
+     unavailability is never silently converted to `passed`), while lanes with
+     zero judgeable evidence packages return an empty valid lane without model
+     calls;
+  3. `normalize_jury_lane_payload(...)` applies transient in-memory
+     `assess_entity_match` checks from `(company_name, company_url)`, rejects
+     off-packet / empty-URL / wrong same-name entity findings into
+     `rejected_evidence`, verifies source-passage support and claim atomicity
+     (`_claim_supported_by_source_text`, `_is_atomic_supported_claim`), narrows
+     bundled/overreaching claims via `_derive_narrow_claim_from_source` or
+     downgrades readable target-entity context to `context_only`, resolves
+     deterministic `PKG-...` / `PROP-...` / `PASS-...` and durable `source_id`
+     (`JSC-...` / `SR-...`) lineage, and strips all forbidden evidence-promotion
+     keys before building the compact `scanner.jury/v1` checkpoint.
+- **`MODEL_POLICY_VERSION` binding & reload enforcement
+  (`backend/scan_jury_checkpoint.py`, `backend/scan_jury_commit.py`,
+  `backend/scan_checkpoint_integrity.py`):**
+  1. `build_jury_checkpoint()` records non-empty `model_policy_version`
+     (defaulting to `MODEL_POLICY_VERSION` = `model-policy-v5-sonnet55`) inside
+     `snapshot`, binding the model policy into `output_hash` and
+     `checkpoint_id`;
+  2. `commit_jury_stage()` requires non-empty `model_policy_version` and rejects
+     checkpoint replay when `model_policy_version` changes;
+  3. `validate_checkpoint_integrity()` enforces non-empty
+     `model_policy_version` on `scanner.jury/v1` reload so tampering fails
+     closed with `CheckpointIntegrityError` on `load_checkpoint()` and
+     `DiagnosisInputSnapshotIntegrityError` on downstream Diagnosis hydration.
+
+Phase 3 remains open until real cognitive stage parity closes across Diagnosis,
+Foresight, Strategic Synthesis, and Verification. The next bounded card is
+**Card 3L-Diagnosis-parity — Diagnosis cognitive parity & model-policy binding
+on durable Jury output**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card 3L-Jury-parity
+  hermetic suite `6 passed` (`tests/test_scan_jury_cognition.py`); focused trust
+  contracts `127 passed`; complete hermetic suite `589 passed, 78 skipped` with
+  all provider keys cleared and socket/DNS guard active; local disposable
+  PostgreSQL replay of `postgres-supervisor-contracts` `78 passed` (including
+  `1 passed` end-to-end cognitive-parity + Diagnosis hydration + policy-tamper
+  contract in `tests/test_scan_jury_cognition_postgres_integration.py`).
+- [Reliability contracts run 43464907449](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43464907449)
+  completed successfully on pull request [#39](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/39)
+  for commit `d9c915589069c9ede7abfb089ce0aab528e9cb5a` (`pull_request` event,
+  head branch `reliability-3l-jury-parity`): `focused-contracts` passed and
   `postgres-supervisor-contracts` passed. The local replay above is not this
   GitHub CI run.
