@@ -2129,7 +2129,7 @@ malformed output without touching Verification, `POST /scan`, or Blob stores.
 
 ## Card 3L-Verification-parity — Verification cognitive parity & model-policy binding on durable Synthesis + upstream output
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence (final stage parity card closing Phase 3 cognitive stage parity)
+**Status:** Complete (closes Phase 3 cognitive stage parity)
 **Proves:** `VerificationStageExecutor` can invoke the existing no-web
 Verification / fact-check path (`ai_fact_check_summary` / `validate_summary`
 using `GPT_VERIFIER_MODEL` + deterministic heuristic guardrails) on verified
@@ -2221,14 +2221,16 @@ provider unavailability or malformed output without closing Phase 3 into live
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43887562983](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43887562983)
+  on pull request [#45](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/45)
+  (`38efe83d2cb477babef4a8f32c4b3863f079790b`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 4A — Typed stage envelopes & deterministic gate persistence
 
-**Status:** Planned after 3L-Verification-parity CI closure (Phase 4 entry card)
+**Status:** Next executable card (Phase 4 entry card)
 **Proves:** Shared versioned stage-envelope & deterministic gate-result persistence
 helpers (`gate_results` table / typed envelope validation) block invalid,
 stale, or hash-mismatched stage transitions explicitly without mutating live
@@ -2294,12 +2296,11 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3L-Verification-parity pull-request CI is recorded in
-docs/scanner-reliability-status.md, Phase 3 real-stage parity is complete.
-Specify then implement Card 4A from docs/scanner-reliability-slice-backlog.md
-(Typed stage envelopes & deterministic gate persistence). Keep tests hermetic
-with no live network or provider calls. Do not modify POST /scan, register a
-Supervisor loop, touch Blob publication paths, or change Railway settings.
+Phase 3 (including Card 3L-Verification-parity) is complete. Specify then
+implement Card 4A from docs/scanner-reliability-slice-backlog.md (Typed stage
+envelopes & deterministic gate persistence). Keep tests hermetic with no live
+network or provider calls. Do not modify POST /scan, register a Supervisor loop,
+touch Blob publication paths, or change Railway settings.
 ```
 
 Do not accumulate open cards in one run.

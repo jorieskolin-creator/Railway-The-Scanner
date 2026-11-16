@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, 3L-Diagnosis-parity, 3L-Foresight-parity, and 3L-Synthesis-parity proven; 3L-Verification-parity implemented locally; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | Complete — scaffold chain, 3K-integrity, 3J-restart matrix, and real cognitive parity (`3L-Jury-parity`..`3L-Verification-parity`) proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -30,18 +30,16 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 3L-Verification-parity — Verification
-cognitive parity & model-policy binding on durable Synthesis + upstream
-output** (implemented locally and awaiting pull-request GitHub CI to close
-Phase 3 cognitive stage parity and advance to **Card 4A — Typed stage envelopes
-& deterministic gate persistence**). `3J-cutover` stays blocked until Phase 4–6
-(typed failure/blocked gates, Summary/tagging hardening, post-Verification
-report/summary assembly, and Blob-first publication reconciliation) pass.
-Process card **3G0**, scaffold cards **3J-loop** and **3J-restart**, product
-cards **3G1** through **3I-V3**, synchronization card **1A**, compatibility
-cards **2A** and **2B**, integrity card **3K-integrity**, and parity cards
-**3L-Jury-parity**, **3L-Diagnosis-parity**, **3L-Foresight-parity**, and
-**3L-Synthesis-parity** are complete.
+Immediate next product card: **Card 4A — Typed stage envelopes & deterministic
+gate persistence**. Phase 3 is complete, and `3J-cutover` stays blocked until
+Phase 4–6 (typed failure/blocked gates, Summary/tagging hardening,
+post-Verification report/summary assembly, and Blob-first publication
+reconciliation) pass. Process card **3G0**, scaffold cards **3J-loop** and
+**3J-restart**, product cards **3G1** through **3I-V3**, synchronization card
+**1A**, compatibility cards **2A** and **2B**, integrity card
+**3K-integrity**, and parity cards **3L-Jury-parity**,
+**3L-Diagnosis-parity**, **3L-Foresight-parity**, **3L-Synthesis-parity**, and
+**3L-Verification-parity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1748,9 +1746,8 @@ settings:
      `model_policy_version` on `scanner.verification/v1` reload so tampering
      fails closed with `CheckpointIntegrityError` on `load_checkpoint()`.
 
-Once pull-request GitHub CI is recorded for Card 3L-Verification-parity, Phase 3
-real-stage parity closes and the next bounded card is **Card 4A — Typed stage
-envelopes & deterministic gate persistence**.
+Phase 3 real-stage parity is complete. The next bounded card is **Card 4A —
+Typed stage envelopes & deterministic gate persistence**.
 
 Verification evidence:
 
@@ -1763,5 +1760,9 @@ Verification evidence:
   of `postgres-supervisor-contracts` `82 passed` (including `1 passed` full
   7-stage no-web cognitive parity + policy-tamper contract in
   `tests/test_scan_verification_cognition_postgres_integration.py`).
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43887562983](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43887562983)
+  completed successfully on pull request [#45](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/45)
+  for commit `38efe83d2cb477babef4a8f32c4b3863f079790b` (`pull_request` event,
+  head branch `reliability-3l-verification-parity`): `focused-contracts` passed
+  and `postgres-supervisor-contracts` passed. The local replay above is not
+  this GitHub CI run.
