@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_diagnosis_snapshot import DIAGNOSIS_STAGE, assert_diagnosis_input_snapshot_matches
 from scan_jury_candidates import JURY_ANALYSIS_STAGE
 from scan_supervisor import (
@@ -100,6 +101,7 @@ def build_diagnosis_checkpoint(
     projection: DiagnosisInputProjection,
     *,
     diagnosis_result: Mapping[str, Any] | object,
+    model_policy_version: str = MODEL_POLICY_VERSION,
 ) -> ScanCheckpoint:
     """Build a Diagnosis output checkpoint from a projection and a supplied result.
 
@@ -108,6 +110,11 @@ def build_diagnosis_checkpoint(
     """
 
     _validate_projection(projection)
+    normalized_policy_version = (
+        model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+    )
+    if not normalized_policy_version:
+        raise ValueError("model_policy_version is required for Diagnosis checkpoints.")
     compact_result = _compact_diagnosis_result(diagnosis_result)
     if compact_result is None:
         gate_result = {
@@ -155,6 +162,7 @@ def build_diagnosis_checkpoint(
         "input_snapshot_ref": projection.snapshot_ref,
         "jury_checkpoint_ref": dict(projection.jury_checkpoint_ref),
         "payload_sha256": projection.payload_sha256,
+        "model_policy_version": normalized_policy_version,
     }
     if diagnosis_payload is not None:
         snapshot["diagnosis_result"] = diagnosis_payload

@@ -8,8 +8,9 @@ FastAPI.
 
 from __future__ import annotations
 
-from typing import Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_diagnosis_checkpoint import (
     DiagnosisInputProjection,
     build_diagnosis_checkpoint,
@@ -61,9 +62,58 @@ class DiagnosisStageExecutor:
         input_loader: VerifiedDiagnosisInputLoader,
         *,
         analyze_diagnosis: DiagnosisAnalyzer | None = None,
+        model_policy_version: str = MODEL_POLICY_VERSION,
     ) -> None:
+        normalized_policy = (
+            model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+        )
+        if not normalized_policy:
+            raise ValueError("model_policy_version is required.")
         self._input_loader = input_loader
         self._analyze_diagnosis = analyze_diagnosis or analyze_diagnosis_from_jury
+        self._model_policy_version = normalized_policy
+
+    @property
+    def model_policy_version(self) -> str:
+        return self._model_policy_version
+
+    @classmethod
+    def with_cognitive_parity(
+        cls,
+        input_loader: VerifiedDiagnosisInputLoader,
+        *,
+        company_name: str | None = None,
+        intent_result: Mapping[str, Any] | None = None,
+        financial_index: int | None = None,
+        knowledge_context: str | None = None,
+        anthropic_caller: Callable[..., Any] | None = None,
+        openai_caller: Callable[..., Any] | None = None,
+        model_policy: Mapping[str, Any] | None = None,
+        model_policy_version: str = MODEL_POLICY_VERSION,
+    ) -> "DiagnosisStageExecutor":
+        """Build a prepare-only Diagnosis executor bound to the no-web AI Diagnosis pipeline."""
+
+        from scan_diagnosis_cognition import build_no_web_diagnosis_analyzer
+
+        context_loader = (
+            input_loader
+            if hasattr(input_loader, "load_run") or hasattr(input_loader, "load_checkpoint")
+            else None
+        )
+        return cls(
+            input_loader,
+            analyze_diagnosis=build_no_web_diagnosis_analyzer(
+                company_name=company_name,
+                intent_result=intent_result,
+                financial_index=financial_index,
+                knowledge_context=knowledge_context,
+                context_loader=context_loader,  # type: ignore[arg-type]
+                anthropic_caller=anthropic_caller,
+                openai_caller=openai_caller,
+                model_policy=model_policy,
+            ),
+            model_policy_version=model_policy_version,
+        )
 
     def execute(self, lease: StepLease) -> StageExecutionResult:
         if lease.stage_name != DIAGNOSIS_STAGE:
@@ -79,6 +129,7 @@ class DiagnosisStageExecutor:
         checkpoint = build_diagnosis_checkpoint(
             projection,
             diagnosis_result=self._analyze_diagnosis(projection),
+            model_policy_version=self._model_policy_version,
         )
         return StageExecutionResult(
             output_hash=checkpoint.output_hash,

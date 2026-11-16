@@ -1812,13 +1812,122 @@ preserve deterministic Jury passage/finding normalization contracts.
 
 ## Card 3L-Diagnosis-parity — Diagnosis cognitive parity & model-policy binding on durable Jury output
 
-**Status:** Next executable card
+**Status:** Complete
 **Proves:** `DiagnosisStageExecutor` can invoke the existing no-web AI Diagnosis
 cognitive path (`ai_diagnosis` high-effort policy) on verified durable Intent +
 five-Jury inputs, bind `MODEL_POLICY_VERSION` on the `scanner.diagnosis/v1`
 checkpoint contract, and fail explicitly on provider unavailability or malformed
 output without touching Foresight, Synthesis, Verification, `POST /scan`, or
 Blob stores.
+
+### In scope
+
+- New module `backend/scan_diagnosis_cognition.py`:
+  - `build_diagnosis_prompt(...)`, `analyze_diagnosis_projection_with_cognition(...)`,
+    and `build_no_web_diagnosis_analyzer(...)` construct the bounded no-web AI
+    Diagnosis synthesis prompt from verified five-Jury findings, contradictions,
+    missing coverage, durable `ScanRun.company_name`, and the hash-verified
+    upstream `intent` checkpoint (`intent_result` resolved through
+    `jury_checkpoint.snapshot["intent_checkpoint_ref"]`), using offline
+    `FALLBACK_FRAMEWORK`, `get_label_governance_prompt()`, and
+    `build_shared_guardrails(include_diagnostic=True, include_foresight=False,
+    include_claim_tier=True)` with zero network calls;
+  - executes the `policy_for("ai_diagnosis")` provider sequence
+    (`CLAUDE_PREMIUM_MODEL` primary with `effort="high"` and `max_tokens=8000` ->
+    `GPT_REASONING_MODEL` frontier fallback -> conservative
+    `CLAUDE_SONNET_MODEL` medium-effort retry), hard-locking `web_search=False`;
+  - raises explicit `DiagnosisCognitiveUnavailableError` when all providers fail,
+    return unparseable output, or emit `"AI Summary Unavailable"` (Reliability
+    Plan Rule #6: provider unavailability is never silently converted to
+    `passed`);
+  - `normalize_diagnosis_payload(...)` and `sanitize_diagnosis_prose(...)`
+    deterministically apply idempotent proof-gap sanitization
+    (`sanitize_inference_wording`), strip archetype labels (`Thriving`,
+    `Modernizing`, `Cash Cow`, `At Risk`), internal `TAC-x`/`DIM-x` codes, and
+    leaked `[A]`–`[E]` claim-tier prefixes from `diagnostic_summary` and
+    `evidence_based_risks`, and mechanically derive `archetype` from
+    `(reality_score, financial_or_intent_score)`.
+- Bind `model_policy_version` (defaulting to `MODEL_POLICY_VERSION`) onto
+  `scanner.diagnosis/v1` checkpoints:
+  - `build_diagnosis_checkpoint(..., model_policy_version=MODEL_POLICY_VERSION)`
+    in `backend/scan_diagnosis_checkpoint.py` records non-empty
+    `model_policy_version` inside `snapshot` (binding it into `output_hash` and
+    `checkpoint_id`);
+  - `DiagnosisStageExecutor` and `DiagnosisStageExecutor.with_cognitive_parity(...)`
+    in `backend/scan_diagnosis_adapter.py` bind `model_policy_version` while
+    keeping default `DiagnosisStageExecutor(loader)` deterministic and
+    network-free;
+  - `commit_diagnosis_stage` in `backend/scan_diagnosis_commit.py` requires
+    non-empty `model_policy_version` and rejects replay across a policy version
+    upgrade;
+  - `validate_checkpoint_integrity` in `backend/scan_checkpoint_integrity.py`
+    enforces non-empty `model_policy_version` on `scanner.diagnosis/v1` reload.
+
+### Deliberate exclusions
+
+- Do not call `get_evolving_framework()` over HTTP, `x_ray_search`,
+  `scrape_strategic_content`, Brave, Firecrawl, or Coresignal, and never pass
+  `web_search=True`.
+- Do not start Foresight, Strategic Synthesis, or Verification cognitive parity
+  in this card.
+- Do not modify `POST /scan` (`backend/main.py`), register a Supervisor loop,
+  touch Blob publication paths, add a database migration, or change Railway
+  settings.
+
+### Tests
+
+- Hermetic `tests/test_scan_diagnosis_cognition.py`:
+  - high-effort AI Diagnosis parity via
+    `DiagnosisStageExecutor.with_cognitive_parity`, verifying `web_search=False`,
+    upstream Intent + five-Jury prompt construction, mechanical archetype
+    override of drifting model labels, idempotent removal of archetype labels /
+    `TAC`/`DIM` codes / `[A]`–`[E]` tags / over-assertive proof-gap wording, and
+    `model_policy_version` binding;
+  - provider fallback chain (Premium Claude -> GPT frontier -> conservative
+    Sonnet retry) and `DiagnosisCognitiveUnavailableError` when all routes fail
+    or emit `"AI Summary Unavailable"`;
+  - all four mechanical archetype quadrants (`Thriving`, `Modernizing`,
+    `Cash Cow`, `At Risk`) and malformed payload -> `validation_failed`;
+  - `model_policy_version` hash/ID/replay/reload guards and source-isolation
+    checks.
+- Disposable PostgreSQL `tests/test_scan_diagnosis_cognition_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - end-to-end PostgreSQL prepare -> fenced `commit_diagnosis_stage` ->
+    `load_checkpoint()` -> `build_foresight_input_snapshot` ->
+    `load_verified_foresight_inputs` -> `build_foresight_input_projection`
+    hydration of sanitized AI Diagnosis output, policy-upgrade replay rejection,
+    and fail-closed `CheckpointIntegrityError` on PostgreSQL `JSONB`
+    `model_policy_version` tamper.
+
+### Likely files
+
+`backend/scan_diagnosis_cognition.py`, `backend/scan_diagnosis_checkpoint.py`,
+`backend/scan_diagnosis_adapter.py`, `backend/scan_diagnosis_commit.py`,
+`backend/scan_checkpoint_integrity.py`, `tests/test_scan_diagnosis_cognition.py`,
+`tests/test_scan_diagnosis_cognition_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- [Reliability contracts run 43829404476](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43829404476)
+  on pull request [#42](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/42)
+  (`34668310ae916dd525d66042683b5c29340fecaf`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
+---
+
+## Card 3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash binding & model-policy binding on durable Diagnosis output
+
+**Status:** Next executable card
+**Proves:** `ForesightStageExecutor` can invoke the existing no-web KB-first
+Strategic Foresight cognitive path on verified durable Diagnosis + upstream
+company context and supplied central Foresight KB/registry artifacts (without
+live web harvesting or copying KB records onto company evidence), bind both
+`MODEL_POLICY_VERSION` and deterministic `kb_version` / registry hashes on
+`scanner.foresight/v1`, and preserve company-neutral sanitizer and fail-closed
+unavailability contracts.
 
 ---
 
@@ -1880,16 +1989,16 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 3L-Jury-parity (Five-Jury cognitive parity & model-policy binding on
-durable packets) is complete. Specify then implement exactly Card
-3L-Diagnosis-parity from docs/scanner-reliability-slice-backlog.md (Diagnosis
-cognitive parity & model-policy binding on durable Jury output). Keep tests
-hermetic with no live network or provider calls. Do not modify POST /scan,
-register a Supervisor loop, touch Blob publication paths, or change Railway
-settings.
+Card 3L-Diagnosis-parity (Diagnosis cognitive parity & model-policy binding on
+durable Jury output) is complete. Specify then implement exactly Card
+3L-Foresight-parity from docs/scanner-reliability-slice-backlog.md (Foresight
+cognitive parity, central KB/registry hash binding & model-policy binding on
+durable Diagnosis output). Keep tests hermetic with no live network or provider
+calls. Do not run foresight_harvester, modify POST /scan, register a Supervisor
+loop, touch Blob publication paths, or change Railway settings.
 ```
 
-After Card 3L-Diagnosis-parity is merged with CI evidence recorded in
+After Card 3L-Foresight-parity is merged with CI evidence recorded in
 `docs/scanner-reliability-status.md`, advance this prompt one stage at a time
-through Foresight, Strategic Synthesis, and Verification real-stage parity. Do
-not accumulate open cards in one run.
+through Strategic Synthesis and Verification real-stage parity. Do not
+accumulate open cards in one run.
