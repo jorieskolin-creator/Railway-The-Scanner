@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_foresight_checkpoint import FORESIGHT_CHECKPOINT_CONTRACT
 from scan_foresight_snapshot import FORESIGHT_STAGE
 from scan_supervisor import (
@@ -98,6 +99,7 @@ def build_synthesis_checkpoint(
     projection: SynthesisInputProjection,
     *,
     synthesis_result: Mapping[str, Any] | object,
+    model_policy_version: str = MODEL_POLICY_VERSION,
 ) -> ScanCheckpoint:
     """Build a Synthesis output checkpoint from a projection and a supplied result.
 
@@ -106,6 +108,11 @@ def build_synthesis_checkpoint(
     """
 
     _validate_projection(projection)
+    normalized_policy_version = (
+        model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+    )
+    if not normalized_policy_version:
+        raise ValueError("model_policy_version is required for Synthesis checkpoints.")
     compact_result = _compact_synthesis_result(synthesis_result)
     if compact_result is None:
         gate_result = {
@@ -153,6 +160,7 @@ def build_synthesis_checkpoint(
         "input_snapshot_ref": projection.snapshot_ref,
         "foresight_checkpoint_ref": dict(projection.foresight_checkpoint_ref),
         "payload_sha256": projection.payload_sha256,
+        "model_policy_version": normalized_policy_version,
     }
     if synthesis_payload is not None:
         snapshot["synthesis_result"] = synthesis_payload

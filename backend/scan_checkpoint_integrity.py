@@ -216,6 +216,7 @@ _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
         upstream_stage=FORESIGHT_STAGE,
         upstream_contract=FORESIGHT_CHECKPOINT_CONTRACT,
         binds_single_upstream_input_ref=True,
+        requires_model_policy_version=True,
     ),
     VERIFICATION_STAGE: _CognitiveCheckpointSpec(
         stage_name=VERIFICATION_STAGE,

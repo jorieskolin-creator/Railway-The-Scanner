@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, 3L-Diagnosis-parity, and 3L-Foresight-parity proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, 3L-Diagnosis-parity, and 3L-Foresight-parity proven; 3L-Synthesis-parity implemented locally; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -32,13 +32,14 @@ Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
 Immediate next product card: **Card 3L-Synthesis-parity — Strategic Synthesis
 cognitive parity & model-policy binding on durable Diagnosis + Foresight
-output**. Phase 3 stays open until real cognitive stage parity closes across
-Strategic Synthesis and Verification, and `3J-cutover` stays blocked until real
-cognitive stage parity, post-Verification report/summary assembly, and Phase 6
-Blob-first publication reconciliation pass. Process card **3G0**, scaffold
-cards **3J-loop** and **3J-restart**, product cards **3G1** through **3I-V3**,
-synchronization card **1A**, compatibility cards **2A** and **2B**, integrity
-card **3K-integrity**, and parity cards **3L-Jury-parity**,
+output** (implemented locally and awaiting pull-request GitHub CI before
+advancing to **Card 3L-Verification-parity**). Phase 3 stays open until real
+cognitive stage parity closes Verification, and `3J-cutover` stays blocked until
+real cognitive stage parity, post-Verification report/summary assembly, and
+Phase 6 Blob-first publication reconciliation pass. Process card **3G0**,
+scaffold cards **3J-loop** and **3J-restart**, product cards **3G1** through
+**3I-V3**, synchronization card **1A**, compatibility cards **2A** and **2B**,
+integrity card **3K-integrity**, and parity cards **3L-Jury-parity**,
 **3L-Diagnosis-parity**, and **3L-Foresight-parity** are complete.
 
 ## Slice 0A — baseline integrity
@@ -1635,3 +1636,67 @@ Verification evidence:
   head branch `reliability-3l-foresight-parity`): `focused-contracts` passed
   and `postgres-supervisor-contracts` passed. The local replay above is not
   this GitHub CI run.
+
+
+## Card 3L-Synthesis-parity — Strategic Synthesis cognitive parity & model-policy binding on durable Diagnosis + Foresight output
+
+No-web Strategic Synthesis generation and `MODEL_POLICY_VERSION` checkpoint
+binding are now implemented on verified durable Foresight, Diagnosis, five-Jury,
+and Intent outputs without touching Verification, `POST /scan`, Supervisor loop
+registration, Blob publication paths, or Railway settings:
+
+- **No-web Strategic Synthesis cognitive parity (`backend/scan_synthesis_cognition.py`,
+  `backend/scan_synthesis_adapter.py`):**
+  1. `SynthesisStageExecutor.with_cognitive_parity(...)`,
+     `build_no_web_synthesis_analyzer(...)`, `build_synthesis_prompt(...)`, and
+     `analyze_synthesis_projection_with_cognition(...)` rebuild the canonical
+     evidence manifest and classification namespaces (`attach_evidence_graph`,
+     `evidence_prompt_packet`, `build_classification_namespaces`,
+     `extract_foresight_links`, `format_foresight_for_synthesis`) from verified
+     durable upstream checkpoints and `ScanRun.company_name` using offline
+     `FALLBACK_FRAMEWORK + get_label_governance_prompt()`, with zero network
+     calls;
+  2. executes `policy_for("activation_strategic_synthesis")` (`GPT_PRO_MODEL`
+     with `reasoning_mode="pro"`, `reasoning_effort="high"`,
+     `max_output_tokens=16000` -> `CLAUDE_SONNET_MODEL` high-effort fallback),
+     hard-locking `web_search=False`;
+  3. raises explicit `SynthesisCognitiveUnavailableError` when all providers
+     fail or return unparseable output (Reliability Plan Rule #6);
+  4. `normalize_synthesis_payload(...)` and `sanitize_synthesis_prose(...)`
+     idempotently apply `sanitize_inference_wording()`, `sanitize_future_insight()`,
+     strip archetype labels (`Thriving`, `Modernizing`, `Cash Cow`, `At Risk`),
+     internal `TAC-x`/`DIM-x` codes, and leaked `[A]`–`[E]` claim-tier tags,
+     and mark empty/whitespace synthesis strings malformed so
+     `build_synthesis_checkpoint()` yields `validation_failed`.
+- **`MODEL_POLICY_VERSION` binding & reload enforcement
+  (`backend/scan_synthesis_checkpoint.py`, `backend/scan_synthesis_commit.py`,
+  `backend/scan_checkpoint_integrity.py`):**
+  1. `build_synthesis_checkpoint()` binds non-empty `model_policy_version`
+     (defaulting to `MODEL_POLICY_VERSION` = `model-policy-v5-sonnet55`) into
+     `snapshot`, `output_hash`, and `checkpoint_id`;
+  2. `commit_synthesis_stage()` enforces non-empty `model_policy_version` and
+     rejects replay across policy version upgrades;
+  3. `validate_checkpoint_integrity()` enforces non-empty
+     `model_policy_version` on `scanner.synthesis/v1` reload so tampering fails
+     closed with `CheckpointIntegrityError` on `load_checkpoint()` and
+     `VerificationInputSnapshotIntegrityError` on downstream Verification
+     hydration.
+
+Phase 3 remains open until real cognitive stage parity closes Verification.
+Once pull-request GitHub CI is recorded for Card 3L-Synthesis-parity, the next
+bounded card is **Card 3L-Verification-parity — Verification cognitive parity &
+model-policy binding on durable Synthesis + upstream output**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card
+  3L-Synthesis-parity hermetic suite `4 passed`
+  (`tests/test_scan_synthesis_cognition.py`); focused trust contracts `127
+  passed`; complete hermetic suite `602 passed, 81 skipped` with all provider
+  keys cleared and socket/DNS guard active; local disposable PostgreSQL replay
+  of `postgres-supervisor-contracts` `81 passed` (including `1 passed`
+  end-to-end cognitive-parity + Verification hydration + policy-tamper contract
+  in `tests/test_scan_synthesis_cognition_postgres_integration.py`).
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.

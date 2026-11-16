@@ -106,4 +106,5 @@ jobs:
             tests/test_scan_restart_matrix_postgres_integration.py \
             tests/test_scan_jury_cognition_postgres_integration.py \
             tests/test_scan_diagnosis_cognition_postgres_integration.py \
-            tests/test_scan_foresight_cognition_postgres_integration.py
+            tests/test_scan_foresight_cognition_postgres_integration.py \
+            tests/test_scan_synthesis_cognition_postgres_integration.py
