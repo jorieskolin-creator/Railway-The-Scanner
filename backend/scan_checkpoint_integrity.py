@@ -178,6 +178,7 @@ _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
         upstream_stage=JURY_ANALYSIS_STAGE,
         upstream_contract=JURY_CHECKPOINT_CONTRACT,
         binds_single_upstream_input_ref=True,
+        requires_model_policy_version=True,
     ),
     FORESIGHT_STAGE: _CognitiveCheckpointSpec(
         stage_name=FORESIGHT_STAGE,

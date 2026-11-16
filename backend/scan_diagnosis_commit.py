@@ -61,6 +61,9 @@ def commit_diagnosis_stage(
         raise ValueError("Diagnosis checkpoint contract is invalid.")
     if checkpoint.gate_result.get("status") != "passed":
         raise ValueError("only a passed Diagnosis gate may be committed.")
+    policy_version = checkpoint.snapshot.get("model_policy_version")
+    if not isinstance(policy_version, str) or not policy_version.strip():
+        raise ValueError("Diagnosis checkpoint requires a non-empty model_policy_version.")
 
     existing = repository.load_checkpoint(
         run_id=lease.run_id,
@@ -72,6 +75,7 @@ def commit_diagnosis_stage(
             existing.checkpoint_id != checkpoint.checkpoint_id
             or existing.input_hash != checkpoint.input_hash
             or existing.output_hash != checkpoint.output_hash
+            or existing.snapshot.get("model_policy_version") != policy_version
         ):
             raise ValueError("a different Diagnosis checkpoint already exists for this attempt.")
         return existing

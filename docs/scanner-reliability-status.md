@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, and 3L-Jury-parity proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, and 3L-Jury-parity proven; 3L-Diagnosis-parity implemented locally; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -31,14 +31,16 @@ shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
 Immediate next product card: **Card 3L-Diagnosis-parity — Diagnosis cognitive
-parity & model-policy binding on durable Jury output**. Phase 3 stays open
-until real cognitive stage parity closes across Diagnosis, Foresight, Strategic
-Synthesis, and Verification, and `3J-cutover` stays blocked until real
-cognitive stage parity, post-Verification report/summary assembly, and Phase 6
-Blob-first publication reconciliation pass. Process card **3G0**, scaffold
-cards **3J-loop** and **3J-restart**, product cards **3G1** through **3I-V3**,
-synchronization card **1A**, compatibility cards **2A** and **2B**, integrity
-card **3K-integrity**, and parity card **3L-Jury-parity** are complete.
+parity & model-policy binding on durable Jury output** (implemented locally and
+awaiting pull-request GitHub CI before advancing to **Card
+3L-Foresight-parity**). Phase 3 stays open until real cognitive stage parity
+closes across Foresight, Strategic Synthesis, and Verification, and `3J-cutover`
+stays blocked until real cognitive stage parity, post-Verification
+report/summary assembly, and Phase 6 Blob-first publication reconciliation pass.
+Process card **3G0**, scaffold cards **3J-loop** and **3J-restart**, product
+cards **3G1** through **3I-V3**, synchronization card **1A**, compatibility
+cards **2A** and **2B**, integrity card **3K-integrity**, and parity card
+**3L-Jury-parity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1490,3 +1492,68 @@ Verification evidence:
   head branch `reliability-3l-jury-parity`): `focused-contracts` passed and
   `postgres-supervisor-contracts` passed. The local replay above is not this
   GitHub CI run.
+
+
+## Card 3L-Diagnosis-parity — Diagnosis cognitive parity & model-policy binding on durable Jury output
+
+No-web AI Diagnosis synthesis and `MODEL_POLICY_VERSION` checkpoint binding are
+now implemented on verified durable Jury and upstream Intent inputs without
+touching Foresight, Strategic Synthesis, Verification, `POST /scan`, Supervisor
+loop registration, Blob publication paths, or Railway settings:
+
+- **No-web AI Diagnosis cognitive parity (`backend/scan_diagnosis_cognition.py`,
+  `backend/scan_diagnosis_adapter.py`):**
+  1. `DiagnosisStageExecutor.with_cognitive_parity(...)` and
+     `analyze_diagnosis_projection_with_cognition(...)` build the bounded no-web
+     AI Diagnosis prompt from `DiagnosisInputProjection.jury_result`, durable
+     `ScanRun.company_name`, and the hash-verified upstream `intent` checkpoint
+     (`intent_result` resolved via `jury_checkpoint.snapshot["intent_checkpoint_ref"]`),
+     using offline `FALLBACK_FRAMEWORK`, `get_label_governance_prompt()`, and
+     `build_shared_guardrails()` with zero network calls;
+  2. executes the `policy_for("ai_diagnosis")` provider chain
+     (`CLAUDE_PREMIUM_MODEL` primary with `effort="high"` and `max_tokens=8000` ->
+     `GPT_REASONING_MODEL` frontier fallback -> conservative
+     `CLAUDE_SONNET_MODEL` medium-effort retry), hard-locking
+     `web_search=False`;
+  3. raises explicit `DiagnosisCognitiveUnavailableError` when all providers
+     fail, return unparseable output, or emit `"AI Summary Unavailable"`
+     (Reliability Plan Rule #6: provider unavailability is never silently
+     converted to `passed`);
+  4. `normalize_diagnosis_payload(...)` and `sanitize_diagnosis_prose(...)`
+     idempotently apply `sanitize_inference_wording()`, strip archetype labels
+     (`Thriving`, `Modernizing`, `Cash Cow`, `At Risk`), internal `TAC-x`/`DIM-x`
+     codes, and leaked `[A]`–`[E]` claim-tier prefixes from `diagnostic_summary`
+     and `evidence_based_risks`, and mechanically derive `archetype` from
+     `(reality_score, financial_or_intent_score)`.
+- **`MODEL_POLICY_VERSION` binding & reload enforcement
+  (`backend/scan_diagnosis_checkpoint.py`, `backend/scan_diagnosis_commit.py`,
+  `backend/scan_checkpoint_integrity.py`):**
+  1. `build_diagnosis_checkpoint()` records non-empty `model_policy_version`
+     (defaulting to `MODEL_POLICY_VERSION` = `model-policy-v5-sonnet55`) inside
+     `snapshot`, binding it into `output_hash` and `checkpoint_id`;
+  2. `commit_diagnosis_stage()` requires non-empty `model_policy_version` and
+     rejects checkpoint replay across a policy version upgrade;
+  3. `validate_checkpoint_integrity()` enforces non-empty `model_policy_version`
+     on `scanner.diagnosis/v1` reload so tampering fails closed with
+     `CheckpointIntegrityError` on `load_checkpoint()` and
+     `ForesightInputSnapshotIntegrityError` on downstream Foresight hydration.
+
+Phase 3 remains open until real cognitive stage parity closes across Foresight,
+Strategic Synthesis, and Verification. Once pull-request GitHub CI is recorded
+for Card 3L-Diagnosis-parity, the next bounded card is **Card
+3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash
+binding & model-policy binding on durable Diagnosis output**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card
+  3L-Diagnosis-parity hermetic suite `5 passed`
+  (`tests/test_scan_diagnosis_cognition.py`); focused trust contracts `127
+  passed`; complete hermetic suite `594 passed, 79 skipped` with all provider
+  keys cleared and socket/DNS guard active; local disposable PostgreSQL replay
+  of `postgres-supervisor-contracts` `79 passed` (including `1 passed`
+  end-to-end cognitive-parity + Foresight hydration + policy-tamper contract in
+  `tests/test_scan_diagnosis_cognition_postgres_integration.py`).
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
