@@ -2129,7 +2129,7 @@ malformed output without touching Verification, `POST /scan`, or Blob stores.
 
 ## Card 3L-Verification-parity — Verification cognitive parity & model-policy binding on durable Synthesis + upstream output
 
-**Status:** Next executable card (final stage parity card closing Phase 3 cognitive stage parity)
+**Status:** Implemented — awaiting pull-request GitHub CI evidence (final stage parity card closing Phase 3 cognitive stage parity)
 **Proves:** `VerificationStageExecutor` can invoke the existing no-web
 Verification / fact-check path (`ai_fact_check_summary` / `validate_summary`
 using `GPT_VERIFIER_MODEL` + deterministic heuristic guardrails) on verified
@@ -2137,6 +2137,102 @@ durable Diagnosis, Foresight, Synthesis, and Jury evidence outputs, bind
 `MODEL_POLICY_VERSION` on `scanner.verification/v1`, and fail explicitly on
 provider unavailability or malformed output without closing Phase 3 into live
 `/scan` cutover or Blob writes.
+
+### In scope
+
+- New module `backend/scan_verification_cognition.py`:
+  - `analyze_verification_projection_with_cognition(...)` and
+    `build_no_web_verification_analyzer(...)` resolve durable `ScanRun` company
+    identity and upstream `strategic_synthesis` -> `foresight` -> `diagnosis`
+    -> `jury_analysis` -> `intent` results via `context_loader`, rebuild the
+    canonical bibliography and evidence graph (`attach_evidence_graph`,
+    `extract_foresight_links`), and run both deterministic heuristic checks
+    (`validate_summary`) and the independent provider-separated fact-checker
+    (`ai_fact_check_summary` with `verification_only=True` and
+    `(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)`), with `web_search=False`;
+  - raises explicit `VerificationCognitiveUnavailableError` when
+    `ai_fact_check_summary` reports `fact_check_skipped=True` or
+    `verification_status="unavailable"` (Reliability Plan Rule #6: provider
+    unavailability is never silently converted to `passed`);
+  - `normalize_verification_record(...)` and `parse_verification_record(...)`
+    emit and parse a canonical JSON string `verification_record` inside the
+    compact `scanner.verification/v1` contract (`{"verification_record": "..."}`),
+    retaining `verification_status`, `verified`, `fact_check_model`,
+    `hallucination_risk`, `hallucination_score`, `hallucination_flags`,
+    `false_claims`, `audit_notes`, `wording_adjustments`,
+    `evidence_handoff_failures_count`, `premise_reference_failures_count`, and
+    `corrected_claim_ids` while keeping raw texts, source extracts, and
+    publication authority off the checkpoint.
+- Bind `model_policy_version` (defaulting to `MODEL_POLICY_VERSION`) onto
+  `scanner.verification/v1` checkpoints:
+  - `build_verification_checkpoint(..., model_policy_version=MODEL_POLICY_VERSION)`
+    in `backend/scan_verification_checkpoint.py`;
+  - `VerificationStageExecutor` and
+    `VerificationStageExecutor.with_cognitive_parity(...)` in
+    `backend/scan_verification_adapter.py` (keeping default scaffold wrap
+    deterministic, `next_stage=None`, and preserving all static isolation
+    checks);
+  - `commit_verification_stage` in `backend/scan_verification_commit.py`
+    requires non-empty `model_policy_version` and rejects replay across policy
+    version upgrades;
+  - `validate_checkpoint_integrity` in `backend/scan_checkpoint_integrity.py`
+    enforces non-empty `model_policy_version` on `scanner.verification/v1`
+    reload.
+
+### Deliberate exclusions
+
+- Do not write Blob objects, Company Summary, Detailed Report, or publication
+  records.
+- Do not modify `POST /scan` (`backend/main.py`), register a Supervisor loop,
+  add a database migration, or change Railway settings, and never pass
+  `web_search=True`.
+
+### Tests
+
+- Hermetic `tests/test_scan_verification_cognition.py`:
+  - independent `GPT_VERIFIER_MODEL` verification parity via
+    `VerificationStageExecutor.with_cognitive_parity` (`next_stage=None`),
+    verifying `web_search=False`, clean verified verdict (`verified=True`) and
+    flagged false-claim verdict (`verified=False`, `verification_status="failed"`),
+    and `model_policy_version` binding;
+  - `CLAUDE_SONNET_MODEL` fallback on `GPT_VERIFIER_MODEL` timeout and
+    `VerificationCognitiveUnavailableError` on total verifier unavailability;
+  - `model_policy_version` hash/ID/replay/reload guards and static isolation
+    checks.
+- Disposable PostgreSQL `tests/test_scan_verification_cognition_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - full 7-stage no-web cognitive parity chain (`material_ingestion → intent →
+    jury_analysis → diagnosis → foresight → strategic_synthesis → verification`)
+    completing operationally (`status='completed'`, `current_stage=None`,
+    `save_to_database=False`, zero successor steps, zero artifact tables),
+    policy-upgrade replay rejection, and fail-closed `CheckpointIntegrityError`
+    on PostgreSQL `JSONB` `model_policy_version` tamper.
+
+### Likely files
+
+`backend/scan_verification_cognition.py`,
+`backend/scan_verification_checkpoint.py`, `backend/scan_verification_adapter.py`,
+`backend/scan_verification_commit.py`, `backend/scan_checkpoint_integrity.py`,
+`tests/test_scan_verification_cognition.py`,
+`tests/test_scan_verification_cognition_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+
+---
+
+## Card 4A — Typed stage envelopes & deterministic gate persistence
+
+**Status:** Planned after 3L-Verification-parity CI closure (Phase 4 entry card)
+**Proves:** Shared versioned stage-envelope & deterministic gate-result persistence
+helpers (`gate_results` table / typed envelope validation) block invalid,
+stale, or hash-mismatched stage transitions explicitly without mutating live
+`/scan` or Blob stores.
 
 ---
 
@@ -2198,17 +2294,12 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 3L-Synthesis-parity (Strategic Synthesis cognitive parity & model-policy
-binding on durable Diagnosis + Foresight output) is complete. Specify then
-implement exactly Card 3L-Verification-parity from
-docs/scanner-reliability-slice-backlog.md (Verification cognitive parity &
-model-policy binding on durable Synthesis + upstream output). Keep tests
-hermetic with no live network or provider calls. Do not modify POST /scan,
-register a Supervisor loop, touch Blob publication paths, or change Railway
-settings.
+Once Card 3L-Verification-parity pull-request CI is recorded in
+docs/scanner-reliability-status.md, Phase 3 real-stage parity is complete.
+Specify then implement Card 4A from docs/scanner-reliability-slice-backlog.md
+(Typed stage envelopes & deterministic gate persistence). Keep tests hermetic
+with no live network or provider calls. Do not modify POST /scan, register a
+Supervisor loop, touch Blob publication paths, or change Railway settings.
 ```
 
-After Card 3L-Verification-parity is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, Phase 3 real-stage parity closes and the
-next work moves to Phase 4/5/6 contracts before `3J-exclusive` and `3J-cutover`.
 Do not accumulate open cards in one run.

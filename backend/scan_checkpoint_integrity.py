@@ -234,6 +234,7 @@ _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
         upstream_stage=SYNTHESIS_STAGE,
         upstream_contract=SYNTHESIS_CHECKPOINT_CONTRACT,
         binds_single_upstream_input_ref=True,
+        requires_model_policy_version=True,
     ),
 }
 
