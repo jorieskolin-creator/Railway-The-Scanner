@@ -2033,12 +2033,110 @@ unavailability contracts.
 
 ## Card 3L-Synthesis-parity — Strategic Synthesis cognitive parity & model-policy binding on durable Diagnosis + Foresight output
 
-**Status:** Next executable card
+**Status:** Complete
 **Proves:** `SynthesisStageExecutor` can invoke the existing no-web Strategic
 Synthesis / Activation cognitive path on verified durable Diagnosis, Foresight,
 and upstream Jury inputs, bind `MODEL_POLICY_VERSION` on
 `scanner.synthesis/v1`, and fail explicitly on provider unavailability or
 malformed output without touching Verification, `POST /scan`, or Blob stores.
+
+### In scope
+
+- New module `backend/scan_synthesis_cognition.py`:
+  - `build_synthesis_prompt(...)`, `analyze_synthesis_projection_with_cognition(...)`,
+    and `build_no_web_synthesis_analyzer(...)` construct the bounded Strategic
+    Synthesis prompt (`TASK: STRATEGIC SYNTHESIS ONLY`) from verified durable
+    Foresight (`SynthesisInputProjection.foresight_result`), Diagnosis
+    (`diagnosis_result`), five-Jury (`jury_result`), Intent (`intent_result`),
+    and `ScanRun.company_name`, rebuilding the canonical evidence manifest and
+    classification namespaces (`attach_evidence_graph`, `evidence_prompt_packet`,
+    `build_classification_namespaces`, `extract_foresight_links`,
+    `format_foresight_for_synthesis`) using offline `FALLBACK_FRAMEWORK +
+    get_label_governance_prompt()` with zero network calls;
+  - executes `policy_for("activation_strategic_synthesis")` (`GPT_PRO_MODEL`
+    with `reasoning_mode="pro"`, `reasoning_effort="high"`,
+    `max_output_tokens=16000` -> `CLAUDE_SONNET_MODEL` high-effort fallback),
+    hard-locking `web_search=False`;
+  - raises explicit `SynthesisCognitiveUnavailableError` when all providers
+    fail or return unparseable output (Reliability Plan Rule #6: provider
+    unavailability is never silently converted to `passed`);
+  - `normalize_synthesis_payload(...)` and `sanitize_synthesis_prose(...)`
+    idempotently apply `sanitize_inference_wording()`, `sanitize_future_insight()`,
+    and strip archetype labels (`Thriving`, `Modernizing`, `Cash Cow`, `At Risk`),
+    internal `TAC-x`/`DIM-x` codes, and leaked `[A]`–`[E]` claim-tier tags,
+    while marking whitespace/empty synthesis outputs malformed so
+    `build_synthesis_checkpoint()` yields `validation_failed`.
+- Bind `model_policy_version` (defaulting to `MODEL_POLICY_VERSION`) onto
+  `scanner.synthesis/v1` checkpoints:
+  - `build_synthesis_checkpoint(..., model_policy_version=MODEL_POLICY_VERSION)`
+    in `backend/scan_synthesis_checkpoint.py`;
+  - `SynthesisStageExecutor` and `SynthesisStageExecutor.with_cognitive_parity(...)`
+    in `backend/scan_synthesis_adapter.py` (keeping default scaffold wrap
+    deterministic and preserving all static source-isolation checks);
+  - `commit_synthesis_stage` in `backend/scan_synthesis_commit.py` requires
+    non-empty `model_policy_version` and rejects replay across policy version
+    upgrades;
+  - `validate_checkpoint_integrity` in `backend/scan_checkpoint_integrity.py`
+    enforces non-empty `model_policy_version` on `scanner.synthesis/v1` reload.
+
+### Deliberate exclusions
+
+- Do not start Verification cognitive parity in this card.
+- Do not modify `POST /scan` (`backend/main.py`), register a Supervisor loop,
+  touch Blob publication paths, add a database migration, or change Railway
+  settings, and never pass `web_search=True`.
+
+### Tests
+
+- Hermetic `tests/test_scan_synthesis_cognition.py`:
+  - Pro-mode Strategic Synthesis parity via
+    `SynthesisStageExecutor.with_cognitive_parity`, verifying `web_search=False`,
+    upstream Evidence Graph + Foresight context prompt construction, idempotent
+    sanitization (proof-gap, modal deadlines, archetype labels, `TAC`/`DIM`
+    codes, `[A]`–`[E]` tags), and `model_policy_version` binding;
+  - `CLAUDE_SONNET_MODEL` high-effort fallback on GPT Pro timeout,
+    `SynthesisCognitiveUnavailableError` on total provider unavailability, and
+    empty/whitespace `strategic_synthesis` -> `validation_failed` (`next_stage=None`);
+  - `model_policy_version` hash/ID/replay/reload guards and static isolation
+    checks.
+- Disposable PostgreSQL `tests/test_scan_synthesis_cognition_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - end-to-end PostgreSQL prepare -> fenced `commit_synthesis_stage` ->
+    `load_checkpoint()` -> `build_verification_input_snapshot` ->
+    `load_verified_verification_inputs` -> `build_verification_input_projection`
+    hydration of sanitized Strategic Synthesis output, policy-upgrade replay
+    rejection, and fail-closed `CheckpointIntegrityError` on PostgreSQL `JSONB`
+    `model_policy_version` tamper.
+
+### Likely files
+
+`backend/scan_synthesis_cognition.py`, `backend/scan_synthesis_checkpoint.py`,
+`backend/scan_synthesis_adapter.py`, `backend/scan_synthesis_commit.py`,
+`backend/scan_checkpoint_integrity.py`, `tests/test_scan_synthesis_cognition.py`,
+`tests/test_scan_synthesis_cognition_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- [Reliability contracts run 43862394852](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43862394852)
+  on pull request [#44](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/44)
+  (`6a8382f9e213c5e1822c5f545c1b3ae2f888b062`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
+---
+
+## Card 3L-Verification-parity — Verification cognitive parity & model-policy binding on durable Synthesis + upstream output
+
+**Status:** Next executable card (final stage parity card closing Phase 3 cognitive stage parity)
+**Proves:** `VerificationStageExecutor` can invoke the existing no-web
+Verification / fact-check path (`ai_fact_check_summary` / `validate_summary`
+using `GPT_VERIFIER_MODEL` + deterministic heuristic guardrails) on verified
+durable Diagnosis, Foresight, Synthesis, and Jury evidence outputs, bind
+`MODEL_POLICY_VERSION` on `scanner.verification/v1`, and fail explicitly on
+provider unavailability or malformed output without closing Phase 3 into live
+`/scan` cutover or Blob writes.
 
 ---
 
@@ -2100,16 +2198,17 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 3L-Foresight-parity (Foresight cognitive parity, central KB/registry hash
-binding & model-policy binding on durable Diagnosis output) is complete.
-Specify then implement exactly Card 3L-Synthesis-parity from
-docs/scanner-reliability-slice-backlog.md (Strategic Synthesis cognitive parity
-& model-policy binding on durable Diagnosis + Foresight output). Keep tests
+Card 3L-Synthesis-parity (Strategic Synthesis cognitive parity & model-policy
+binding on durable Diagnosis + Foresight output) is complete. Specify then
+implement exactly Card 3L-Verification-parity from
+docs/scanner-reliability-slice-backlog.md (Verification cognitive parity &
+model-policy binding on durable Synthesis + upstream output). Keep tests
 hermetic with no live network or provider calls. Do not modify POST /scan,
 register a Supervisor loop, touch Blob publication paths, or change Railway
 settings.
 ```
 
-After Card 3L-Synthesis-parity is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, advance this prompt to Verification
-real-stage parity. Do not accumulate open cards in one run.
+After Card 3L-Verification-parity is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, Phase 3 real-stage parity closes and the
+next work moves to Phase 4/5/6 contracts before `3J-exclusive` and `3J-cutover`.
+Do not accumulate open cards in one run.
