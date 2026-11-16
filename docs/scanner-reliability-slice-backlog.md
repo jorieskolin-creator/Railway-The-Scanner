@@ -1920,7 +1920,7 @@ Blob stores.
 
 ## Card 3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash binding & model-policy binding on durable Diagnosis output
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence
+**Status:** Complete
 **Proves:** `ForesightStageExecutor` can invoke the existing no-web KB-first
 Strategic Foresight cognitive path on verified durable Diagnosis + upstream
 company context and supplied central Foresight KB/registry artifacts (without
@@ -2024,14 +2024,16 @@ unavailability contracts.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43832746925](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43832746925)
+  on pull request [#43](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/43)
+  (`f260df61fd8ef97d61e88c5670076ab63f7790e3`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 3L-Synthesis-parity — Strategic Synthesis cognitive parity & model-policy binding on durable Diagnosis + Foresight output
 
-**Status:** Planned after 3L-Foresight-parity CI closure
+**Status:** Next executable card
 **Proves:** `SynthesisStageExecutor` can invoke the existing no-web Strategic
 Synthesis / Activation cognitive path on verified durable Diagnosis, Foresight,
 and upstream Jury inputs, bind `MODEL_POLICY_VERSION` on
@@ -2098,13 +2100,14 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3L-Foresight-parity pull-request CI is recorded in
-docs/scanner-reliability-status.md, specify then implement exactly Card
-3L-Synthesis-parity from docs/scanner-reliability-slice-backlog.md (Strategic
-Synthesis cognitive parity & model-policy binding on durable Diagnosis +
-Foresight output). Keep tests hermetic with no live network or provider calls.
-Do not modify POST /scan, register a Supervisor loop, touch Blob publication
-paths, or change Railway settings.
+Card 3L-Foresight-parity (Foresight cognitive parity, central KB/registry hash
+binding & model-policy binding on durable Diagnosis output) is complete.
+Specify then implement exactly Card 3L-Synthesis-parity from
+docs/scanner-reliability-slice-backlog.md (Strategic Synthesis cognitive parity
+& model-policy binding on durable Diagnosis + Foresight output). Keep tests
+hermetic with no live network or provider calls. Do not modify POST /scan,
+register a Supervisor loop, touch Blob publication paths, or change Railway
+settings.
 ```
 
 After Card 3L-Synthesis-parity is merged with CI evidence recorded in
