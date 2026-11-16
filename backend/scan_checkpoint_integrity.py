@@ -128,6 +128,7 @@ class _CognitiveCheckpointSpec:
     upstream_contract: str | None = None
     binds_single_upstream_input_ref: bool = False
     requires_model_policy_version: bool = False
+    requires_kb_binding: bool = False
 
 
 _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
@@ -196,6 +197,8 @@ _COGNITIVE_SPECS: Mapping[str, _CognitiveCheckpointSpec] = {
         upstream_stage=DIAGNOSIS_STAGE,
         upstream_contract=DIAGNOSIS_CHECKPOINT_CONTRACT,
         binds_single_upstream_input_ref=True,
+        requires_model_policy_version=True,
+        requires_kb_binding=True,
     ),
     SYNTHESIS_STAGE: _CognitiveCheckpointSpec(
         stage_name=SYNTHESIS_STAGE,
@@ -499,6 +502,9 @@ def _validate_cognitive_checkpoint(
         expected_keys.add(spec.upstream_ref_key)
     if spec.requires_model_policy_version:
         expected_keys.add("model_policy_version")
+    if spec.requires_kb_binding:
+        expected_keys.add("kb_version")
+        expected_keys.add("kb_registry_hash")
     status = gate_result["status"]
     if status == "passed":
         expected_keys.add(spec.result_key)
@@ -515,6 +521,21 @@ def _validate_cognitive_checkpoint(
         ):
             raise CheckpointIntegrityError(
                 f"{spec.stage_name} checkpoint model_policy_version must be a non-empty string."
+            )
+    if spec.requires_kb_binding:
+        kb_version = snapshot.get("kb_version")
+        kb_registry_hash = snapshot.get("kb_registry_hash")
+        if (
+            not isinstance(kb_version, str)
+            or not kb_version.strip()
+            or kb_version != kb_version.strip()
+        ):
+            raise CheckpointIntegrityError(
+                f"{spec.stage_name} checkpoint kb_version must be a non-empty string."
+            )
+        if not isinstance(kb_registry_hash, str) or not _is_sha256_digest(kb_registry_hash):
+            raise CheckpointIntegrityError(
+                f"{spec.stage_name} checkpoint kb_registry_hash must be a SHA-256 digest."
             )
 
     gate_results = snapshot.get("gate_results")

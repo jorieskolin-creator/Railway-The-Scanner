@@ -15,7 +15,7 @@
 | 0 — Canonicalize and freeze | Complete | One canonical plan, no shadowed trust functions, focused deterministic CI green |
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
-| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, and 3L-Diagnosis-parity proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
+| 3 — Material durability and checkpoints | In progress — scaffold chain, 3K-integrity, 3J-restart, 3L-Jury-parity, and 3L-Diagnosis-parity proven; 3L-Foresight-parity implemented locally; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
 | 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
@@ -32,14 +32,16 @@ Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
 Immediate next product card: **Card 3L-Foresight-parity — Foresight cognitive
 parity, central KB/registry hash binding & model-policy binding on durable
-Diagnosis output**. Phase 3 stays open until real cognitive stage parity closes
-across Foresight, Strategic Synthesis, and Verification, and `3J-cutover` stays
-blocked until real cognitive stage parity, post-Verification report/summary
-assembly, and Phase 6 Blob-first publication reconciliation pass. Process card
-**3G0**, scaffold cards **3J-loop** and **3J-restart**, product cards **3G1**
-through **3I-V3**, synchronization card **1A**, compatibility cards **2A** and
-**2B**, integrity card **3K-integrity**, and parity cards **3L-Jury-parity**
-and **3L-Diagnosis-parity** are complete.
+Diagnosis output** (implemented locally and awaiting pull-request GitHub CI
+before advancing to **Card 3L-Synthesis-parity**). Phase 3 stays open until
+real cognitive stage parity closes across Strategic Synthesis and Verification,
+and `3J-cutover` stays blocked until real cognitive stage parity,
+post-Verification report/summary assembly, and Phase 6 Blob-first publication
+reconciliation pass. Process card **3G0**, scaffold cards **3J-loop** and
+**3J-restart**, product cards **3G1** through **3I-V3**, synchronization card
+**1A**, compatibility cards **2A** and **2B**, integrity card
+**3K-integrity**, and parity cards **3L-Jury-parity** and
+**3L-Diagnosis-parity** are complete.
 
 ## Slice 0A — baseline integrity
 
@@ -1559,3 +1561,76 @@ Verification evidence:
   head branch `reliability-3l-diagnosis-parity`): `focused-contracts` passed
   and `postgres-supervisor-contracts` passed. The local replay above is not
   this GitHub CI run.
+
+
+## Card 3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash binding & model-policy binding on durable Diagnosis output
+
+No-web KB-first Strategic Foresight synthesis, central KB/registry hash
+binding, and `MODEL_POLICY_VERSION` checkpoint binding are now implemented on
+verified durable Diagnosis and upstream company inputs without running
+`foresight_harvester`, modifying `POST /scan`, registering a Supervisor loop,
+touching Blob publication paths, or changing Railway settings:
+
+- **No-web KB-first Foresight cognitive parity (`backend/scan_foresight_cognition.py`,
+  `backend/scan_foresight_adapter.py`):**
+  1. `canonical_central_registry_payload()`, `resolve_central_kb_binding()`, and
+     `is_central_kb_signal_context_eligible()` compute deterministic
+     `kb_registry_hash` and `kb_version` over the central Strategic Foresight
+     Theme Registry and supplied central KB signals, filtering strictly on
+     company-neutral dual-status eligibility (`foresight_context_eligible=True`,
+     `foresight_signal_status` in `{"active_context", "context_eligible"}`,
+     `source_audit_status` in `{"accepted_active", "accepted"}`,
+     `company_specific is not True`, `wrong_entity is not True`, URL verified,
+     readable) and applying `THEME_FALLBACK_MAP` near-fit fallback offline;
+  2. `ForesightStageExecutor.with_cognitive_parity(...)`,
+     `build_no_web_foresight_runner(...)`, and
+     `analyze_foresight_projection_with_cognition(...)` resolve durable
+     `ScanRun` company context, upstream Jury findings (`top_findings`), and
+     Intent score fallback (`financial_index`), build `_build_kb_synthesis_prompt(...)`,
+     and execute `GPT_REASONING_MODEL` primary -> `CLAUDE_SONNET_MODEL` fallback
+     with `web_search=False` hard-locked;
+  3. raises explicit `ForesightCognitiveUnavailableError` when fewer than 3
+     eligible central KB signals exist or when all no-web provider calls fail
+     or return unparseable output (Reliability Plan Rule #6);
+  4. `normalize_foresight_payload(...)` drops ungrounded off-KB primary
+     `source_url` forces, attaches `_from_kb`, `claim_type="foresight_context"`,
+     `company_specific=False`, `not_evidence_of_deployment=True`,
+     `requires_company_specific_corroboration=True`, `foresight_context_eligible`,
+     and `_kb_description`, applies `_sanitize_foresight_data(...)` plus recursive
+     `sanitize_future_insight(...)` across `dimension_forces`,
+     `cross_impact_chain`, `scenarios`, and `climate_exposure`, and preserves
+     Card 2B `extract_foresight_links()` + Buying Insight compatibility without
+     copying central KB stores or `kb_versions` onto the checkpoint.
+- **Central KB/registry & `MODEL_POLICY_VERSION` binding
+  (`backend/scan_foresight_checkpoint.py`, `backend/scan_foresight_commit.py`,
+  `backend/scan_checkpoint_integrity.py`):**
+  1. `build_foresight_checkpoint()` binds non-empty `model_policy_version`,
+     non-empty `kb_version`, and 64-char SHA-256 `kb_registry_hash` into
+     `snapshot`, `output_hash`, and `checkpoint_id`;
+  2. `commit_foresight_stage()` enforces those fields and rejects replay across
+     model-policy or central KB/registry upgrades;
+  3. `validate_checkpoint_integrity()` enforces `model_policy_version`,
+     `kb_version`, and SHA-256 `kb_registry_hash` on `scanner.foresight/v1`
+     reload so tampering fails closed with `CheckpointIntegrityError` on
+     `load_checkpoint()` and `SynthesisInputSnapshotIntegrityError` on
+     downstream Strategic Synthesis hydration.
+
+Phase 3 remains open until real cognitive stage parity closes across Strategic
+Synthesis and Verification. Once pull-request GitHub CI is recorded for Card
+3L-Foresight-parity, the next bounded card is **Card 3L-Synthesis-parity —
+Strategic Synthesis cognitive parity & model-policy binding on durable Diagnosis
++ Foresight output**.
+
+Verification evidence:
+
+- Local replay (not GitHub CI): `python -m compileall -q backend` passed;
+  `python scripts/check_duplicate_top_level_defs.py` passed; Card
+  3L-Foresight-parity hermetic suite `4 passed`
+  (`tests/test_scan_foresight_cognition.py`); focused trust contracts `127
+  passed`; complete hermetic suite `598 passed, 80 skipped` with all provider
+  keys cleared and socket/DNS guard active; local disposable PostgreSQL replay
+  of `postgres-supervisor-contracts` `80 passed` (including `1 passed`
+  end-to-end cognitive-parity + Synthesis hydration + KB-hash-tamper contract in
+  `tests/test_scan_foresight_cognition_postgres_integration.py`).
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
