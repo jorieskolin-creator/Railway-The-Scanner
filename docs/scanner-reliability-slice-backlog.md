@@ -2033,7 +2033,7 @@ unavailability contracts.
 
 ## Card 3L-Synthesis-parity — Strategic Synthesis cognitive parity & model-policy binding on durable Diagnosis + Foresight output
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence
+**Status:** Complete
 **Proves:** `SynthesisStageExecutor` can invoke the existing no-web Strategic
 Synthesis / Activation cognitive path on verified durable Diagnosis, Foresight,
 and upstream Jury inputs, bind `MODEL_POLICY_VERSION` on
@@ -2120,14 +2120,16 @@ malformed output without touching Verification, `POST /scan`, or Blob stores.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Reliability contracts run 43862394852](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43862394852)
+  on pull request [#44](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/44)
+  (`6a8382f9e213c5e1822c5f545c1b3ae2f888b062`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
 
 ---
 
 ## Card 3L-Verification-parity — Verification cognitive parity & model-policy binding on durable Synthesis + upstream output
 
-**Status:** Planned after 3L-Synthesis-parity CI closure (final stage parity card closing Phase 3 cognitive stage parity)
+**Status:** Next executable card (final stage parity card closing Phase 3 cognitive stage parity)
 **Proves:** `VerificationStageExecutor` can invoke the existing no-web
 Verification / fact-check path (`ai_fact_check_summary` / `validate_summary`
 using `GPT_VERIFIER_MODEL` + deterministic heuristic guardrails) on verified
@@ -2196,13 +2198,14 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Once Card 3L-Synthesis-parity pull-request CI is recorded in
-docs/scanner-reliability-status.md, specify then implement exactly Card
-3L-Verification-parity from docs/scanner-reliability-slice-backlog.md
-(Verification cognitive parity & model-policy binding on durable Synthesis +
-upstream output). Keep tests hermetic with no live network or provider calls. Do
-not modify POST /scan, register a Supervisor loop, touch Blob publication
-paths, or change Railway settings.
+Card 3L-Synthesis-parity (Strategic Synthesis cognitive parity & model-policy
+binding on durable Diagnosis + Foresight output) is complete. Specify then
+implement exactly Card 3L-Verification-parity from
+docs/scanner-reliability-slice-backlog.md (Verification cognitive parity &
+model-policy binding on durable Synthesis + upstream output). Keep tests
+hermetic with no live network or provider calls. Do not modify POST /scan,
+register a Supervisor loop, touch Blob publication paths, or change Railway
+settings.
 ```
 
 After Card 3L-Verification-parity is merged with CI evidence recorded in
