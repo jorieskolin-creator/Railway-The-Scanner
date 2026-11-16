@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_diagnosis_checkpoint import DIAGNOSIS_CHECKPOINT_CONTRACT
 from scan_diagnosis_snapshot import DIAGNOSIS_STAGE
 from scan_foresight_snapshot import FORESIGHT_STAGE, assert_foresight_input_snapshot_matches
@@ -26,6 +27,7 @@ from scan_supervisor import (
 
 FORESIGHT_PROJECTION_CONTRACT = "scanner.foresight-projection/v1"
 FORESIGHT_CHECKPOINT_CONTRACT = "scanner.foresight/v1"
+DEFAULT_FORESIGHT_KB_VERSION = "foresight-kb-registry/v1"
 _FORESIGHT_RESULT_KEYS = {
     "dimension_forces",
     "cross_impact_chain",
@@ -101,6 +103,9 @@ def build_foresight_checkpoint(
     projection: ForesightInputProjection,
     *,
     foresight_result: Mapping[str, Any] | object,
+    model_policy_version: str = MODEL_POLICY_VERSION,
+    kb_version: str = DEFAULT_FORESIGHT_KB_VERSION,
+    kb_registry_hash: str | None = None,
 ) -> ScanCheckpoint:
     """Build a Foresight output checkpoint from a projection and a supplied result.
 
@@ -109,6 +114,23 @@ def build_foresight_checkpoint(
     """
 
     _validate_projection(projection)
+    normalized_policy_version = (
+        model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+    )
+    if not normalized_policy_version:
+        raise ValueError("model_policy_version is required for Foresight checkpoints.")
+    normalized_kb_version = (
+        kb_version.strip() if isinstance(kb_version, str) else ""
+    )
+    if not normalized_kb_version:
+        raise ValueError("kb_version is required for Foresight checkpoints.")
+    resolved_registry_hash = (
+        DEFAULT_FORESIGHT_REGISTRY_HASH
+        if kb_registry_hash is None
+        else str(kb_registry_hash)
+    )
+    if not _is_sha256_digest(resolved_registry_hash):
+        raise ValueError("kb_registry_hash must be a SHA-256 hex digest.")
     compact_result = _compact_foresight_result(foresight_result)
     if compact_result is None:
         gate_result = {
@@ -156,6 +178,9 @@ def build_foresight_checkpoint(
         "input_snapshot_ref": projection.snapshot_ref,
         "diagnosis_checkpoint_ref": dict(projection.diagnosis_checkpoint_ref),
         "payload_sha256": projection.payload_sha256,
+        "model_policy_version": normalized_policy_version,
+        "kb_version": normalized_kb_version,
+        "kb_registry_hash": resolved_registry_hash,
     }
     if foresight_payload is not None:
         snapshot["foresight_result"] = foresight_payload
@@ -267,7 +292,22 @@ def _json_safe_mapping(value: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
 
 
+def _is_sha256_digest(value: str) -> bool:
+    return len(value) == 64 and all(
+        character in "0123456789abcdefABCDEF" for character in value
+    )
+
+
 def _hash(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     ).hexdigest()
+
+
+DEFAULT_FORESIGHT_REGISTRY_HASH = _hash(
+    {
+        "contract": FORESIGHT_CHECKPOINT_CONTRACT,
+        "kb_version": DEFAULT_FORESIGHT_KB_VERSION,
+        "kind": "central_foresight_kb_registry_default",
+    }
+)

@@ -1920,7 +1920,7 @@ Blob stores.
 
 ## Card 3L-Foresight-parity — Foresight cognitive parity, central KB/registry hash binding & model-policy binding on durable Diagnosis output
 
-**Status:** Next executable card
+**Status:** Complete
 **Proves:** `ForesightStageExecutor` can invoke the existing no-web KB-first
 Strategic Foresight cognitive path on verified durable Diagnosis + upstream
 company context and supplied central Foresight KB/registry artifacts (without
@@ -1928,6 +1928,117 @@ live web harvesting or copying KB records onto company evidence), bind both
 `MODEL_POLICY_VERSION` and deterministic `kb_version` / registry hashes on
 `scanner.foresight/v1`, and preserve company-neutral sanitizer and fail-closed
 unavailability contracts.
+
+### In scope
+
+- New module `backend/scan_foresight_cognition.py`:
+  - `canonical_central_registry_payload()`, `resolve_central_kb_binding(...)`,
+    and `is_central_kb_signal_context_eligible(...)` compute deterministic
+    `kb_registry_hash` and `kb_version` over the central Strategic Foresight
+    Theme Registry (`FP_THEMES_30`, `FP_THEME_CATEGORIES`, `FP_THEME_SOURCES`,
+    `FORESIGHT_SOURCE_QUALITY_TIERS`, `DOMAIN_TO_FORESIGHT`,
+    `THEME_FALLBACK_MAP`) and supplied central KB signals, filtering strictly on
+    company-neutral dual-status eligibility (`foresight_context_eligible=True`,
+    `foresight_signal_status` in `{"active_context", "context_eligible"}`,
+    `source_audit_status` in `{"accepted_active", "accepted"}`,
+    `company_specific is not True`, `wrong_entity is not True`, URL verified,
+    readable) and applying `THEME_FALLBACK_MAP` offline;
+  - `analyze_foresight_projection_with_cognition(...)` and
+    `build_no_web_foresight_runner(...)` resolve durable `ScanRun` company
+    identity, upstream Jury findings (`top_findings`), and Intent score
+    fallback (`financial_index`), build `_build_kb_synthesis_prompt(...)`, and
+    execute `GPT_REASONING_MODEL` primary -> `CLAUDE_SONNET_MODEL` fallback
+    with `web_search=False` hard-locked;
+  - raises explicit `ForesightCognitiveUnavailableError` when fewer than
+    `_MIN_KB_SIGNALS_FOR_SYNTHESIS` (3) eligible central KB signals exist or
+    when all no-web provider calls fail or return unparseable output
+    (Reliability Plan Rule #6);
+  - `normalize_foresight_payload(...)` drops ungrounded off-KB primary
+    `source_url` forces, attaches `_from_kb`, `claim_type="foresight_context"`,
+    `company_specific=False`, `not_evidence_of_deployment=True`,
+    `requires_company_specific_corroboration=True`, `foresight_context_eligible`,
+    and `_kb_description`, sanitizes via `_sanitize_foresight_data(...)` and
+    recursive `sanitize_future_insight(...)`, and emits the compact 4-key
+    `scanner.foresight/v1` result without copying KB signal stores or
+    `kb_versions` onto the checkpoint.
+- Bind `model_policy_version`, `kb_version`, and `kb_registry_hash` onto
+  `scanner.foresight/v1` checkpoints:
+  - `build_foresight_checkpoint(..., model_policy_version=MODEL_POLICY_VERSION,
+    kb_version=DEFAULT_FORESIGHT_KB_VERSION, kb_registry_hash=None)` in
+    `backend/scan_foresight_checkpoint.py`;
+  - `ForesightStageExecutor` and `ForesightStageExecutor.with_cognitive_parity(...)`
+    in `backend/scan_foresight_adapter.py` (keeping default scaffold wrap
+    deterministic and `scan_foresight_adapter.py` / `scan_foresight_checkpoint.py`
+    / `scan_foresight_commit.py` free of `strategic_foresight` /
+    `foresight_harvester` / `kb_versions` references);
+  - `commit_foresight_stage` in `backend/scan_foresight_commit.py` enforces
+    non-empty `model_policy_version`, `kb_version`, and 64-char
+    `kb_registry_hash` and rejects replay across upgrades;
+  - `validate_checkpoint_integrity` in `backend/scan_checkpoint_integrity.py`
+    enforces `model_policy_version`, `kb_version`, and SHA-256
+    `kb_registry_hash` on `scanner.foresight/v1` reload.
+
+### Deliberate exclusions
+
+- Do not import or execute `foresight_harvester`, `_verify_foresight_url`,
+  `_generate_foresight_from_registry_sources`, or live `BlobStorage` writes,
+  and never pass `web_search=True`.
+- Do not start Strategic Synthesis or Verification cognitive parity in this card.
+- Do not modify `POST /scan` (`backend/main.py`), register a Supervisor loop,
+  touch Blob publication paths, add a database migration, or change Railway
+  settings.
+
+### Tests
+
+- Hermetic `tests/test_scan_foresight_cognition.py`:
+  - KB-first no-web parity via `ForesightStageExecutor.with_cognitive_parity`,
+    confirming `web_search=False`, contaminated/dead KB signal filtering,
+    ungrounded fabricated URL dropping, modal sanitization across
+    `dimension_forces`, `cross_impact_chain`, `scenarios`, and
+    `climate_exposure`, Card 2B `extract_foresight_links` + Buying Insight
+    compatibility, and `model_policy_version` / `kb_version` / `kb_registry_hash`
+    checkpoint binding;
+  - near-fit `THEME_FALLBACK_MAP` selection, `CLAUDE_SONNET_MODEL` fallback,
+    `ForesightCognitiveUnavailableError` on `<3` eligible KB signals or total
+    provider unavailability, and malformed payload -> `validation_failed`;
+  - central KB / registry hash sensitivity + replay/reload tamper guards and
+    static module isolation checks.
+- Disposable PostgreSQL `tests/test_scan_foresight_cognition_postgres_integration.py`
+  (registered in `.github/workflows/reliability-contracts.yml`):
+  - end-to-end PostgreSQL prepare -> fenced `commit_foresight_stage` ->
+    `load_checkpoint()` -> `build_synthesis_input_snapshot` ->
+    `load_verified_synthesis_inputs` -> `build_synthesis_input_projection`
+    hydration of sanitized KB-first Foresight output, central KB upgrade replay
+    rejection, and fail-closed `CheckpointIntegrityError` on PostgreSQL `JSONB`
+    `kb_registry_hash` tamper.
+
+### Likely files
+
+`backend/scan_foresight_cognition.py`, `backend/scan_foresight_checkpoint.py`,
+`backend/scan_foresight_adapter.py`, `backend/scan_foresight_commit.py`,
+`backend/scan_checkpoint_integrity.py`, `tests/test_scan_foresight_cognition.py`,
+`tests/test_scan_foresight_cognition_postgres_integration.py`,
+`.github/workflows/reliability-contracts.yml`,
+`docs/scanner-reliability-status.md`,
+`docs/scanner-reliability-slice-backlog.md`
+
+### Exit evidence
+
+- [Reliability contracts run 43832746925](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/43832746925)
+  on pull request [#43](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/43)
+  (`f260df61fd8ef97d61e88c5670076ab63f7790e3`): both `focused-contracts` and
+  `postgres-supervisor-contracts` passed.
+
+---
+
+## Card 3L-Synthesis-parity — Strategic Synthesis cognitive parity & model-policy binding on durable Diagnosis + Foresight output
+
+**Status:** Next executable card
+**Proves:** `SynthesisStageExecutor` can invoke the existing no-web Strategic
+Synthesis / Activation cognitive path on verified durable Diagnosis, Foresight,
+and upstream Jury inputs, bind `MODEL_POLICY_VERSION` on
+`scanner.synthesis/v1`, and fail explicitly on provider unavailability or
+malformed output without touching Verification, `POST /scan`, or Blob stores.
 
 ---
 
@@ -1989,16 +2100,16 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Card 3L-Diagnosis-parity (Diagnosis cognitive parity & model-policy binding on
-durable Jury output) is complete. Specify then implement exactly Card
-3L-Foresight-parity from docs/scanner-reliability-slice-backlog.md (Foresight
-cognitive parity, central KB/registry hash binding & model-policy binding on
-durable Diagnosis output). Keep tests hermetic with no live network or provider
-calls. Do not run foresight_harvester, modify POST /scan, register a Supervisor
-loop, touch Blob publication paths, or change Railway settings.
+Card 3L-Foresight-parity (Foresight cognitive parity, central KB/registry hash
+binding & model-policy binding on durable Diagnosis output) is complete.
+Specify then implement exactly Card 3L-Synthesis-parity from
+docs/scanner-reliability-slice-backlog.md (Strategic Synthesis cognitive parity
+& model-policy binding on durable Diagnosis + Foresight output). Keep tests
+hermetic with no live network or provider calls. Do not modify POST /scan,
+register a Supervisor loop, touch Blob publication paths, or change Railway
+settings.
 ```
 
-After Card 3L-Foresight-parity is merged with CI evidence recorded in
-`docs/scanner-reliability-status.md`, advance this prompt one stage at a time
-through Strategic Synthesis and Verification real-stage parity. Do not
-accumulate open cards in one run.
+After Card 3L-Synthesis-parity is merged with CI evidence recorded in
+`docs/scanner-reliability-status.md`, advance this prompt to Verification
+real-stage parity. Do not accumulate open cards in one run.

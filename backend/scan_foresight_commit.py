@@ -61,6 +61,19 @@ def commit_foresight_stage(
         raise ValueError("Foresight checkpoint contract is invalid.")
     if checkpoint.gate_result.get("status") != "passed":
         raise ValueError("only a passed Foresight gate may be committed.")
+    policy_version = checkpoint.snapshot.get("model_policy_version")
+    if not isinstance(policy_version, str) or not policy_version.strip():
+        raise ValueError("Foresight checkpoint requires a non-empty model_policy_version.")
+    kb_version = checkpoint.snapshot.get("kb_version")
+    if not isinstance(kb_version, str) or not kb_version.strip():
+        raise ValueError("Foresight checkpoint requires a non-empty kb_version.")
+    kb_registry_hash = checkpoint.snapshot.get("kb_registry_hash")
+    if (
+        not isinstance(kb_registry_hash, str)
+        or len(kb_registry_hash) != 64
+        or any(ch not in "0123456789abcdefABCDEF" for ch in kb_registry_hash)
+    ):
+        raise ValueError("Foresight checkpoint requires a SHA-256 kb_registry_hash.")
 
     existing = repository.load_checkpoint(
         run_id=lease.run_id,
@@ -72,6 +85,9 @@ def commit_foresight_stage(
             existing.checkpoint_id != checkpoint.checkpoint_id
             or existing.input_hash != checkpoint.input_hash
             or existing.output_hash != checkpoint.output_hash
+            or existing.snapshot.get("model_policy_version") != policy_version
+            or existing.snapshot.get("kb_version") != kb_version
+            or existing.snapshot.get("kb_registry_hash") != kb_registry_hash
         ):
             raise ValueError("a different Foresight checkpoint already exists for this attempt.")
         return existing
