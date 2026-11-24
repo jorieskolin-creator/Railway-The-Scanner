@@ -9,8 +9,9 @@ does not name a successor stage.
 
 from __future__ import annotations
 
-from typing import Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_supervisor import (
     ScanCheckpoint,
     StageExecutionResult,
@@ -62,9 +63,62 @@ class VerificationStageExecutor:
         input_loader: VerifiedVerificationInputLoader,
         *,
         analyze_verification: VerificationAnalyzer | None = None,
+        model_policy_version: str = MODEL_POLICY_VERSION,
     ) -> None:
+        normalized_policy = (
+            model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+        )
+        if not normalized_policy:
+            raise ValueError("model_policy_version is required.")
         self._input_loader = input_loader
         self._analyze_verification = analyze_verification or analyze_verification_from_synthesis
+        self._model_policy_version = normalized_policy
+
+    @property
+    def model_policy_version(self) -> str:
+        return self._model_policy_version
+
+    @classmethod
+    def with_cognitive_parity(
+        cls,
+        input_loader: VerifiedVerificationInputLoader,
+        *,
+        company_name: str | None = None,
+        domain: str | None = None,
+        diagnosis_result: Mapping[str, Any] | None = None,
+        foresight_result: Mapping[str, Any] | None = None,
+        jury_result: Mapping[str, Any] | None = None,
+        intent_result: Mapping[str, Any] | None = None,
+        openai_caller: Callable[..., Any] | None = None,
+        anthropic_caller: Callable[..., Any] | None = None,
+        provider_chain: Sequence[str] | None = None,
+        model_policy_version: str = MODEL_POLICY_VERSION,
+    ) -> "VerificationStageExecutor":
+        """Build a prepare-only Verification executor bound to no-web cognitive parity."""
+
+        from scan_verification_cognition import build_no_web_verification_analyzer
+
+        context_loader = (
+            input_loader
+            if hasattr(input_loader, "load_run") or hasattr(input_loader, "load_checkpoint")
+            else None
+        )
+        return cls(
+            input_loader,
+            analyze_verification=build_no_web_verification_analyzer(
+                company_name=company_name,
+                domain=domain,
+                diagnosis_result=diagnosis_result,
+                foresight_result=foresight_result,
+                jury_result=jury_result,
+                intent_result=intent_result,
+                context_loader=context_loader,  # type: ignore[arg-type]
+                openai_caller=openai_caller,
+                anthropic_caller=anthropic_caller,
+                provider_chain=provider_chain,
+            ),
+            model_policy_version=model_policy_version,
+        )
 
     def execute(self, lease: StepLease) -> StageExecutionResult:
         if lease.stage_name != VERIFICATION_STAGE:
@@ -80,6 +134,7 @@ class VerificationStageExecutor:
         checkpoint = build_verification_checkpoint(
             projection,
             verification_result=self._analyze_verification(projection),
+            model_policy_version=self._model_policy_version,
         )
         return StageExecutionResult(
             output_hash=checkpoint.output_hash,

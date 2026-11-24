@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from model_policy import MODEL_POLICY_VERSION
 from scan_supervisor import (
     ScanCheckpoint,
     VerificationInputSnapshot,
@@ -101,6 +102,7 @@ def build_verification_checkpoint(
     projection: VerificationInputProjection,
     *,
     verification_result: Mapping[str, Any] | object,
+    model_policy_version: str = MODEL_POLICY_VERSION,
 ) -> ScanCheckpoint:
     """Build a Verification checkpoint from a projection and a supplied result.
 
@@ -109,6 +111,11 @@ def build_verification_checkpoint(
     """
 
     _validate_projection(projection)
+    normalized_policy_version = (
+        model_policy_version.strip() if isinstance(model_policy_version, str) else ""
+    )
+    if not normalized_policy_version:
+        raise ValueError("model_policy_version is required for Verification checkpoints.")
     compact_result = _compact_verification_result(verification_result)
     if compact_result is None:
         gate_result = {
@@ -156,6 +163,7 @@ def build_verification_checkpoint(
         "input_snapshot_ref": projection.snapshot_ref,
         "synthesis_checkpoint_ref": dict(projection.synthesis_checkpoint_ref),
         "payload_sha256": projection.payload_sha256,
+        "model_policy_version": normalized_policy_version,
     }
     if verification_payload is not None:
         snapshot["verification_result"] = verification_payload
