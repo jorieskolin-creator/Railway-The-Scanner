@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Callable, Iterator, Mapping, Protocol
+from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 
 
 class ScanSupervisorConfigurationError(RuntimeError):
@@ -65,6 +65,10 @@ class VerificationInputSnapshotIntegrityError(RuntimeError):
 
 class CheckpointIntegrityError(RuntimeError):
     """Raised when a persisted checkpoint fails hash, ID, gate, or ref verification."""
+
+
+class GateResultIntegrityError(RuntimeError):
+    """Raised when a persisted gate_results row fails schema, hash, ID, or envelope verification."""
 
 
 class ScanRunIntegrityError(RuntimeError):
@@ -366,6 +370,32 @@ class ScanCheckpoint:
 
 
 @dataclass(frozen=True)
+class PersistedGateResult:
+    """Immutable persisted gate verdict; operational state only, never evidence."""
+
+    gate_result_id: str
+    run_id: str
+    stage_name: str
+    attempt: int
+    gate_name: str
+    gate_version: str
+    envelope_contract: str
+    input_hash: str | None
+    output_hash: str | None
+    input_refs: tuple[Mapping[str, str], ...]
+    status: str
+    blocking_reasons: tuple[Mapping[str, Any], ...]
+    warnings: tuple[Mapping[str, Any], ...]
+    envelope: Mapping[str, Any]
+    record_sha256: str
+    checked_at: datetime
+
+    @property
+    def gate_result_ref(self) -> str:
+        return f"gate-result://scan/{self.gate_result_id}"
+
+
+@dataclass(frozen=True)
 class StageExecutionResult:
     """Metadata a future stage adapter may commit after durable validation.
 
@@ -630,6 +660,80 @@ def _checkpoint_json_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
             f"Persisted checkpoint {field_name} must contain finite JSON values."
         ) from error
     return json.loads(encoded)
+
+
+def _reject_gate_json_constant(constant: str) -> Any:
+    raise GateResultIntegrityError(
+        f"Persisted gate_results JSON cannot contain non-finite constant {constant!r}."
+    )
+
+
+def _gate_json_mapping(value: Any, *, field_name: str) -> dict[str, Any]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value, parse_constant=_reject_gate_json_constant)
+        except json.JSONDecodeError as error:
+            raise GateResultIntegrityError(
+                f"Persisted gate_results {field_name} is not valid JSON."
+            ) from error
+    if not isinstance(raw_value, Mapping) or not _json_safe(raw_value):
+        raise GateResultIntegrityError(
+            f"Persisted gate_results {field_name} must be a JSON-safe mapping."
+        )
+    try:
+        encoded = json.dumps(
+            dict(raw_value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise GateResultIntegrityError(
+            f"Persisted gate_results {field_name} must contain finite JSON values."
+        ) from error
+    return json.loads(encoded)
+
+
+def _gate_json_mapping_list(value: Any, *, field_name: str) -> tuple[dict[str, Any], ...]:
+    raw_value = value
+    if isinstance(raw_value, str):
+        try:
+            raw_value = json.loads(raw_value, parse_constant=_reject_gate_json_constant)
+        except json.JSONDecodeError as error:
+            raise GateResultIntegrityError(
+                f"Persisted gate_results {field_name} is not valid JSON."
+            ) from error
+    if not isinstance(raw_value, (list, tuple)) or any(
+        not isinstance(item, Mapping) or not _json_safe(item) for item in raw_value
+    ):
+        raise GateResultIntegrityError(
+            f"Persisted gate_results {field_name} must be a list of JSON-safe mappings."
+        )
+    try:
+        encoded = json.dumps(
+            [dict(item) for item in raw_value],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise GateResultIntegrityError(
+            f"Persisted gate_results {field_name} must contain finite JSON values."
+        ) from error
+    return tuple(json.loads(encoded))
+
+
+def _json_value(value: Any) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
 
 def _source_metadata(value: Any) -> Mapping[str, Any]:
@@ -3053,5 +3157,302 @@ class ScanRepository:
                     lease.stage_name,
                     lease.attempt,
                     _json({"retryable": retryable, "reason": reason[:2000]}),
+                ),
+            )
+
+    def load_gate_results(
+        self,
+        *,
+        run_id: str,
+        stage_name: str | None = None,
+        attempt: int | None = None,
+    ) -> list[PersistedGateResult]:
+        """Load persisted gate verdicts and verify every row hash, ID, and envelope."""
+
+        if not run_id:
+            raise ValueError("run_id is required.")
+        if attempt is not None and (not stage_name or type(attempt) is not int or attempt < 1):
+            raise ValueError(
+                "stage_name and a positive integer attempt are required when filtering by attempt."
+            )
+        if stage_name is not None and not stage_name:
+            raise ValueError("stage_name cannot be empty.")
+
+        query = """
+            SELECT gate_result_id, run_id, stage_name, attempt, gate_name,
+                   gate_version, envelope_contract, input_hash, output_hash,
+                   input_refs, status, blocking_reasons, warnings, envelope,
+                   record_sha256, checked_at
+            FROM gate_results
+            WHERE run_id = %s
+        """
+        params: list[Any] = [run_id]
+        if stage_name is not None:
+            query += " AND stage_name = %s"
+            params.append(stage_name)
+        if attempt is not None:
+            query += " AND attempt = %s"
+            params.append(attempt)
+        query += " ORDER BY checked_at, gate_result_id"
+
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM scan_runs WHERE run_id = %s", (run_id,))
+            if _mapping(cursor.fetchone()) is None:
+                raise KeyError(f"Unknown scan run: {run_id}")
+            cursor.execute(query, tuple(params))
+            rows = [_mapping(row) for row in cursor.fetchall()]
+
+        from scan_stage_envelopes import validate_persisted_gate_result
+
+        loaded: list[PersistedGateResult] = []
+        for row in rows:
+            if row is None:
+                raise GateResultIntegrityError("Gate result query returned an empty row.")
+            gate_result_id = row.get("gate_result_id")
+            stored_run_id = row.get("run_id")
+            stored_stage = row.get("stage_name")
+            stored_attempt = row.get("attempt")
+            gate_name = row.get("gate_name")
+            gate_version = row.get("gate_version")
+            envelope_contract = row.get("envelope_contract")
+            input_hash = row.get("input_hash")
+            output_hash = row.get("output_hash")
+            status = row.get("status")
+            record_sha256 = row.get("record_sha256")
+            checked_at = row.get("checked_at")
+            if (
+                not isinstance(gate_result_id, str)
+                or not isinstance(stored_run_id, str)
+                or not isinstance(stored_stage, str)
+                or type(stored_attempt) is not int
+                or not isinstance(gate_name, str)
+                or not isinstance(gate_version, str)
+                or not isinstance(envelope_contract, str)
+                or (input_hash is not None and not isinstance(input_hash, str))
+                or (output_hash is not None and not isinstance(output_hash, str))
+                or not isinstance(status, str)
+                or not isinstance(record_sha256, str)
+                or not isinstance(checked_at, datetime)
+                or checked_at.tzinfo is None
+            ):
+                raise GateResultIntegrityError(
+                    "Persisted gate_results identity, hash, status, or timestamp column has an invalid type."
+                )
+            if stored_run_id != run_id:
+                raise GateResultIntegrityError(
+                    "Persisted gate_results run_id does not match the requested run."
+                )
+            if stage_name is not None and stored_stage != stage_name:
+                raise GateResultIntegrityError(
+                    "Persisted gate_results stage_name does not match the requested stage."
+                )
+            if attempt is not None and stored_attempt != attempt:
+                raise GateResultIntegrityError(
+                    "Persisted gate_results attempt does not match the requested attempt."
+                )
+            record = PersistedGateResult(
+                gate_result_id=gate_result_id,
+                run_id=stored_run_id,
+                stage_name=stored_stage,
+                attempt=stored_attempt,
+                gate_name=gate_name,
+                gate_version=gate_version,
+                envelope_contract=envelope_contract,
+                input_hash=input_hash,
+                output_hash=output_hash,
+                input_refs=_gate_json_mapping_list(
+                    row.get("input_refs"), field_name="input_refs"
+                ),
+                status=status,
+                blocking_reasons=_gate_json_mapping_list(
+                    row.get("blocking_reasons"), field_name="blocking_reasons"
+                ),
+                warnings=_gate_json_mapping_list(
+                    row.get("warnings"), field_name="warnings"
+                ),
+                envelope=_gate_json_mapping(
+                    row.get("envelope"), field_name="envelope"
+                ),
+                record_sha256=record_sha256,
+                checked_at=checked_at.astimezone(timezone.utc),
+            )
+            validate_persisted_gate_result(record)
+            loaded.append(record)
+        return loaded
+
+    def complete_step_with_checkpoint_and_gates(
+        self,
+        lease: StepLease,
+        *,
+        checkpoint: ScanCheckpoint,
+        gate_results: Sequence[PersistedGateResult],
+        next_stage: str | None,
+        now: datetime | None = None,
+    ) -> None:
+        """Atomically persist passed gate verdicts, checkpoint, and step completion."""
+
+        self._validate_checkpoint(lease, checkpoint)
+        validated_gates = self._validate_persisted_gate_results(gate_results, lease=lease)
+        if any(item.status != "passed" for item in validated_gates):
+            raise ValueError(
+                "complete_step_with_checkpoint_and_gates requires all gate_results to have status='passed'."
+            )
+        from scan_stage_envelopes import validate_passed_transition
+
+        validate_passed_transition(checkpoint, validated_gates, next_stage)
+        current_time = now or self._clock()
+        with self._transaction() as connection, connection.cursor() as cursor:
+            self._complete_step_on_cursor(
+                cursor,
+                lease,
+                output_hash=checkpoint.output_hash,
+                checkpoint_ref=checkpoint.checkpoint_ref,
+                gate_result=checkpoint.gate_result,
+                next_stage=next_stage,
+                current_time=current_time,
+            )
+            self._persist_gate_results_on_cursor(cursor, gate_results=validated_gates)
+            self._insert_checkpoint_on_cursor(cursor, checkpoint)
+            cursor.execute(
+                """
+                UPDATE scan_steps
+                SET input_hash = %s
+                WHERE run_id = %s AND stage_name = %s AND attempt = %s
+                """,
+                (checkpoint.input_hash, lease.run_id, lease.stage_name, lease.attempt),
+            )
+
+    def block_step_with_gates(
+        self,
+        lease: StepLease,
+        *,
+        gate_results: Sequence[PersistedGateResult],
+        now: datetime | None = None,
+    ) -> None:
+        """Atomically persist deterministic non-passed gates and block the step and run."""
+        validated_gates = self._validate_persisted_gate_results(gate_results, lease=lease)
+        from scan_stage_envelopes import validate_blocked_transition
+
+        primary = validate_blocked_transition(validated_gates)
+        reason = primary.blocking_reasons[0]["code"]
+        step_gate_summary = {
+            "gate": primary.gate_name,
+            "version": primary.gate_version,
+            "status": primary.status,
+            "gate_result_id": primary.gate_result_id,
+            "reasons": [dict(item) for item in primary.blocking_reasons],
+            "warnings": [dict(item) for item in primary.warnings],
+        }
+        current_time = now or self._clock()
+        with self._transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE scan_steps
+                SET status = 'blocked',
+                    input_hash = %s,
+                    output_hash = %s,
+                    gate_result = %s::jsonb,
+                    failure_reason = %s,
+                    completed_at = %s,
+                    updated_at = %s
+                WHERE run_id = %s
+                  AND stage_name = %s
+                  AND attempt = %s
+                  AND status IN ('leased', 'running')
+                  AND lease_owner = %s
+                  AND fencing_token = %s
+                  AND lease_expires_at > %s
+                """,
+                (
+                    primary.input_hash,
+                    primary.output_hash,
+                    _json(step_gate_summary),
+                    reason[:2000],
+                    current_time,
+                    current_time,
+                    lease.run_id,
+                    lease.stage_name,
+                    lease.attempt,
+                    lease.lease_owner,
+                    lease.fencing_token,
+                    current_time,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise StaleLeaseError(
+                    f"Lease lost before blocking {lease.run_id}/{lease.stage_name} attempt {lease.attempt}."
+                )
+            self._persist_gate_results_on_cursor(cursor, gate_results=validated_gates)
+            cursor.execute(
+                """
+                UPDATE scan_runs
+                SET status = 'blocked',
+                    current_stage = %s,
+                    completed_at = %s,
+                    updated_at = %s
+                WHERE run_id = %s
+                """,
+                (lease.stage_name, current_time, current_time, lease.run_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO scan_events (run_id, stage_name, attempt, event_type, details)
+                VALUES (%s, %s, %s, 'step_blocked', %s::jsonb)
+                """,
+                (
+                    lease.run_id,
+                    lease.stage_name,
+                    lease.attempt,
+                    _json(
+                        {
+                            "gate_status": primary.status,
+                            "gate_names": [item.gate_name for item in validated_gates],
+                            "gate_result_ids": [item.gate_result_id for item in validated_gates],
+                            "reason": reason[:2000],
+                        }
+                    ),
+                ),
+            )
+
+    def _validate_persisted_gate_results(
+        self, gate_results: Sequence[PersistedGateResult], *, lease: StepLease,
+    ) -> list[PersistedGateResult]:
+        from scan_stage_envelopes import validate_persisted_gate_result
+
+        validated = list(gate_results)
+        seen: set[str] = set()
+        for item in validated:
+            if not isinstance(item, PersistedGateResult):
+                raise ValueError("gate_results items must be PersistedGateResult instances.")
+            validate_persisted_gate_result(item)
+            if (item.run_id, item.stage_name, item.attempt) != (lease.run_id, lease.stage_name, lease.attempt):
+                raise ValueError("gate_result identity does not match the leased step.")
+            if item.gate_name in seen:
+                raise ValueError("Gate names must be unique per step attempt.")
+            seen.add(item.gate_name)
+        return validated
+
+    def _persist_gate_results_on_cursor(
+        self, cursor: CursorLike, *, gate_results: Sequence[PersistedGateResult],
+    ) -> None:
+        for item in gate_results:
+            cursor.execute(
+                """
+                INSERT INTO gate_results (
+                    gate_result_id, run_id, stage_name, attempt, gate_name,
+                    gate_version, envelope_contract, input_hash, output_hash,
+                    input_refs, status, blocking_reasons, warnings, envelope,
+                    record_sha256, checked_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s::jsonb, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s
+                )
+                """,
+                (
+                    item.gate_result_id, item.run_id, item.stage_name, item.attempt,
+                    item.gate_name, item.gate_version, item.envelope_contract,
+                    item.input_hash, item.output_hash, _json_value(item.input_refs),
+                    item.status, _json_value(item.blocking_reasons), _json_value(item.warnings),
+                    _json_value(item.envelope), item.record_sha256, item.checked_at,
                 ),
             )

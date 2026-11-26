@@ -108,4 +108,5 @@ jobs:
             tests/test_scan_diagnosis_cognition_postgres_integration.py \
             tests/test_scan_foresight_cognition_postgres_integration.py \
             tests/test_scan_synthesis_cognition_postgres_integration.py \
-            tests/test_scan_verification_cognition_postgres_integration.py
+            tests/test_scan_verification_cognition_postgres_integration.py \
+            tests/test_scan_stage_envelopes_postgres_integration.py
