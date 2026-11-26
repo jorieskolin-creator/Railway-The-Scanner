@@ -2230,11 +2230,80 @@ provider unavailability or malformed output without closing Phase 3 into live
 
 ## Card 4A — Typed stage envelopes & deterministic gate persistence
 
-**Status:** Next executable card (Phase 4 entry card)
-**Proves:** Shared versioned stage-envelope & deterministic gate-result persistence
-helpers (`gate_results` table / typed envelope validation) block invalid,
-stale, or hash-mismatched stage transitions explicitly without mutating live
-`/scan` or Blob stores.
+**Status:** Implemented — awaiting pull-request GitHub CI evidence (Phase 4 entry card)
+**Proves:** Shared versioned stage-envelope (`scanner.stage/v1`) and deterministic
+gate-result persistence helpers (`gate_results` table, ingress/egress typed
+envelope validation, and fenced `block_step_with_gates` /
+`complete_step_with_checkpoint_and_gates` transitions) adopt across all seven
+already-wrapped durable stages and block malformed, missing, contradictory,
+stale, or hash-mismatched stage transitions explicitly in durable state without
+mutating live `POST /scan`, registering a Supervisor loop, touching Blob
+publication paths, or changing Railway settings.
+
+### In scope
+
+- New immutable SQL migration `backend/migrations/013_gate_results.sql`:
+  - creates `gate_results` keyed to `scan_steps(run_id, stage_name, attempt)`
+    (`ON DELETE CASCADE`, `UNIQUE (run_id, stage_name, attempt, gate_name)`),
+    storing `gate_result_id`, `gate_name`, `gate_version`, `envelope_contract`,
+    `input_hash`, `output_hash`, `input_refs`, explicit `status`
+    (`passed`, `failed`, `blocked`, `insufficient_evidence`,
+    `validation_failed`, `approval_required`), `blocking_reasons`, `warnings`,
+    canonical `envelope` (`scanner.stage/v1`), cryptographic `record_sha256`,
+    and `checked_at` without raw uploaded bytes, source extracts, KB signal
+    payloads, or publication authority.
+- Repository primitives in `backend/scan_supervisor.py`:
+  - `load_gate_results(...)` verifies semantic gate IDs, record hashes, and the
+    typed envelope on reload; duplicate terminal writes are rejected by fencing.
+  - `ScanRepository.complete_step_with_checkpoint_and_gates(...)` for atomic
+    fenced commit of `gate_results` + `scan_checkpoints` + `scan_steps` +
+    `scan_runs` + `scan_events`;
+  - `ScanRepository.block_step_with_gates(...)` for atomic fenced blocking
+    (`scan_steps.status = 'blocked'`, `scan_runs.status = 'blocked'`,
+    `scan_events` `'step_blocked'`, zero `scan_checkpoints` rows, and zero
+    successor `scan_steps` rows) when any ingress or egress gate does not pass.
+- New module `backend/scan_stage_envelopes.py` and adoption across all seven
+  wrapped stages (`material_ingestion`, `intent`, `jury_analysis`, `diagnosis`,
+  `foresight`, `strategic_synthesis`, `verification`):
+  - `StageEnvelope`, `StageGate`, and `StageRef` define the strict JSON
+    contract. Gate IDs exclude timing; row hashes bind the envelope and timestamp.
+  - `run_gated_stage_step(...)` validates the durable input projection and its
+    upstream checkpoints/gates before running the existing adapter. It checks
+    that the proposal matches the same input, current policy and Foresight
+    KB/registry bindings, and the permitted successor. Missing or mismatched
+    lineage blocks the run; malformed output is `validation_failed`. Provider
+    and unexpected operational errors propagate, rather than becoming verdicts.
+  - Adoption is opt-in through the durable test driver. Callers bind the existing
+    input snapshot first. The gated path requires gate records for referenced
+    upstream checkpoints. Adapters and Phase 3 checkpoint hashes are unchanged;
+    the legacy proof path works without migration 013 and needs no backfill.
+
+### Deliberate exclusions
+
+- Do not modify `POST /scan` (`backend/main.py`) or switch live request routing.
+- Do not register a Supervisor execution loop or enable `SCAN_SUPERVISOR_*`.
+- Do not touch Vercel Blob publication paths (`backend/storage.py`), Company
+  Summary sentence-support contracts (Phase 5), or `evidence_records` /
+  `claim_support` tables.
+- Do not edit applied migrations `001`–`012` or change Railway/Vercel settings.
+- Do not perform live network, provider, or scraper calls.
+
+### Tests
+
+- Hermetic: strict envelope shape, all six explicit verdicts, deterministic gate
+  IDs and row hashes, and operational errors not translated into gate verdicts.
+- Disposable PostgreSQL: all seven stages persist and reload both gates. Missing
+  snapshots, hash mismatches, missing or tampered upstream gates, and stale
+  policy or KB bindings block before adapter execution. Malformed output and
+  contradictory successor metadata do not advance. Stale writes and partial
+  transaction failures leave no new checkpoint, successor, or gate records.
+  Tampered gate rows fail verification on reload. The PostgreSQL suite is
+  registered in `.github/workflows/reliability-contracts.yml`.
+
+### Exit evidence
+
+- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
+  `postgres-supervisor-contracts`) is recorded once the PR run completes.
 
 ---
 
@@ -2296,11 +2365,10 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Phase 3 (including Card 3L-Verification-parity) is complete. Specify then
-implement Card 4A from docs/scanner-reliability-slice-backlog.md (Typed stage
-envelopes & deterministic gate persistence). Keep tests hermetic with no live
-network or provider calls. Do not modify POST /scan, register a Supervisor loop,
-touch Blob publication paths, or change Railway settings.
+Phase 3 is complete. Card 4A is implemented; record pull-request CI evidence
+before marking it complete or starting the next card. Do not modify POST /scan,
+register a Supervisor loop, touch Blob publication paths, or change Railway
+settings.
 ```
 
 Do not accumulate open cards in one run.

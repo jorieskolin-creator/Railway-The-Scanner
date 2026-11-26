@@ -16,7 +16,7 @@
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
 | 3 — Material durability and checkpoints | Complete — scaffold chain, 3K-integrity, 3J-restart matrix, and real cognitive parity (`3L-Jury-parity`..`3L-Verification-parity`) proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
-| 4 — Typed envelopes and deterministic gates | Not started (per-stage envelope scaffolding only) | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
+| 4 — Typed envelopes and deterministic gates | Card 4A implemented; pull-request CI evidence pending | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
 | 7 — Orchestrator decomposition | Not started | Golden checkpoint replay unchanged |
@@ -30,8 +30,9 @@ one-concern cards so a single run cannot wrap multiple cognitive stages or break
 shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
-Immediate next product card: **Card 4A — Typed stage envelopes & deterministic
-gate persistence**. Phase 3 is complete, and `3J-cutover` stays blocked until
+Current product card: **Card 4A — Typed stage envelopes & deterministic gate
+persistence**. Implementation and local verification are complete; pull-request
+CI evidence is pending. Phase 3 is complete, and `3J-cutover` stays blocked until
 Phase 4–6 (typed failure/blocked gates, Summary/tagging hardening,
 post-Verification report/summary assembly, and Blob-first publication
 reconciliation) pass. Process card **3G0**, scaffold cards **3J-loop** and
@@ -1766,3 +1767,25 @@ Verification evidence:
   head branch `reliability-3l-verification-parity`): `focused-contracts` passed
   and `postgres-supervisor-contracts` passed. The local replay above is not
   this GitHub CI run.
+
+## Card 4A — Typed stage envelopes & deterministic gate persistence
+
+The opt-in durable proof path validates `scanner.stage/v1` envelopes at all
+seven wrapped stage boundaries. Migration `013_gate_results.sql` stores
+hash-verified gate verdicts. A valid lease commits either passed gates and a
+checkpoint or a blocked step and run without a checkpoint or successor. No live
+scan routing, Supervisor registration, Blob publication, or deployment settings
+changed.
+
+Local verification (not GitHub CI):
+
+- Complete hermetic suite: `627 passed, 96 skipped`; disposable loopback
+  PostgreSQL durability suite: `96 passed`, including the new 14-case Card 4A
+  integration suite. No live network or provider calls.
+- Backend compilation, duplicate-definition guard, and `npm run build` passed.
+- `tsc --noEmit` reported the same 22 diagnostics on the branch and on an
+  unmodified `reliability-v2` baseline using the same installed dependencies.
+  Card 4A changes no frontend files.
+
+Pull-request evidence for `focused-contracts` and
+`postgres-supervisor-contracts` is pending.

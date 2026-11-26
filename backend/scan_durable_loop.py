@@ -27,6 +27,7 @@ from scan_intent_snapshot import INTENT_STAGE, build_intent_input_snapshot
 from scan_jury_adapter import JuryStageExecutor
 from scan_jury_commit import commit_jury_stage
 from scan_jury_snapshot import build_jury_input_snapshot
+from scan_stage_envelopes import run_gated_stage_step
 from scan_stage_executor import MaterialIngestionStageExecutor
 from scan_supervisor import (
     CheckpointIntegrityError,
@@ -91,6 +92,7 @@ def drive_durable_chain(
     lease_seconds: int = 30,
     reclaim_stage: str | None = None,
     replacement_owner: str | None = None,
+    persist_gates: bool = False,
 ) -> DurableChainResult:
     """Claim, prepare, and fence-commit each existing stage once.
 
@@ -130,12 +132,19 @@ def drive_durable_chain(
                 raise ValueError(f"reclaim did not resume stage {expected_stage!r}.")
             reclaimed_owner = replacement_owner
         _bind_stage_inputs(repository, lease)
-        result = _execute(repository, lease)
-        if result.next_stage is not None and expected_stage == VERIFICATION_STAGE:
-            raise ValueError("Verification cannot name a successor stage.")
-        if result.gate_result.get("status") != "passed":
-            raise ValueError(f"stage {expected_stage!r} did not pass its gate.")
-        _commit(repository, lease, result, now=current_time)
+        if persist_gates:
+            outcome = run_gated_stage_step(
+                repository, lease, _executor_for(repository, lease), now=current_time,
+            )
+            if outcome.checkpoint is None:
+                raise ValueError(f"stage {expected_stage!r} did not pass its gate.")
+        else:
+            result = _execute(repository, lease)
+            if result.next_stage is not None and expected_stage == VERIFICATION_STAGE:
+                raise ValueError("Verification cannot name a successor stage.")
+            if result.gate_result.get("status") != "passed":
+                raise ValueError(f"stage {expected_stage!r} did not pass its gate.")
+            _commit(repository, lease, result, now=current_time)
         completed.append(expected_stage)
     if tuple(completed) != DURABLE_STAGE_ORDER or run_id is None:
         raise ValueError("durable chain did not complete every stage.")
@@ -415,6 +424,10 @@ def _bind_stage_inputs(repository, lease: StepLease) -> None:
 
 
 def _execute(repository, lease: StepLease) -> StageExecutionResult:
+    return _executor_for(repository, lease).execute(lease)
+
+
+def _executor_for(repository, lease: StepLease):
     executors = {
         MATERIAL_INGESTION_STAGE: MaterialIngestionStageExecutor(repository),
         INTENT_STAGE: IntentStageExecutor(repository),
@@ -427,7 +440,7 @@ def _execute(repository, lease: StepLease) -> StageExecutionResult:
     executor = executors.get(lease.stage_name)
     if executor is None:
         raise ValueError(f"durable chain has no adapter for stage {lease.stage_name!r}.")
-    return executor.execute(lease)
+    return executor
 
 
 def _commit(repository, lease: StepLease, result: StageExecutionResult, *, now: datetime) -> ScanCheckpoint:
