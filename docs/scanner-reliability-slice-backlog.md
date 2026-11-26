@@ -2230,7 +2230,7 @@ provider unavailability or malformed output without closing Phase 3 into live
 
 ## Card 4A — Typed stage envelopes & deterministic gate persistence
 
-**Status:** Implemented — awaiting pull-request GitHub CI evidence (Phase 4 entry card)
+**Status:** Implemented and verified — PR #46 open (Phase 4 entry card)
 **Proves:** Shared versioned stage-envelope (`scanner.stage/v1`) and deterministic
 gate-result persistence helpers (`gate_results` table, ingress/egress typed
 envelope validation, and fenced `block_step_with_gates` /
@@ -2302,8 +2302,9 @@ publication paths, or changing Railway settings.
 
 ### Exit evidence
 
-- Pull-request GitHub CI (`reliability-contracts.yml`: `focused-contracts` and
-  `postgres-supervisor-contracts`) is recorded once the PR run completes.
+- [Pull-request GitHub CI run 45787087617](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/45787087617):
+  `focused-contracts` and `postgres-supervisor-contracts` passed on the Card 4A
+  implementation commit. See `docs/scanner-reliability-status.md`.
 
 ---
 
@@ -2365,8 +2366,8 @@ the stakeholder PDF or this whole file as the task.
 ```text
 Work only on reliability-v2.
 
-Phase 3 is complete. Card 4A is implemented; record pull-request CI evidence
-before marking it complete or starting the next card. Do not modify POST /scan,
+Phase 3 is complete. Card 4A implementation and pull-request CI are recorded.
+Do not start another card in the Card 4A pull request. Do not modify POST /scan,
 register a Supervisor loop, touch Blob publication paths, or change Railway
 settings.
 ```

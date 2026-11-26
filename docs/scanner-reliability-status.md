@@ -16,7 +16,7 @@
 | 1 — Repair and freeze trust contracts | Complete | Full hermetic suite green with no external network/model calls |
 | 2 — PostgreSQL orchestration primitives | Substantial — lifecycle wired, single-process lease reclaim and OS `SIGKILL` recovery proven, execution intentionally blocked | OS process-kill reclaim and stale-attempt rejection proven |
 | 3 — Material durability and checkpoints | Complete — scaffold chain, 3K-integrity, 3J-restart matrix, and real cognitive parity (`3L-Jury-parity`..`3L-Verification-parity`) proven; live `/scan` unchanged | Cross-feature compatibility, payload-hash reload verification, real cognitive parity, and full-chain restart matrix proven |
-| 4 — Typed envelopes and deterministic gates | Card 4A implemented; pull-request CI evidence pending | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
+| 4 — Typed envelopes and deterministic gates | Card 4A implemented and verified; PR #46 open | Invalid/stale/hash-mismatched inputs block explicitly in durable state |
 | 5 — Summary and tagging hardening | Not started | Evidence-ID mutations reject publication |
 | 6 — Blob-first publication reconciliation | Not started | One current pointer; no duplicate final artifact |
 | 7 — Orchestrator decomposition | Not started | Golden checkpoint replay unchanged |
@@ -31,8 +31,8 @@ shared Blob contracts consumed by Company Summary, Market Intelligence,
 Observatory, Company Evidence DB, Source Ledger, and Buying Insight.
 
 Current product card: **Card 4A — Typed stage envelopes & deterministic gate
-persistence**. Implementation and local verification are complete; pull-request
-CI evidence is pending. Phase 3 is complete, and `3J-cutover` stays blocked until
+persistence**. Implementation, local verification, and pull-request CI are
+complete. Phase 3 is complete, and `3J-cutover` stays blocked until
 Phase 4–6 (typed failure/blocked gates, Summary/tagging hardening,
 post-Verification report/summary assembly, and Blob-first publication
 reconciliation) pass. Process card **3G0**, scaffold cards **3J-loop** and
@@ -1787,5 +1787,7 @@ Local verification (not GitHub CI):
   unmodified `reliability-v2` baseline using the same installed dependencies.
   Card 4A changes no frontend files.
 
-Pull-request evidence for `focused-contracts` and
-`postgres-supervisor-contracts` is pending.
+[Reliability contracts run 45787087617](https://github.com/jorieskolin-creator/Railway-The-Scanner/actions/runs/45787087617)
+passed on [PR #46](https://github.com/jorieskolin-creator/Railway-The-Scanner/pull/46)
+for implementation commit `4566c2dad125522297c21207deef052fc7c5d307`:
+`focused-contracts` and `postgres-supervisor-contracts` both passed.
